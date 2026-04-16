@@ -38,4 +38,4 @@ Just like the Engagement Module, this module **must not** attempt to track the a
   ]
   ```
 - **Action**: The `confidence` field should reflect pose detection quality — average of MediaPipe/YOLO per-landmark confidence scores across analyzed frames.
-- **Success Criteria**: The system returns `flinch: true` for sudden, anomalous upper-body movements and `flinch: false` for smooth/still frames. Pose estimation runs within the M1 Pro's RAM budget since MediaPipe/YOLOv8-Pose are far lighter than VLMs.
+- **Success Criteria**: The system returns `flinch: true` for sudden, anomalous upper-body movements and `flinch: false` for smooth/still frames. Pose estimation runs within the M4 Pro's RAM budget since MediaPipe/YOLOv8-Pose are far lighter than VLMs.

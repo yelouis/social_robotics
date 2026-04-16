@@ -22,6 +22,7 @@ Our proxy heuristic: **activity density = attention**. If a clip is densely anno
   3. Divides the total covered duration by `clip_length_s` to compute `activity_fraction`.
 - **Note**: We intentionally use **all** 157 classes, not a subset. Every class represents meaningful physical activity that a robot could plausibly perform alongside a human. The filter's purpose is to reject *idle* clips, not to select specific action categories.
 
+
 ### Task 3: Primary Interaction Window Extraction
 - **Action**: For each clip that passes the coverage threshold, calculate `primary_window` — the longest contiguous annotated action segment. Store `(t_start, t_end)` in the result. This window will be used by Module 03 (Engagement VLM) to know where to focus its analysis.
 - **Action**: Write the core filter function `evaluate_attention(row, min_threshold=0.20)`. If `activity_fraction < 0.20` (i.e., less than 20% of the clip contains any annotated action), flag the clip as `ATTENTION_FALSE`.

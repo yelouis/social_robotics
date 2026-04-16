@@ -17,10 +17,8 @@ Charades-Ego is **not** a human-robot interaction dataset. We use it as a **prox
 ### Output
 A quantified `Social Reward` ($R_s$) **Metadata & Derived Signal Dataset** structured in Parquet format, ready for the Hugging Face Embodied Data Leaderboard. To comply with the AI2 Charades-Ego license (non-commercial, no redistribution), the dataset contains zero raw video — only derived annotations and computed signals.
 
-## 💻 Critical Hardware Constraint (The "16GB Rule")
-**DO NOT** write monolithic data processing loops. **DO NOT** suggest loading multiple LLMs/VLMs simultaneously.
-The explicit hardware target is Apple Silicon with **16GB of Unified Memory (M1 Pro)**. 
-Therefore, the pipeline must strictly utilize a **Serialized Batch Process (The Waterfall Filter)**. We aggressively discard irrelevant clips using computationally cheap heuristics (CSV action-class metadata) before running surviving clips through expensive Temporal VLMs (like Qwen2.5-VL via 4-bit quantization).
+The explicit hardware target is Apple Silicon with **24GB of Unified Memory (M4 Pro Mac mini)**. 
+Therefore, the pipeline must strictly utilize a **Serialized Batch Process (The Waterfall Filter)**. We aggressively discard irrelevant data using computationally cheap heuristics (Metadata/Pose) before running the surviving, finalized clips through expensive Temporal VLMs (like Qwen2.5-VL via 4-bit quantization).
 
 ---
 
@@ -32,13 +30,13 @@ The project is strictly separated into 7 discrete modules to maintain engineerin
 2. **[02_attention_module.md] (Node 1 — Very Low Compute, CPU-only)**
    * **Role**: The Entry Gate. Pure metadata filter — no video I/O. Validates that a clip contains meaningful **object-manipulation activity** (robot-assistable tasks) using temporal action annotations from the Charades-Ego CSV. Clips with insufficient annotated activity coverage are immediately discarded.
 3. **[03_engagement_module.md] (Node 2 — High Compute, VLM)**
-   * **Role**: Cognitive Extraction. Uses a 4-bit Quantized VLM on the **third-person paired video** to label the actor's observable psychological state as exactly one of: `[Focused, Neutral, Startled]`. The third-person view is essential because the actor's face and full body are visible.
+   * **Role**: Cognitive Extraction. Uses a 4-bit Quantized VLM (Qwen2.5-VL) on the **third-person paired video** to label the actor's observable psychological state as exactly one of: `[Focused, Neutral, Startled]`. The third-person view is essential because the actor's face and full body are visible.
 4. **[04_multimodal_perception_module.md] (Node 3 — Medium Compute, Pose)**
    * **Role**: Kinematic Validation. Runs a Pose tracker on the **third-person paired video** to calculate Peak Velocity ($V_{peak}$) of upper-body landmarks. A physical "Flinch" acts as a hard override, indicating a safety-relevant startle response regardless of the VLM's facial analysis.
 5. **[05_appropriateness_judge.md] (The Brain)**
-   * **Role**: Synthesis. Compiles data from Nodes 1, 2, and 3 into the final formula: $R_s = (Attention \times State\_Weight) - (Flinch \times 2.0)$. Formats the finalist clips into `.parquet`.
+   * **Role**: Synthesis. Uses **Gemma 4 E4B** in "Thinking Mode" to compile data from Nodes 1, 2, and 3 into the final formula: $R_s = (Attention \times State\_Weight) - (Flinch \times 2.0)$. Formats the finalist clips into `.parquet`.
 6. **[06_sanity_checks_and_workflows.md] (Infrastructure Protections)**
-   * **Role**: The Shield. Because VLMs hallucinate or crash inside 16GB limits, this module injects visual debug overlays, distribution checks (preventing flatlined scores), and a temporal filter discarding impossible human reaction speeds ($<100ms$).
+   * **Role**: The Shield. Uses ultra-fast **Gemma 4 E2B** for "Confidence Routing" to check for VLM hallucinations. Injects visual debug overlays, distribution checks (preventing flatlined scores), and a temporal filter discarding impossible human reaction speeds ($<100ms$).
 7. **[07_huggingface_export.md] (The Deployment)**
    * **Role**: Pipeline Exit. Pushes the final `.parquet` derived metadata and a generated Dataset Card (`README.md`) to the public Hugging Face Hub. Includes a `load_dataset.py` hydration script that guides end-users to download the original videos directly from AI2's public S3 URLs (no credentials required).
 

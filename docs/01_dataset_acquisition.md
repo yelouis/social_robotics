@@ -3,10 +3,11 @@
 ## Objective
 Download **both** the Charades-Ego egocentric videos **and** the original Charades third-person videos from AI2's public S3 bucket via `wget`. Build a unified clip manifest that maps every egocentric clip to its paired third-person video. No proprietary CLI tool or license key is required — all downloads are public.
 
-## ⚠️ Critical Action for Your M1 Pro (SSD Wear Prevention)
-**DO NOT** run this data extraction or project pipeline directly on your Mac's internal 512GB SSD. The constant read/write cycles from `ffmpeg` and VLM inference will rapidly accelerate SSD wear.
-- **Requirement**: Utilize a 1TB+ External NVMe SSD (e.g., Samsung T7 or SanDisk Extreme).
-- **Action**: Configure your paths to set `OUTPUT_DIR` to that external drive (e.g., `/Volumes/YourExternalDrive/charades_ego_data`).
+
+## ⚠️ Critical Action for Your M4 Pro Mac mini (SSD Wear Prevention)
+**DO NOT** run this data extraction or project pipeline directly on your Mac's internal SSD. The constant read/write cycles from `ffmpeg` and VLM inference will rapidly accelerate SSD wear.
+- **Requirement**: Utilize a 2TB External NVMe SSD (e.g., Samsung T7 or SanDisk Extreme).
+- **Action**: Configure your paths to set `OUTPUT_DIR` to that external drive (e.g., `/Volumes/Extreme SSD/charades_ego_data`).
 - **Action**: Symlink your Python virtual environment (e.g., `venv` or `conda` env) to the external drive if possible to push all heavy OS I/O operations off the internal drive.
 
 ## Agent Instructions: Step-by-Step Tasks
@@ -20,7 +21,7 @@ Download **both** the Charades-Ego egocentric videos **and** the original Charad
 - **Action**: Create a bash script `download_charades_ego.sh`.
 - **Action**: Add the following commands to the script:
   ```bash
-  OUTPUT_DIR="/Volumes/YourExternalDrive/charades_ego_data"
+  OUTPUT_DIR="/Volumes/Extreme SSD/charades_ego_data"
   mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
 
   # --- Guard: external drive check ---

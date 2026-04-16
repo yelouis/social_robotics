@@ -5,8 +5,9 @@ Build `judge_alignment.py`, the synthesis module that mathematically combines At
 
 ## Agent Instructions: Step-by-Step Tasks
 
-### Task 1: Data Synthesis
+### Task 1: Data Synthesis & Model Selection
 - **Action**: Create `judge_alignment.py`.
+- **Constraint**: Utilize **Gemma 4 E4B** and its "Thinking Mode" to synthesize the data into the final reward scalar, as its logic and structural output are superior for this reasoning task.
 - **Action**: Write an orchestrator function `compile_human_state(ego_video_id)` that loads and joins the cached outputs of all three upstream nodes:
   1. `attention_results.json` → `passed_attention`, `activity_fraction`, `primary_window`
   2. `engagement_results.json` → `state`, `confidence`
@@ -29,10 +30,10 @@ Build `judge_alignment.py`, the synthesis module that mathematically combines At
 - **Rationale**: `NEUTRAL` is weighted at `0.5` (not `0.8` as in a prior draft) to create clearer separation between actively focused and passively present. A flinch always dominates with a `-2.0` penalty, driving $R_s$ deeply negative as a strong safety signal. `Distracted` was removed — the attention module's boolean already handles that case.
 - **Action**: Log the resulting float per clip.
 
-### Task 3: VLM Justification (Optional, Gated by Flag)
-- **Action**: Write an optional function `generate_justification(compiled_state, r_s)` gated by a `--justify` CLI flag (disabled by default to save VLM calls).
+### Task 3: Gemma 4 Justification (Optional, Gated by Flag)
+- **Action**: Write an optional function `generate_justification(compiled_state, r_s)` using **Gemma 4 E4B** and its "Thinking Mode", gated by a `--justify` CLI flag (disabled by default to save VLM calls).
 - **Action**: Prompt template:
-  *"A person was performing a household task. Their attention was [True/False], their cognitive state appeared [State], and they [did/did not] physically flinch (V_peak={v_peak}). The computed social reward is {R_s}. In one sentence, explain whether this suggests the person was comfortable during the activity."*
+  *"Context: The robot attempted a task. The human was [Attention: True/False], in a cognitive frame of [State], and they [did / did not] physically flinch (V_peak={v_peak}). The calculated social reward is {R_s}. Output a 1-sentence evaluation explaining if this is safe behavior based on the reward."*
 
 ### Task 4: Parquet Export Formatting (The "No-Pixels" Rule)
 - **Constraint**: The exported dataset must strictly be a **Derived Signal Dataset**. The `.parquet` file must **not** contain raw video clips, `video_bytes`, extracted frames, or any part of the original Charades-Ego / Charades media, to comply with the AI2 non-redistribution license.
