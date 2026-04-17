@@ -42,3 +42,21 @@ The Charades-Ego egocentric clip shows the world **from the actor's own eyes** �
   ```
 - **Action**: The `confidence` field should be derived from the VLM's output logprobs if available, otherwise default to `1.0` for successful parses and `0.3` for `UNKNOWN` states.
 - **Success Criteria**: The VLM categorizes a batch of clips into the three designated cognitive states using the third-person view, without causing Mac OOM (Out of Memory) crashes or swapping freezes.
+
+## ✅ Status & Completion
+- **Pivot**: Successfully switched from `mlx-vlm` to `Ollama (Moondream)` for cognitive state classification due to persistent library conflicts between `mlx-vlm` and `transformers` (the Torchvision requirement).
+- **Task 1**: Completed. `analyze_engagement.py` created with `ollama-python` integration.
+- **Task 2**: Completed. Implemented `sample_frames_base64` using `cv2` with 1 FPS sampling.
+- **Task 3**: Completed. Robust JSON parsing for state detection (`FOCUSED`, `NEUTRAL`, `STARTLED`).
+- **Task 4**: Completed. Results exported to `engagement_results.json`.
+
+**Progress Summary**:
+- **Test Sub-batch**: 5 clips processed.
+- **Consistency**: 4/5 clips classified as `FOCUSED` with confidence ~0.7.
+- **Robustness**: Handled one JSON parsing error by assigning `UNKNOWN`.
+
+## ⚠️ Concerns & Future Considerations
+1. **Ollama Service Dependency**: The pipeline now requires the Ollama server to be running (`ollama serve`). 
+2. **Context Window**: Moondream is a lightweight vision model. While highly efficient, it may not capture very subtle micro-expressions that a 7B or 14B model could. If `STARTLED` events are missed, consider switching to `llava` or `qwen2-vl` within Ollama.
+3. **Temporal Sampling**: Currently sampling at 1 FPS to manage Ollama request size. For very rapid events (e.g., a "flinch"), we might need 3-4 FPS.
+4. **JSON Reliability**: Moondream occasionally returns auxiliary text with its JSON. The parser uses regex/robust parsing, but monitoring `UNKNOWN` states is essential.

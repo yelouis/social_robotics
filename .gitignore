@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 venv/
 saf_env/
+vlm_env/
 
 # Data & Results
 *.json
