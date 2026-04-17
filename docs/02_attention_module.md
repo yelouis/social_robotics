@@ -42,3 +42,20 @@ Our proxy heuristic: **activity density = attention**. If a clip is densely anno
   ]
   ```
 - **Success Criteria**: The script processes the entire manifest using only CSV metadata (no video I/O) and completes within seconds. Clips with insufficient activity coverage are discarded before any GPU/VLM work begins.
+
+## ✅ Status & Completion
+- **Task 1**: Completed. `filter_attention.py` created with standard imports and `load_manifest`.
+- **Task 2**: Completed. `calculate_activity_coverage` implemented with robust interval merging for overlap handling.
+- **Task 3**: Completed. `primary_window` (longest contiguous segment) extraction and `evaluate_attention` with 20% threshold.
+- **Task 4**: Completed. Results exported to `attention_results.json`.
+
+**Progress Summary**:
+- Successfully processed **3,112 clips** from the manifest.
+- **3,054 clips (98.1%)** passed the 20% activity coverage threshold.
+- Execution time: < 1 second (Pure metadata filtering).
+
+## ⚠️ Concerns & Future Considerations
+1. **Threshold Sensitivity**: The 98.1% pass rate suggests the 20% threshold is very inclusive. If Module 03 (VLM) results are noisy, we may need to increase this threshold to 40-50% to ensure high-quality "busy" clips.
+2. **Primary Window Selection**: Currently, the script selects the *longest* contiguous interval. In cases where there are multiple distinct activity bursts, the VLM will only analyze the single longest one. We should monitor if this misses critical "startle" events that might happen in shorter secondary windows.
+3. **Annotation Sparsity**: Some clips might be socially significant but sparsely annotated (e.g., someone staring intensely while barely moving a cup). These would be discarded. Gazing or facial expression data (not available in Charades metadata) would be the ideal fix, but out of scope for Node 1.
+4. **Environment Sync**: The virtual environment and manifest are stored on the external SSD. Ensure the `venv` is activated before running downstream modules.

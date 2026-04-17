@@ -61,3 +61,28 @@ Download **both** the Charades-Ego egocentric videos **and** the original Charad
 - **Action**: The ingest node should accept a `view` argument (`"ego"` or `"tp"`) to extract frames from the correct video of the pair, since Module 03/04 need third-person frames while Module 02 needs no frames at all.
 - **Constraint**: Implement strict **"Auto-Cleanup" logic**. Because of SSD wear constraints, immediately after frame metadata is generated and the video state is passed to RAM for the next module, you **must delete all extracted frames** from the external drive.
 - **Success Criteria**: The system seamlessly extracts necessary visual frames dynamically, but never accumulates a backlog of `.jpg`/`.png` image artifacts taking up drive space.
+
+---
+
+## ✅ Status & Accomplishments (Current)
+
+### Phase 1 Execution Complete
+1. **Tooling**: `wget` installed via Homebrew. `/opt/homebrew/bin` added to script PATH.
+2. **Environment**: `saf_env` virtual environment verified and active on external SSD.
+3. **Data Acquisition**:
+   - `CharadesEgo.zip` (Annotations): Downloaded and extracted.
+   - `CharadesEgo_v1_480.tar` (Egocentric): Downloaded and extracted (~11GB).
+   - `Charades_v1_480.zip` (Third-person): Downloaded and extracted (~15GB).
+4. **Scripts Created**:
+   - `download_charades_ego.sh`: Orchestrates the full waterfall download.
+   - `build_manifest.py`: Correlates video pairs.
+   - `ingest_node.py`: Handles frame extraction logic.
+
+---
+
+## ⚠️ Concerns & Future Actions
+
+1. **URL Discrepancy**: The official S3 bucket uses `.zip` for the original Charades 480p videos (`Charades_v1_480.zip`), not `.tar` as initially documented. Scripts have been updated to reflect this.
+2. **Extraction Depth**: The archiving process creates a subdirectory layer (e.g., `ego_videos/CharadesEgo_v1_480/`). Future modules must resolve these paths using `glob` or explicit subdirectory mapping to avoid "File Not Found" errors.
+3. **SSD Wear Management**: While `ingest_node.py` has a `cleanup_frames` function, we need a global "Garbage Collection" sanity check in the main runner to ensure no orphaned frames remain if a module crashes mid-process.
+4. **Incomplete Pairs**: After manifest generation, we must quantify how many clips are missing their third-person counterparts and decide if the remaining dataset size is sufficient for the pre-training goal.
