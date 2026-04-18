@@ -52,13 +52,9 @@ def sample_frames_base64(video_path, t_start, t_end, fps=1.0, max_frames=5):
     cap.release()
     return base64_frames
 
-def analyze_engagement(video_path, t_start, t_end):
-    """Runs VLM inference via Ollama using the chat() API for proper base64 image support."""
-    frames = sample_frames_base64(video_path, t_start, t_end)
-    if not frames:
-        return "UNKNOWN", 0.0
-    
-    prompt = (
+def generate_engagement_prompt():
+    """Returns the strict-JSON formatting prompt for cognitive state classification."""
+    return (
         "Observe the person in these video frames. Classify their cognitive state "
         "into exactly one category: [Focused, Neutral, Startled]. "
         "Focused: Attentive and deliberate on a task. "
@@ -66,12 +62,16 @@ def analyze_engagement(video_path, t_start, t_end):
         "Startled: Show surprise, flinching, or sudden reactive movement. "
         "Return ONLY a JSON object: {\"state\": \"...\", \"confidence\": 0.0}"
     )
+
+def analyze_engagement(video_path, t_start, t_end):
+    """Runs VLM inference via Ollama using the chat() API for proper base64 image support."""
+    frames = sample_frames_base64(video_path, t_start, t_end)
+    if not frames:
+        return "UNKNOWN", 0.0
+    
+    prompt = generate_engagement_prompt()
     
     try:
-        # Use ollama.chat() instead of ollama.generate() because:
-        # - chat() reliably accepts base64-encoded image strings in the message images field
-        # - chat() reliably supports the format='json' parameter across versions
-        # - generate() expects file paths or raw bytes, NOT base64 strings
         response = ollama.chat(
             model='moondream',
             messages=[{
@@ -84,7 +84,8 @@ def analyze_engagement(video_path, t_start, t_end):
         
         data = json.loads(response['message']['content'])
         state = data.get("state", "UNKNOWN").upper()
-        confidence = data.get("confidence", 0.5)
+        # Default to 1.0 for successful parses if not provided by VLM
+        confidence = data.get("confidence", 1.0)
         
         valid_states = ["FOCUSED", "NEUTRAL", "STARTLED"]
         if state not in valid_states:
@@ -92,11 +93,15 @@ def analyze_engagement(video_path, t_start, t_end):
             for v in valid_states:
                 if v in state:
                     return v, confidence
+            
+            print(f"  [LOG] Hallucination/Unmapped: '{state}' recorded as UNKNOWN")
             state = "UNKNOWN"
+            confidence = 0.3
+            
         return state, confidence
         
     except Exception as e:
-        print(f"Ollama/JSON error: {e}")
+        print(f"  [LOG] Ollama/JSON error: {e}. Assigned UNKNOWN.")
         return "UNKNOWN", 0.3
 
 def main():
