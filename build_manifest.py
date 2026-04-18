@@ -39,6 +39,11 @@ def build_manifest():
         ego_id = row['id']
         tp_id = row['charades_video']
         
+        # Guard: skip rows with no third-person pairing
+        if pd.isna(tp_id):
+            print(f"Warning: No third-person pair for ego clip {ego_id} (NaN charades_video). Skipping.")
+            continue
+        
         # Construct paths
         ego_path = os.path.join(EGO_VIDEOS_DIR, f"{ego_id}.mp4")
         tp_path = os.path.join(TP_VIDEOS_DIR, f"{tp_id}.mp4")

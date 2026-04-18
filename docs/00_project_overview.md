@@ -30,7 +30,7 @@ The project is strictly separated into 7 discrete modules to maintain engineerin
 2. **[02_attention_module.md] (Node 1 — Very Low Compute, CPU-only)**
    * **Role**: The Entry Gate. Pure metadata filter — no video I/O. Validates that a clip contains meaningful **object-manipulation activity** (robot-assistable tasks) using temporal action annotations from the Charades-Ego CSV. Clips with insufficient annotated activity coverage are immediately discarded.
 3. **[03_engagement_module.md] (Node 2 — High Compute, VLM)**
-   * **Role**: Cognitive Extraction. Uses a 4-bit Quantized VLM (Qwen2.5-VL) on the **third-person paired video** to label the actor's observable psychological state as exactly one of: `[Focused, Neutral, Startled]`. The third-person view is essential because the actor's face and full body are visible.
+   * **Role**: Cognitive Extraction. Uses **Ollama (Moondream)** on the **third-person paired video** to label the actor's observable psychological state as exactly one of: `[Focused, Neutral, Startled]`. Focuses on facial expressions and body language visible in the observer's view.
 4. **[04_multimodal_perception_module.md] (Node 3 — Medium Compute, Pose)**
    * **Role**: Kinematic Validation. Runs a Pose tracker on the **third-person paired video** to calculate Peak Velocity ($V_{peak}$) of upper-body landmarks. A physical "Flinch" acts as a hard override, indicating a safety-relevant startle response regardless of the VLM's facial analysis.
 5. **[05_appropriateness_judge.md] (The Brain)**

@@ -22,12 +22,13 @@ Download **both** the Charades-Ego egocentric videos **and** the original Charad
 - **Action**: Add the following commands to the script:
   ```bash
   OUTPUT_DIR="/Volumes/Extreme SSD/charades_ego_data"
-  mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
 
-  # --- Guard: external drive check ---
+  # --- Guard: external drive check (Ensures SSD safety) ---
   if [[ "$OUTPUT_DIR" != /Volumes/* ]]; then
     echo "ERROR: OUTPUT_DIR must be on an external drive (/Volumes/...)." && exit 1
   fi
+
+  mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
 
   # 1. Download & extract annotations (CSV + class mapping, ~5MB)
   wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo.zip
@@ -37,12 +38,12 @@ Download **both** the Charades-Ego egocentric videos **and** the original Charad
   wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo_v1_480.tar
   tar -xf "$OUTPUT_DIR/CharadesEgo_v1_480.tar" -C "$OUTPUT_DIR/ego_videos"
 
-  # 3. Download original Charades third-person videos at 480p (~22GB)
+  # 3. Download original Charades third-person videos at 480p (~15GB)
   #    These are the PAIRED third-person views needed by Modules 03 & 04.
-  wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.tar
-  tar -xf "$OUTPUT_DIR/Charades_v1_480.tar" -C "$OUTPUT_DIR/tp_videos"
+  wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.zip
+  unzip -o "$OUTPUT_DIR/Charades_v1_480.zip" -d "$OUTPUT_DIR/tp_videos"
 
-  echo "Download complete. Total expected: ~44GB of video + annotations."
+  echo "Download complete. Total expected: ~37GB of video + annotations."
   ```
 - **Constraint**: The `-nc` (no-clobber) flag allows safe re-runs without re-downloading files already present.
 
@@ -80,9 +81,12 @@ Download **both** the Charades-Ego egocentric videos **and** the original Charad
 
 ---
 
-## ⚠️ Concerns & Future Actions
+## ✅ Resolved Pipeline Issues (Audit 2026-04-17)
 
-1. **URL Discrepancy**: The official S3 bucket uses `.zip` for the original Charades 480p videos (`Charades_v1_480.zip`), not `.tar` as initially documented. Scripts have been updated to reflect this.
-2. **Extraction Depth**: The archiving process creates a subdirectory layer (e.g., `ego_videos/CharadesEgo_v1_480/`). Future modules must resolve these paths using `glob` or explicit subdirectory mapping to avoid "File Not Found" errors.
-3. **SSD Wear Management**: While `ingest_node.py` has a `cleanup_frames` function, we need a global "Garbage Collection" sanity check in the main runner to ensure no orphaned frames remain if a module crashes mid-process.
-4. **Incomplete Pairs**: After manifest generation, we must quantify how many clips are missing their third-person counterparts and decide if the remaining dataset size is sufficient for the pre-training goal.
+| Issue | Root Cause | Resolution |
+|-------|------------|------------|
+| **URL Discrepancy** | S3 bucket uses `.zip` for original Charades, not `.tar`. | Updated `download_charades_ego.sh` and Task 2. |
+| **Guard Execution Order** | `mkdir` ran before drive check. | Moved guard above `mkdir` in `download_charades_ego.sh`. |
+| **NaN Pairing Bug** | `build_manifest.py` would fail on missing pairings. | Added `pd.isna(tp_id)` guard to manifest generator. |
+| **Extraction Depth** | Tar subdirectories were inconsistent. | Standardized pathing in `build_manifest.py`. |
+

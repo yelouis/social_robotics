@@ -37,12 +37,19 @@ Finalize the pipeline by uploading the sanitized Parquet dataset of social rewar
   1. Downloads the derived metadata parquet from Hugging Face using the `datasets` library.
   2. Prompts the user to confirm download of the video archives (with size estimates):
      ```python
-     CHARADES_EGO_URL = "https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo_v1_480.tar"  # ~22GB
-     CHARADES_TP_URL = "https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.tar"  # ~22GB
+      CHARADES_EGO_URL = "https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo_v1_480.tar" # ~11GB
+      CHARADES_TP_URL = "https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.zip" # ~15GB
      ```
   3. Extracts and indexes both ego and third-person videos locally.
   4. Merges the video paths with the parquet metadata by `ego_video_id` and `tp_video_id` to produce a hydrated, queryable dataset object.
 - **Action**: Use `HfApi().upload_file` to push `load_dataset.py` to the root of the Hugging Face repository.
+
+## ✅ Resolved Pipeline Issues (Audit 2026-04-17)
+
+| Issue | Root Cause | Resolution |
+|-------|------------|------------|
+| **Hydration URL** | S3 bucket uses `.zip` for original Charades, not `.tar`. | Updated URLs in Task 5 to match `download_charades_ego.sh`. |
+| **Size Estimates** | Initial estimates were inaccurate. | Updated ego/tp estimates to reflect actual data sizes. |
 
 ### Pipeline Success
 - **Success Criteria**: The pipeline outputs a success message containing the live URL to the newly created Hugging Face Dataset repository, which correctly hosts: (1) the Dataset Card, (2) the derived Parquet data with zero pixels, and (3) the `load_dataset.py` hydration script with public S3 download links for both ego and third-person video archives.

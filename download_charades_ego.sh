@@ -5,12 +5,13 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 # Configuration: Target the external SSD to prevent wear on the internal drive.
 OUTPUT_DIR="/Volumes/Extreme SSD/charades_ego_data"
-mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
 
-# --- Guard: External drive check ---
+# --- Guard: External drive check (MUST run before mkdir) ---
 if [[ "$OUTPUT_DIR" != /Volumes/* ]]; then
   echo "ERROR: OUTPUT_DIR must be on an external drive (/Volumes/...)." && exit 1
 fi
+
+mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
 
 echo "Starting download to $OUTPUT_DIR..."
 

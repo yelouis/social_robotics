@@ -52,10 +52,14 @@ Our proxy heuristic: **activity density = attention**. If a clip is densely anno
 **Progress Summary**:
 - Successfully processed **3,112 clips** from the manifest.
 - **3,054 clips (98.1%)** passed the 20% activity coverage threshold.
-- Execution time: < 1 second (Pure metadata filtering).
+- Execution time: < 1 second.
+- **NaN Handling**: Robust guards added for `clip_length` and missing action strings.
 
-## ⚠️ Concerns & Future Considerations
-1. **Threshold Sensitivity**: The 98.1% pass rate suggests the 20% threshold is very inclusive. If Module 03 (VLM) results are noisy, we may need to increase this threshold to 40-50% to ensure high-quality "busy" clips.
-2. **Primary Window Selection**: Currently, the script selects the *longest* contiguous interval. In cases where there are multiple distinct activity bursts, the VLM will only analyze the single longest one. We should monitor if this misses critical "startle" events that might happen in shorter secondary windows.
-3. **Annotation Sparsity**: Some clips might be socially significant but sparsely annotated (e.g., someone staring intensely while barely moving a cup). These would be discarded. Gazing or facial expression data (not available in Charades metadata) would be the ideal fix, but out of scope for Node 1.
-4. **Environment Sync**: The virtual environment and manifest are stored on the external SSD. Ensure the `venv` is activated before running downstream modules.
+## ✅ Resolved Pipeline Issues (Audit 2026-04-17)
+
+| Issue | Root Cause | Resolution |
+|-------|------------|------------|
+| **NaN Division Risk** | Missing `length` values produced `NaN` activity scores. | Added `pd.isna(clip_length_s)` guard. |
+| **Primary Window Missing** | Edge cases with no intervals caused crashes. | Added empty interval check returning `(0.0, 0.0)`. |
+| **Interval Merging** | Overlapping annotations inflated coverage. | Implemented robust interval sorting and merging logic. |
+

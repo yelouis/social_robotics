@@ -4,8 +4,7 @@ import cv2
 import pandas as pd
 import ollama
 import base64
-from io import BytesIO
-from PIL import Image
+import argparse
 
 def load_data(manifest_path, attention_path):
     """Loads manifest and attention results."""
@@ -54,7 +53,7 @@ def sample_frames_base64(video_path, t_start, t_end, fps=1.0, max_frames=5):
     return base64_frames
 
 def analyze_engagement(video_path, t_start, t_end):
-    """Runs VLM inference via Ollama."""
+    """Runs VLM inference via Ollama using the chat() API for proper base64 image support."""
     frames = sample_frames_base64(video_path, t_start, t_end)
     if not frames:
         return "UNKNOWN", 0.0
@@ -69,15 +68,21 @@ def analyze_engagement(video_path, t_start, t_end):
     )
     
     try:
-        response = ollama.generate(
+        # Use ollama.chat() instead of ollama.generate() because:
+        # - chat() reliably accepts base64-encoded image strings in the message images field
+        # - chat() reliably supports the format='json' parameter across versions
+        # - generate() expects file paths or raw bytes, NOT base64 strings
+        response = ollama.chat(
             model='moondream',
-            prompt=prompt,
-            images=frames,
-            stream=False,
+            messages=[{
+                'role': 'user',
+                'content': prompt,
+                'images': frames
+            }],
             format='json'
         )
         
-        data = json.loads(response['response'])
+        data = json.loads(response['message']['content'])
         state = data.get("state", "UNKNOWN").upper()
         confidence = data.get("confidence", 0.5)
         
@@ -95,20 +100,27 @@ def analyze_engagement(video_path, t_start, t_end):
         return "UNKNOWN", 0.3
 
 def main():
+    parser = argparse.ArgumentParser(description="Module 03: Engagement VLM Analysis via Ollama")
+    parser.add_argument('--limit', type=int, default=None,
+                        help="Max number of clips to process (default: all passing clips)")
+    args = parser.parse_args()
+    
     # Configuration
     DATA_DIR = "/Volumes/Extreme SSD/charades_ego_data"
     MANIFEST_PATH = os.path.join(DATA_DIR, "annotations", "CharadesEgo", "paired_clips_manifest.csv")
     ATTENTION_PATH = "attention_results.json"
     OUTPUT_PATH = "engagement_results.json"
-    LIMIT = 5  # Limit for testing
     
     print(f"Loading data...")
     manifest_df, passed_clips = load_data(MANIFEST_PATH, ATTENTION_PATH)
     
-    results = []
-    print(f"Processing {min(LIMIT, len(passed_clips))} clips via Ollama (Moondream)...")
+    clips_to_process = passed_clips[:args.limit] if args.limit else passed_clips
+    total = len(clips_to_process)
     
-    for i, clip in enumerate(passed_clips[:LIMIT]):
+    results = []
+    print(f"Processing {total} clips via Ollama (Moondream)...")
+    
+    for i, clip in enumerate(clips_to_process):
         ego_id = clip['ego_video_id']
         tp_id = clip['tp_video_id']
         t_start = clip['primary_window']['t_start']
@@ -117,7 +129,7 @@ def main():
         row = manifest_df[manifest_df['ego_video_id'] == ego_id].iloc[0]
         tp_video_path = row['tp_video_path']
         
-        print(f"[{i+1}/{LIMIT}] Analyzing {tp_id} ({t_start}s - {t_end}s)...")
+        print(f"[{i+1}/{total}] Analyzing {tp_id} ({t_start}s - {t_end}s)...")
         state, confidence = analyze_engagement(tp_video_path, t_start, t_end)
         
         results.append({
@@ -134,7 +146,7 @@ def main():
     with open(OUTPUT_PATH, 'w') as f:
         json.dump(results, f, indent=2)
         
-    print("Module 03 analysis complete.")
+    print(f"Module 03 analysis complete. {total} clips processed.")
 
 if __name__ == "__main__":
     main()

@@ -59,7 +59,10 @@ def calculate_activity_coverage(actions_str, clip_length_s):
                 continue
     
     total_covered, merged = merge_intervals(intervals)
-    activity_fraction = total_covered / clip_length_s if clip_length_s > 0 else 0
+    if clip_length_s is None or pd.isna(clip_length_s) or clip_length_s <= 0:
+        activity_fraction = 0.0
+    else:
+        activity_fraction = total_covered / clip_length_s
     
     # Find the longest contiguous annotated segment (primary window)
     primary_window = {"t_start": 0.0, "t_end": 0.0}

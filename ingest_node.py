@@ -6,6 +6,8 @@ import pandas as pd
 def extract_frames(video_path, output_frames_dir, t_start, t_end, fps_sample=2):
     """
     Extracts frames from a video within a specific time window.
+    Uses time-based seeking (CAP_PROP_POS_MSEC) for accuracy — frame-based seeking
+    can drift if the video's FPS metadata is inaccurate (common in Charades videos).
     """
     if not os.path.exists(output_frames_dir):
         os.makedirs(output_frames_dir)
@@ -15,34 +17,26 @@ def extract_frames(video_path, output_frames_dir, t_start, t_end, fps_sample=2):
         print(f"Error: Could not open video {video_path}")
         return []
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0:
-        fps = 24.0 # Default fallback
-        
-    frame_interval = int(fps / fps_sample)
-    if frame_interval < 1:
-        frame_interval = 1
-        
-    start_frame = int(t_start * fps)
-    end_frame = int(t_end * fps)
+    duration = t_end - t_start
+    sample_interval = 1.0 / fps_sample
+    num_samples = int(duration * fps_sample)
     
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    
-    frame_count = start_frame
     extracted_paths = []
     
-    while frame_count <= end_frame:
+    for i in range(num_samples):
+        timestamp = t_start + (i * sample_interval)
+        if timestamp > t_end:
+            break
+        
+        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000)
         ret, frame = cap.read()
         if not ret:
             break
             
-        if (frame_count - start_frame) % frame_interval == 0:
-            frame_filename = f"frame_{frame_count:06d}.jpg"
-            frame_path = os.path.join(output_frames_dir, frame_filename)
-            cv2.imwrite(frame_path, frame)
-            extracted_paths.append(frame_path)
-            
-        frame_count += 1
+        frame_filename = f"frame_{i:06d}.jpg"
+        frame_path = os.path.join(output_frames_dir, frame_filename)
+        cv2.imwrite(frame_path, frame)
+        extracted_paths.append(frame_path)
         
     cap.release()
     return extracted_paths
