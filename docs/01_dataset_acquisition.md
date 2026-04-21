@@ -1,92 +1,31 @@
-# AI Task Breakdown: Dataset Acquisition (Charades-Ego + Original Charades)
+# AI Task Breakdown: Dataset Acquisition
 
 ## Objective
-Download **both** the Charades-Ego egocentric videos **and** the original Charades third-person videos from AI2's public S3 bucket via `wget`. Build a unified clip manifest that maps every egocentric clip to its paired third-person video. No proprietary CLI tool or license key is required — all downloads are public.
+Download and stage large-scale first-person POV (egocentric) videos—such as Ego4d or other relevant datasets—onto the local system for ingestion into the pipeline.
 
+## ⚠️ Critical Action for Hardware Management
+Video datasets are inherently massive (often spanning terabytes). 
+**DO NOT** run these data pipelines directly on strict internal SSD setups if space/wear are concerns. 
+- Ensure your `OUTPUT_DIR` maps out to resilient, external high-capacity NVMe drives where possible.
 
-## ⚠️ Critical Action for Your M4 Pro Mac mini (SSD Wear Prevention)
-**DO NOT** run this data extraction or project pipeline directly on your Mac's internal SSD. The constant read/write cycles from `ffmpeg` and VLM inference will rapidly accelerate SSD wear.
-- **Requirement**: Utilize a 2TB External NVMe SSD (e.g., Samsung T7 or SanDisk Extreme).
-- **Action**: Configure your paths to set `OUTPUT_DIR` to that external drive (e.g., `/Volumes/Extreme SSD/charades_ego_data`).
-- **Action**: Symlink your Python virtual environment (e.g., `venv` or `conda` env) to the external drive if possible to push all heavy OS I/O operations off the internal drive.
+## Target Video Paradigm
+The system is built to parse First-Person POV interactions. While the pipeline is designed to be relatively dataset-agnostic, the target standard is **Ego4D**. 
+These videos represent unstructured, daily interaction. 
 
-## Agent Instructions: Step-by-Step Tasks
+## Recommended Implementation Steps for Agents
 
-### Task 1: Environment Setup
-- **Action**: Verify that `wget` (or `curl`), `tar`, and `unzip` are available in the shell. Install via `brew install wget` if missing.
-- **Action**: Verify Python dependencies: `pandas`, `opencv-python` (for downstream modules). Install via `pip install pandas opencv-python`.
-- **Note**: Charades-Ego is publicly hosted on AI2's S3 bucket. No credentials, API keys, or license agreements are required to download.
+### Task 1: Environment Definition
+- Setup environment variables. Ensure the ingestion directory is properly symlinked or mapped out to external SSD storage.
+- Download necessary command line tools (e.g. `aws-cli`, `wget`, `curl`).
 
-### Task 2: Download Script (`download_charades_ego.sh`)
-- **Action**: Create a bash script `download_charades_ego.sh`.
-- **Action**: Add the following commands to the script:
-  ```bash
-  OUTPUT_DIR="/Volumes/Extreme SSD/charades_ego_data"
+### Task 2: Dataset Registration & Extraction 
+- Most datasets require script-based downloaders.
+- Write a `download_videos.sh` logic step. For Ego4D, this might employ their native python CLI package.
+- Extract or mount the video `.mp4` chunks into a localized `/raw_videos` buffer folder so that the downstream module (`02_filtering_and_labeling`) can index the raw files.
 
-  # --- Guard: external drive check (Ensures SSD safety) ---
-  if [[ "$OUTPUT_DIR" != /Volumes/* ]]; then
-    echo "ERROR: OUTPUT_DIR must be on an external drive (/Volumes/...)." && exit 1
-  fi
+### Task 3: Local Manifest Initialization
+- Generate an initial local registry or manifest (e.g., `local_video_registry.json`) parsing all the successfully downloaded `.mp4` files.
+- Each video should be assigned a UUID or dataset-specific ID pointing to its exact path on disk.
 
-  mkdir -p "$OUTPUT_DIR"/{annotations,ego_videos,tp_videos}
-
-  # 1. Download & extract annotations (CSV + class mapping, ~5MB)
-  wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo.zip
-  unzip -o "$OUTPUT_DIR/CharadesEgo.zip" -d "$OUTPUT_DIR/annotations"
-
-  # 2. Download egocentric videos at 480p (~22GB)
-  wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/CharadesEgo_v1_480.tar
-  tar -xf "$OUTPUT_DIR/CharadesEgo_v1_480.tar" -C "$OUTPUT_DIR/ego_videos"
-
-  # 3. Download original Charades third-person videos at 480p (~15GB)
-  #    These are the PAIRED third-person views needed by Modules 03 & 04.
-  wget -nc -P "$OUTPUT_DIR" https://ai2-public-datasets.s3-us-west-2.amazonaws.com/charades/Charades_v1_480.zip
-  unzip -o "$OUTPUT_DIR/Charades_v1_480.zip" -d "$OUTPUT_DIR/tp_videos"
-
-  echo "Download complete. Total expected: ~37GB of video + annotations."
-  ```
-- **Constraint**: The `-nc` (no-clobber) flag allows safe re-runs without re-downloading files already present.
-
-### Task 3: Paired Manifest Generation (`build_manifest.py`)
-- **Action**: Create a Python script `build_manifest.py` that reads `CharadesEgo_v1_train.csv` (and `CharadesEgo_v1_test.csv`) using `pandas`.
-- **Action**: Filter to only rows where `egocentric == 'Yes'`. For each ego clip, resolve the paired third-person video using the `charades_video` column.
-- **Action**: Build a unified dataframe with columns: `ego_video_id`, `ego_video_path`, `tp_video_id`, `tp_video_path`, `actions`, `length`, `scene`, `script`.
-  - `ego_video_path` = `$OUTPUT_DIR/ego_videos/{ego_video_id}.mp4`
-  - `tp_video_path` = `$OUTPUT_DIR/tp_videos/{tp_video_id}.mp4`
-- **Action**: Validate that both video files actually exist on disk. Log any missing pairs.
-- **Action**: Persist as `paired_clips_manifest.csv` to `$OUTPUT_DIR/annotations/`.
-- **Success Criteria**: Every row in the manifest has a confirmed ego + third-person video pair on disk, ready for downstream dual-view processing.
-
-### Task 4: Ingestion Node (`ingest_node.py`) & Auto-Cleanup
-- **Action**: Create an `ingest_node.py` script responsible for handling localized frame extraction (e.g., using `cv2` or `ffmpeg`) for downstream visual modules. Load video paths from `paired_clips_manifest.csv`.
-- **Action**: The ingest node should accept a `view` argument (`"ego"` or `"tp"`) to extract frames from the correct video of the pair, since Module 03/04 need third-person frames while Module 02 needs no frames at all.
-- **Constraint**: Implement strict **"Auto-Cleanup" logic**. Because of SSD wear constraints, immediately after frame metadata is generated and the video state is passed to RAM for the next module, you **must delete all extracted frames** from the external drive.
-- **Success Criteria**: The system seamlessly extracts necessary visual frames dynamically, but never accumulates a backlog of `.jpg`/`.png` image artifacts taking up drive space.
-
----
-
-## ✅ Status & Accomplishments (Current)
-
-### Phase 1 Execution Complete
-1. **Tooling**: `wget` installed via Homebrew. `/opt/homebrew/bin` added to script PATH.
-2. **Environment**: `saf_env` virtual environment verified and active on external SSD.
-3. **Data Acquisition**:
-   - `CharadesEgo.zip` (Annotations): Downloaded and extracted.
-   - `CharadesEgo_v1_480.tar` (Egocentric): Downloaded and extracted (~11GB).
-   - `Charades_v1_480.zip` (Third-person): Downloaded and extracted (~15GB).
-4. **Scripts Created**:
-   - `download_charades_ego.sh`: Orchestrates the full waterfall download.
-   - `build_manifest.py`: Correlates video pairs.
-   - `ingest_node.py`: Handles frame extraction logic.
-
----
-
-## ✅ Resolved Pipeline Issues (Audit 2026-04-17)
-
-| Issue | Root Cause | Resolution |
-|-------|------------|------------|
-| **URL Discrepancy** | S3 bucket uses `.zip` for original Charades, not `.tar`. | Updated `download_charades_ego.sh` and Task 2. |
-| **Guard Execution Order** | `mkdir` ran before drive check. | Moved guard above `mkdir` in `download_charades_ego.sh`. |
-| **NaN Pairing Bug** | `build_manifest.py` would fail on missing pairings. | Added `pd.isna(tp_id)` guard to manifest generator. |
-| **Extraction Depth** | Tar subdirectories were inconsistent. | Standardized pathing in `build_manifest.py`. |
-
+## Success Criteria
+You should successfully hydrate a local folder filled with MP4 video clips, paired with an index/manifest referencing every file path accurately before moving to the Filtering module.
