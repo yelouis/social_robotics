@@ -87,10 +87,15 @@ def run_attention_analysis(video_path, output_json, weights_path="models/L2CSNet
                 best_yaw = float(results.yaw[0])
                 
                 score = get_attention_score(best_pitch, best_yaw)
-                attention_trace.append({"t": round(t_sec, 2), "score": round(score, 3)})
+                attention_trace.append({
+                    "t": round(t_sec, 2),
+                    "score": round(score, 3),
+                    "pitch_rad": round(best_pitch, 4),
+                    "yaw_rad": round(best_yaw, 4)
+                })
             else:
                 # No face detected
-                attention_trace.append({"t": round(t_sec, 2), "score": 0.0})
+                attention_trace.append({"t": round(t_sec, 2), "score": 0.0, "pitch_rad": None, "yaw_rad": None})
                 
         frame_idx += 1
 

@@ -10,7 +10,7 @@ Crucially, this layer analyzes **emotion transitions and durations** over time (
 ## 📥 Input Requirements
 - **`filtered_manifest.json`** (required): This layer iterates through the `identified_tasks` array provided by Node 02. For each task, it retrieves:
   - **Contextual Task Label** (`task_label`): To know what action the bystander is reacting to.
-  - **Temporal Alignment** (`task_reaction_window_sec`): Derived dynamically via BayesianVSLNet and Action Velocity profiling, this is the exact timestamp boundary within which we sample bystander reactions for a given task.
+  - **Temporal Alignment** (`task_reaction_window_sec`): Derived dynamically via Optical Flow peak detection (+ VLM refinement) and Action Velocity profiling, this is the exact timestamp boundary within which we sample bystander reactions for a given task.
 - **Cross-layer (optional)**: `03a_attention_result.json` — Used to weight emotion readings. A bystander who isn't even looking at the POV actor (attention score < 0.3) during the reaction window is flagged as unreliable.
 
 ---
@@ -20,7 +20,7 @@ Crucially, this layer analyzes **emotion transitions and durations** over time (
 Because a single video might contain multiple tasks, this sequence occurs iteratively for *each* task inside the `identified_tasks` array.
 
 ### Step 1: Expectation Generation (Gemma 4)
-Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations. This lightweight local VLM inference is well-suited for the **24GB RAM Mac mini M4 Pro**, allowing concurrent tracking arrays without swapping.
+Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations. This lightweight local LLM inference is well-suited for the **24GB RAM Mac mini M4 Pro**, allowing concurrent tracking arrays without swapping.
 
 **Structured Prompt Template:**
 ```text
@@ -85,7 +85,7 @@ $$ \text{Task Success Score} = \frac{\sum_{i=1}^{n} (S_i \times D_i \times W_i)}
 Where:
 - $S_i$ = The `slice_success_scalar` of slice $i$
 - $D_i$ = Duration of slice $i$ in seconds
-- $W_i$ = Chronological Weight (e.g., start time of slice $i$ minus `task_climax_sec`). Later slices mathematically overpower early reflexes.
+- $W_i$ = Chronological Weight in seconds: $W_i = \max(0.1,\; t_{\text{start}_i} - t_{\text{climax}})$. The `max(0.1, ...)` floor prevents the first slice from being zeroed out entirely. Later slices mathematically overpower early reflexes.
 
 *(Note: If there are multiple bystanders, this final score is averaged across all bystander scores for that task, weighted by their 03a attention span.)*
 

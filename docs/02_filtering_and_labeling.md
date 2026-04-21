@@ -41,7 +41,9 @@ Knowing *what* the task is isn't enough; downstream affective layers need to kno
 Identify the exact timestamp or narrow temporal window where the "climax" or core action of each task occurs (e.g., the exact moment the dropped glass shatters, or the exact moment the basketball leaves the hands).
 
 **Task Requirements**:
-- **BayesianVSLNet Alignment**: Run a Video Summarization / Highlight Detection model (such as **BayesianVSLNet**) on the clip isolating each identified task. This model analyzes the visual features to find the statistical apex (`task_climax_sec`) of the action.
+- **Hybrid Optical Flow + VLM Climax Detection**: A two-stage approach that requires zero additional model downloads:
+  - **Stage 1 — Optical Flow Variance Peak**: Use OpenCV's `cv2.calcOpticalFlowFarneback` to compute dense optical flow at ~5 FPS within each task's temporal bounds. The frame with the highest flow magnitude is the kinetic `task_climax_sec`. This is highly accurate for abrupt physical actions (dropping, slipping, throwing).
+  - **Stage 2 — VLM Refinement (slow/cognitive tasks)**: For tasks classified as `"slow"` velocity (e.g., solving a puzzle, reading a sign), sample 3-5 candidate frames around the optical flow peak and use the existing **moondream** VLM to score each frame's proximity to the action climax, using the `task_label` as context.
 - **Dynamic Action Velocity & Delay Buffers**: Human reactions vary wildly depending on the abruptness of a task. Node 02's VLM will classify the "Velocity" of the task. We use this to compute a dynamic `task_reaction_window_sec`:
   - **Fast / Instinctual** (e.g., slipping, dropping an item): Requires a short buffer. Climax + `[0.5s to 2.0s]`.
   - **Medium** (e.g., throwing a ball, standard interaction): Climax + `[1.0s to 3.0s]`.
@@ -71,7 +73,9 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_temporal_metadata": {
         "task_climax_sec": 5.2,
         "task_reaction_window_sec": [6.2, 8.2],
-        "climax_extraction_model": "BayesianVSLNet"
+        "climax_extraction_method": "optical_flow_peak+vlm_refinement",
+        "optical_flow_peak_magnitude": 42.8,
+        "vlm_climax_confidence": 0.85
       }
     },
     {
@@ -82,7 +86,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_temporal_metadata": {
         "task_climax_sec": 24.1,
         "task_reaction_window_sec": [24.6, 26.1],
-        "climax_extraction_model": "BayesianVSLNet"
+        "climax_extraction_method": "optical_flow_peak",
+        "optical_flow_peak_magnitude": 78.3
       }
     }
   ],
@@ -101,6 +106,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
   ]
 }
 ```
+
+> **Co-indexing rule**: Within each `bystander_detections` entry, `timestamps_sec[i]`, `bounding_boxes[i]`, and `detection_confidence[i]` are strictly co-indexed. The i-th element of each array describes the same sampled frame.
 
 ## Verification & Validation Check
 To ensure the filtering mechanisms are robust and correct:

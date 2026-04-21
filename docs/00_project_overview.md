@@ -30,8 +30,11 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 
 3. **Social Feature Layers** (`03_social_layer_architecture.md`)
    - The core engine room of the project. These are **independent, on-going extraction layers** written as separate modules. 
-   - Examples include a "Flinch Layer" to detect startle kinematics, "Gaze Tracking Layers", or "Voice Activation Layers".
+   - Current layers include the Attention Layer (03a) for gaze tracking, the Acoustic Prosody Layer (03c) for non-verbal vocal cues, and the Motor Resonance Layer (03f) for sympathetic flinch detection. See the full registry in `03_social_layer_architecture.md`.
    - Every active layer parses the filtered datasets, evaluates the video chunks, and appends its outputs to the centralized metadata record.
 
 4. **Dehydrated Export** (`04_dehydrated_export.md`)
    - Merges the extraction schemas, removes any underlying raw data (pixels/audio), and prepares the output `.parquet` and dataset cards for Hugging Face or other platforms.
+
+### Supporting Documents
+- **ML Dependencies** (`ml_dependencies.md`): Centralized registry of all model weights, libraries, and system tools required across the pipeline. Must be updated when any layer adds or changes a model dependency.

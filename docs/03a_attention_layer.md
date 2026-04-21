@@ -66,10 +66,10 @@ In adherence to the Ongoing Layers Paradigm, this layer will *never* modify the 
       "is_engaged": true,
       "gaze_target_classification": "POV_Actor_Hands",
       "attention_trace": [
-        {"t": 0.0, "score": 0.72},
-        {"t": 0.5, "score": 0.81},
-        {"t": 1.0, "score": 0.90},
-        {"t": 1.5, "score": 0.88}
+        {"t": 0.0, "score": 0.72, "pitch_rad": -0.12, "yaw_rad": 0.05},
+        {"t": 0.5, "score": 0.81, "pitch_rad": -0.08, "yaw_rad": 0.03},
+        {"t": 1.0, "score": 0.90, "pitch_rad": -0.04, "yaw_rad": 0.02},
+        {"t": 1.5, "score": 0.88, "pitch_rad": -0.05, "yaw_rad": 0.01}
       ]
     }
   ],

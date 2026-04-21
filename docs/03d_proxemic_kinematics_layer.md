@@ -20,9 +20,10 @@ Track the area $A = (x_{max} - x_{min}) \times (y_{max} - y_{min})$ of the bysta
 - **Rapid Expansion**: The bounding box grows exponentially relative to the frame size. This indicates a forward lunge or approach.
 - **Rapid Contraction**: The bounding box shrinks. The bystander is stepping back or recoiling away from the POV actor.
 
-### 2. SOTA Monocular Metric Depth (Depth Anything V2)
+### 2. SOTA Monocular Metric Depth (Depth Anything V2-Small)
 For an extremely accurate vector, we compute the relative Z-distance using a SOTA foundational depth model.
-- **Model**: **Depth Anything V2** (or Metric3D v2 for absolute metric recovery).
+- **Model**: **Depth Anything V2-Small** (`vits`, ~25M params, **Apache-2.0**). Fallback: **Depth Anything V1-Large** (`vitl`, ~335M params, also Apache-2.0) if V2-Small quality is insufficient.
+- **Why V2-Small**: The pipeline tracks **relative depth deltas** (∆Z between frames), not absolute metric depth. V2-Small's relative ordering is sufficient for detecting approach vs. retreat. Larger V2 variants (Base/Large/Giant) are CC-BY-NC-4.0 and would restrict the exported dataset.
 - **Mechanism**: Run the depth model at 2-3 FPS over the reaction window. Mask the depth map using the YOLO `person` bounding box to isolate the bystander's pixels.
 - **Calculation**: Calculate the median depth value of the bystander mask. Track the $\Delta$ depth over time. A rapidly decreasing depth map value indicates approach.
 
@@ -55,5 +56,5 @@ Combine the scale and depth delta into a normalized `proxemic_vector` ranging fr
 ```
 
 ## Verification & Validation Check
-- **Singular Video Test**: Process a video where a bystander walks towards the camera. Overlay the Depth Anything V2 depth-map as a colormap mask next to the YOLO bounding box. Verify visually that the assigned Z-median steadily decreases as the person approaches.
-- **Batch Test**: Run across a batch of standard interaction videos. Validate that `Depth Anything V2` tensor offloading functions correctly on the **Mac mini M4 Pro (24GB RAM)** via the MLX/MPS backend. Assert that the `proxemic_vector` appropriately penalizes jitter (ignoring +/- 0.05 micro-movements to avoid false positive "lunges").
+- **Singular Video Test**: Process a video where a bystander walks towards the camera. Overlay the Depth Anything V2-Small depth-map as a colormap mask next to the YOLO bounding box. Verify visually that the assigned Z-median steadily decreases as the person approaches.
+- **Batch Test**: Run across a batch of standard interaction videos. Validate that `Depth Anything V2-Small` tensor offloading functions correctly on the **Mac mini M4 Pro (24GB RAM)** via the PyTorch MPS backend. Assert that the `proxemic_vector` appropriately penalizes jitter (ignoring +/- 0.05 micro-movements to avoid false positive "lunges"). If V2-Small accuracy proves insufficient, fall back to Depth Anything V1-Large (still Apache-2.0).

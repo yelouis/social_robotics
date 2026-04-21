@@ -17,16 +17,18 @@ The **Acoustic Prosody Layer** draws on developmental psychology, specifically h
 ### 1. Audio Slicing & Pre-processing
 Use `FFmpeg` or `librosa` to extract the audio track spanning the exact `task_reaction_window_sec`. Resample the audio to 16kHz, as required by most SOTA speech models.
 
-### 2. Acoustic Feature & Emotion Extraction (Wav2Vec 2.0 / SenseVoice)
+### 2. Speech Emotion Recognition (emotion2vec+)
 Instead of transcribing words (which VLMs can do), we run a State-of-the-Art Speech Emotion Recognition (SER) model to capture the acoustic flavor:
-- **Recommended SOTA Model**: **SenseVoice** (FunAudioLLM) or **`audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim`** via Hugging Face.
-- **Mechanism**: Feed the audio slice into the wav2vec2 model to extract Continuous Emotion Dimensions: **Arousal** (calm vs. excited), **Valence** (negative vs. positive), and **Dominance** (weak vs. strong).
+- **Primary SER Model**: **emotion2vec+ large** (`iic/emotion2vec_plus_large`) via the FunASR framework. MIT licensed. ACL 2024. Achieves SOTA on IEMOCAP and multiple languages.
+- **Mechanism**: Feed the 16kHz audio slice into emotion2vec+ to extract a **9-class emotion probability distribution** (angry, disgusted, fearful, happy, neutral, other, sad, surprised, unknown) plus an optional 768-dim emotion embedding.
 - **Heuristic Mapping**:
-  - High Arousal + Low Valence + Sudden Volume Spike = **Alarming / Deterrent** (e.g., a sharp "Hey! Stop!").
-  - Moderate Arousal + High Valence + Melodic Pitch Contour = **Soothing / Encouraging** (e.g., "Good job!").
+  - High `angry` + high `fearful` + Sudden Volume Spike = **Alarming / Deterrent** (e.g., a sharp "Hey! Stop!").
+  - High `happy` + high `surprised` + Melodic Pitch Contour = **Soothing / Encouraging** (e.g., "Good job!").
+  - High `sad` + Low Volume = **Discouraging / Negative**.
+- **Supplementary Audio Event Detection**: Optionally run **SenseVoice** alongside for detecting non-speech audio events (laughter, applause, crying, coughing) that provide additional social context.
 
 ### 3. Pitch Contour & Amplitude Variance (Librosa)
-To parallel the Wav2Vec embedding, calculate deterministic acoustic features using `librosa`:
+To supplement the emotion2vec+ embedding, calculate deterministic acoustic features using `librosa`:
 - **Volume Spike (dB)**: Measure the delta between the pre-climax ambient noise floor and the peak amplitude within the reaction window.
 - **Pitch Variance**: Calculate the fundamental frequency (f0). A highly melodic voice has smooth variance, while a bark or yell has abrupt, broken pitch contours.
 
@@ -47,8 +49,13 @@ The layer outputs an isolated JSON mapping the acoustic payload per task.
       "prosody_metrics": {
         "max_amplitude_dbFS": -12.4,
         "pitch_contour_variance": 0.85,
-        "wav2vec_arousal": 0.88,
-        "wav2vec_valence": -0.65
+        "emotion_scores": {
+          "angry": 0.72, "happy": 0.05, "sad": 0.02,
+          "surprised": 0.08, "fearful": 0.03, "neutral": 0.05,
+          "disgusted": 0.02, "other": 0.02, "unknown": 0.01
+        },
+        "dominant_emotion": "angry",
+        "dominant_emotion_confidence": 0.72
       },
       "classified_acoustic_tone": "Alarming",
       "prosody_scalar": -0.9
@@ -58,5 +65,5 @@ The layer outputs an isolated JSON mapping the acoustic payload per task.
 ```
 
 ## Verification & Validation Check
-- **Singular Video Test**: Extract the 2-second audio chunk of a known "yell" video. Run the Python `librosa` extraction script and print the Wav2Vec ADV (Arousal/Dominance/Valence) scores to the console. Listen to the `.wav` slice to manually confirm the model caught the exact peak of the shout.
-- **Batch Test**: Run over 100 clips. Verify that videos classified as "Alarming" match a high delta in `max_amplitude_dbFS`. Ensure audio loading does not bottleneck the **24GB RAM Mac mini M4 Pro**; use chunked torchaudio streaming interfaces where possible.
+- **Singular Video Test**: Extract the 2-second audio chunk of a known "yell" video. Run the Python `funasr` emotion2vec+ inference and print the 9-class emotion scores to the console. Listen to the `.wav` slice to manually confirm the model caught the exact peak of the shout.
+- **Batch Test**: Run over 100 clips. Verify that videos classified as "Alarming" correlate with high `angry` + `fearful` scores and high delta in `max_amplitude_dbFS`. Ensure audio loading does not bottleneck the **24GB RAM Mac mini M4 Pro**; use chunked torchaudio streaming interfaces where possible.

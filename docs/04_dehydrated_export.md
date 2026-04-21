@@ -23,6 +23,16 @@ Before export, the individual layer output JSONs must be merged into a single ma
 2. **Outer-join** on `video_id`: Every video that appears in *any* layer's output gets a row. If a layer did not process a given video (or failed), its columns are filled with `null`/`NaN`.
 3. **Flatten nested structures**: Per-person arrays (from 03a, 03b) should be flattened into the aggregate summary fields for the parquet columns. The full per-person detail can be preserved in a JSON-encoded string column for research use.
 4. **Attach manifest metadata**: Join in the `task_label`, `source_dataset`, `duration_sec`, and `fps` from `filtered_manifest.json` so the exported dataset is self-describing.
+5. **Embed export metadata**: Every exported file must include a top-level metadata block for traceability:
+   ```json
+   {
+     "schema_version": "1.0.0",
+     "export_timestamp": "2026-04-21T00:00:00Z",
+     "active_layers": ["03a", "03b", "03c", "03d", "03e", "03f", "03g"],
+     "pipeline_git_sha": "abc1234"
+   }
+   ```
+   - `schema_version` follows [SemVer](https://semver.org/). Bump the **minor** version when adding new columns; bump the **major** version if columns are removed or renamed (which should be avoided per the additive-only rule).
 
 ### Expected Intermediate Output
 A `merged_social_features.json` (or SQLite DB) containing one record per `video_id` with all layer features as columns, ready for conversion to Parquet.

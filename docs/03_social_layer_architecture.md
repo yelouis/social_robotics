@@ -26,7 +26,7 @@ As layers are implemented, they should be tracked here. Each layer follows the n
 
 | Layer ID | Name | Document | Output File | Status |
 |---|---|---|---|---|
-| 03a | Attention / Engagement | `03a_attention_layer.md` | `03a_attention_result.json` | Planned |
+| 03a | Attention / Engagement | `03a_attention_layer.md` | `03a_attention_result.json` | Implemented |
 | 03b | Reasonable Emotion | `03b_reasonable_emotion_layer.md` | `03b_reasonable_emotion_result.json` | Planned |
 | 03c | Acoustic Prosody | `03c_acoustic_prosody_layer.md` | `03c_acoustic_prosody_result.json` | Planned |
 | 03d | Proxemic Kinematics | `03d_proxemic_kinematics_layer.md` | `03d_proxemic_kinematics_result.json` | Planned |
@@ -44,7 +44,30 @@ Layers are designed to be independent, but some layers *may* consume the output 
 2. If a consumed layer's output is missing for a given `video_id`, the consuming layer must gracefully degrade (use a default value or skip the enrichment).
 3. Cross-layer dependencies must be documented in the consuming layer's Input Requirements section.
 
+> ⚠️ **Exception**: Layer 03e (Affirmation Gesture) has a **hard dependency** on 03a's `attention_trace` (specifically the `pitch_rad` and `yaw_rad` fields). It cannot function without this data. Layer 03a must always be run before 03e.
+
+### Dependency Graph
+```mermaid
+graph LR
+    M["filtered_manifest.json"] --> 03a
+    M --> 03b
+    M --> 03c
+    M --> 03d
+    M --> 03f
+    M --> 03g
+    03a -->|required| 03e
+    03a -.->|optional| 03b
+```
+
 ---
 
 ## Output Integration
 Each layer is designed to output its own `.json` chunk, or it writes into a centralized SQLite/Pandas `result_file` database instance using the `video_id` as the primary key. This is done to ensure the system is completely horizontal—adding a new "Empathy Layer" does not require rewriting the Flinch layer.
+
+---
+
+## 🛡️ Failure & Resumability Policy
+All layers **must** adhere to these conventions when processing batches:
+1. **Skip on failure**: If a layer fails on a single `video_id`, it must log the error and skip to the next video. The failed ID and traceback should be recorded in a `<layer>_errors.json` file.
+2. **Resumability**: If a layer is re-run, it should detect already-completed `video_id` entries and skip them by default. A `--force` flag can override this to reprocess everything.
+3. **Atomic writes**: A layer must never produce a partial result for a `video_id`. Either the full output record is written, or nothing is written (write to a temp file first, then rename).
