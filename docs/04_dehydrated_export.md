@@ -41,3 +41,8 @@ Merge the final state of the layered results database into a highly compressed A
 
 ### 3. Posting to Hugging Face
 If the local `result_file` review looks good, write an automated script leveraging the `huggingface_hub` Python package to initialize the dataset repository, upload the `social_metadata.parquet`, and populate a generated `README.md` Dataset Card outlining the total number of layers utilized to create the signals.
+
+## Verification & Validation Check
+To guarantee the export structure adheres to safety standards and schema requirements:
+- **Singular Video Test**: Load the final `social_metadata.parquet` into a Pandas DataFrame inside a standalone Jupyter notebook or script. Select one random row (a single video) and attempt to cleanly follow the `rehydrate_dataset.py` instructions to rebuild the social context. If any keys are mismatched, it fails.
+- **Batch Test**: Run an automated validation script across the entire merged DataFrame. Assert that there are absolutely zero raw visual bytes (no images/video buffers stored). Validate that the row count matches exactly the number of clips successfully parsed, and perform a null-check analysis. Verify that this Pandas aggregation does not exceed the data limits of our **24GB RAM Mac mini M4 Pro** when reading multi-gigabyte Parquets into memory.

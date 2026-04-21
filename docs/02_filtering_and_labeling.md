@@ -59,7 +59,7 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
 {
   "video_id": "ego4d_clip_10293",
   "source_dataset": "ego4d",
-  "video_path": "/mnt/ssd/raw_videos/ego4d_clip_10293.mp4",
+  "video_path": "/Volumes/Extreme SSD/raw_videos/ego4d_clip_10293.mp4",
   "fps": 30.0,
   "duration_sec": 45.0,
   "identified_tasks": [
@@ -101,3 +101,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
   ]
 }
 ```
+
+## Verification & Validation Check
+To ensure the filtering mechanisms are robust and correct:
+- **Singular Video Test**: Execute the filter module against a single chosen `.mp4` video that is visually verified to have multiple interacting people. Inspect the generated JSON output to confirm the `bystander_detections` bounding boxes accurately surround the actors.
+- **Batch Test**: Run the node over a subset folder (e.g., 50 videos). Aggregate the output to check distribution metrics (e.g., % dropped due to no social presence, % dropped due to idling). Assert that every entry in the `filtered_manifest.json` has `identified_tasks` with non-empty attributes, effectively proving the system scaled accurately without unhandled `None` crashes. Furthermore, utilize the **24GB RAM Mac mini M4 Pro** environment effectively by ensuring the batched VLM calls do not trigger out-of-memory unified memory kills.

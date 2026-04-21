@@ -20,7 +20,7 @@ Crucially, this layer analyzes **emotion transitions and durations** over time (
 Because a single video might contain multiple tasks, this sequence occurs iteratively for *each* task inside the `identified_tasks` array.
 
 ### Step 1: Expectation Generation (Gemma 4)
-Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations.
+Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations. This lightweight local VLM inference is well-suited for the **24GB RAM Mac mini M4 Pro**, allowing concurrent tracking arrays without swapping.
 
 **Structured Prompt Template:**
 ```text
@@ -133,3 +133,8 @@ The layer outputs a structured array mapping the bystander's emotional journey *
   ]
 }
 ```
+
+## Verification & Validation Check
+To ensure the LLM reasoning is chronologically sound and empirically reliable:
+- **Singular Video Test**: Run the emotion layer for a specific video ID. Dump the exact prompt string sent to Gemma 4 and its exact JSON return to the console. Manually review the `classified_direction` logical mapping against the input `transition_pair` to verify the prompt is unbroken.
+- **Batch Test**: Run the step on an entire `filtered_manifest.json` batch. Parse the final output and check the total distribution of `task_aggregate_score` values. If >95% of the values are strictly exactly positive or exactly negative, review the Gemma 4 temperature settings as the model may have collapsed into a predictable output path. Performance profiling should verify that processing scales continuously on the **Mac mini M4 Pro (24GB RAM)**.
