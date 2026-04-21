@@ -24,10 +24,14 @@ Running inference on every frame is prohibitively expensive. Use the following t
 - **Adaptive boost**: If the attention score changes by more than `0.3` between two consecutive samples, temporarily increase to **5 FPS** for the next 2 seconds to capture the transition with finer resolution.
 - **Alignment**: Sampling timestamps should be snapped to the nearest frame boundary using the clip's native `fps` from the manifest to avoid inter-frame interpolation artifacts.
 
-### 3. Gaze and Head-Pose Estimation
-We need to calculate the directional geometry of the subject relative to the camera lens (representing the POV wearer's head/eyes).
-- **Lightweight Approach (Recommended for batch)**: Use a dedicated pose/gaze estimation model (e.g., MediaPipe Face Mesh, PyTorch-based head pose tracking) to calculate pitch, yaw, and roll. Convert the resulting Euler angles into an attention score using the angular deviation from camera-center: `attention = max(0, 1 - (angle_off_center / max_angle))`.
-- **VLM Approach (Recommended for validation/spot-check)**: Use local Vision Language Models (e.g., Ollama running `moondream` or `Qwen2.5-VL`) on sampled frames to perform cognitive state classification, asking specific prompts like *"Is the person in the frame looking directly at the camera? Respond with a confidence score from 0 to 100."*
+### 3. Gaze and Head-Pose Estimation & Target Mapping
+We must determine not only if the bystander is focusing on the POV wearer's face (the camera lens) but also if they are paying attention to the *action* being performed (e.g., the POV actor's hands). 
+- **SOTA 3D Gaze Raycasting (Recommended for batch)**: 
+  1. Use a state-of-the-art 3D gaze estimation model (e.g., **L2CS-Net** or **CrossGaze**) to regress pitch and yaw directly from the bystander's cropped face.
+  2. Project this 3D gaze vector into a 2D "ray" across the video frame.
+  3. Validate the intersection of this ray against two primary targets: the camera center (POV actor's face/eyes) and the POV actor's hands (detected via an egocentric hand detector like MediaPipe Hands or an Ego4D-trained object detector).
+  4. The final `attention_score` is derived from the minimum distance between the projected gaze ray and these target regions. High attention is scored if the bystander is watching *either* the camera lens *or* the task/hands.
+- **VLM Approach (Recommended for validation/spot-check)**: Use local Vision Language Models (e.g., Ollama running `moondream` or `Qwen2.5-VL`) on sampled frames to perform cognitive state classification, asking specific prompts like *"Is the person in the frame looking directly at the camera or at the task being performed? Respond with a confidence score from 0 to 100."*
 
 ### 4. Attention Scoring & Temporal Trace
 For each bystander, compile the per-sample attention values into a **temporal attention trace**—a timeseries of `(timestamp, score)` pairs. From this trace, derive summary statistics:
@@ -49,7 +53,7 @@ In adherence to the Ongoing Layers Paradigm, this layer will *never* modify the 
   "video_id": "ego4d_clip_10293",
   "layer": "03a_attention",
   "processing_meta": {
-    "model_used": "mediapipe_face_mesh",
+    "model_used": "l2cs_net_3d_gaze",
     "sampling_fps_effective": 2.0
   },
   "per_person": [
@@ -60,7 +64,7 @@ In adherence to the Ongoing Layers Paradigm, this layer will *never* modify the 
       "attention_variance": 0.04,
       "sustained_engagement_sec": 6.1,
       "is_engaged": true,
-      "gaze_target_classification": "POV_Actor",
+      "gaze_target_classification": "POV_Actor_Hands",
       "attention_trace": [
         {"t": 0.0, "score": 0.72},
         {"t": 0.5, "score": 0.81},
