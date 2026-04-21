@@ -13,6 +13,22 @@ All resulting export files **must be completely dehydrated**. This means:
 - No inclusion of isolated audio tracks.
 - Focus strictly on the extracted parameters: kinematics, layer decisions, VLM contexts, timestamps, and confidence scores.
 
+---
+
+## Layer-Result Aggregation
+Before export, the individual layer output JSONs must be merged into a single master table. Each Social Feature Layer (03a, 03b, etc.) produces its own result file keyed by `video_id`. The aggregation step is responsible for joining these into a unified record per video.
+
+### Aggregation Logic
+1. **Scan** the results directory for all `03*_result.json` files.
+2. **Outer-join** on `video_id`: Every video that appears in *any* layer's output gets a row. If a layer did not process a given video (or failed), its columns are filled with `null`/`NaN`.
+3. **Flatten nested structures**: Per-person arrays (from 03a, 03b) should be flattened into the aggregate summary fields for the parquet columns. The full per-person detail can be preserved in a JSON-encoded string column for research use.
+4. **Attach manifest metadata**: Join in the `task_label`, `source_dataset`, `duration_sec`, and `fps` from `filtered_manifest.json` so the exported dataset is self-describing.
+
+### Expected Intermediate Output
+A `merged_social_features.json` (or SQLite DB) containing one record per `video_id` with all layer features as columns, ready for conversion to Parquet.
+
+---
+
 ## Required Package Structure for Export
 
 ### 1. Rehydration Instructions (`rehydrate_dataset.py`)

@@ -21,5 +21,25 @@ As the repository is updated, we will continuously brainstorm and add independen
 
 ---
 
+## 📚 Active Layers Registry
+As layers are implemented, they should be tracked here. Each layer follows the naming convention `03x_<layer_name>` where `x` is a lowercase letter assigned in order of creation.
+
+| Layer ID | Name | Document | Output File | Status |
+|---|---|---|---|---|
+| 03a | Attention / Engagement | `03a_attention_layer.md` | `03a_attention_result.json` | Planned |
+| 03b | Reasonable Emotion | `03b_reasonable_emotion_layer.md` | `03b_reasonable_emotion_result.json` | Planned |
+
+---
+
+## 🔗 Cross-Layer Data Consumption
+Layers are designed to be independent, but some layers *may* consume the output of a sibling layer to enrich their own analysis (e.g., 03b could use the attention score from 03a to weight its emotion analysis—if the bystander isn't even looking, their facial expression may be irrelevant).
+
+**Rules for cross-layer consumption:**
+1. A layer **must never assume** another layer has run. Cross-layer data is always optional.
+2. If a consumed layer's output is missing for a given `video_id`, the consuming layer must gracefully degrade (use a default value or skip the enrichment).
+3. Cross-layer dependencies must be documented in the consuming layer's Input Requirements section.
+
+---
+
 ## Output Integration
 Each layer is designed to output its own `.json` chunk, or it writes into a centralized SQLite/Pandas `result_file` database instance using the `video_id` as the primary key. This is done to ensure the system is completely horizontal—adding a new "Empathy Layer" does not require rewriting the Flinch layer.
