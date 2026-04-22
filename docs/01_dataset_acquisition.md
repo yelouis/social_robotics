@@ -3,15 +3,19 @@
 ## Objective
 Download and stage large-scale first-person POV (egocentric) videos—such as Ego4d or other relevant datasets—onto the local system for ingestion into the pipeline.
 
+## Core Supported Datasets
+The system is built to parse First-Person POV interactions. While the pipeline is designed to be relatively dataset-agnostic, the following are the primary supported sources:
+
+- **Ego4D**: The primary target standard representing unstructured, daily interaction.
+- **EPIC-KITCHENS-100**: Academic download via University of Bristol.
+- **Charades-Ego**: Open download from Allen AI.
+- **EgoProceL**: Open GitHub repository + links to source datasets.
+
 ## ⚠️ Critical Action for Hardware Management
 Video datasets are inherently massive (often spanning terabytes). 
 **DO NOT** run these data pipelines directly on strict internal SSD setups if space/wear are concerns. 
 - Ensure your `OUTPUT_DIR` maps out to the external **2TB SSD called "Extreme SSD"**. This is explicitly designated to handle the large size of the Ego4D and other video datasets.
 - **Hardware Profile**: As we are running a **Mac mini M4 Pro with 24GB RAM**, be strictly mindful of memory ceilings when unpacking or indexing these massive datasets in Python. Rely on streaming processors or chunked extraction.
-
-## Target Video Paradigm
-The system is built to parse First-Person POV interactions. While the pipeline is designed to be relatively dataset-agnostic, the target standard is **Ego4D**. 
-These videos represent unstructured, daily interaction. 
 
 ## Recommended Implementation Steps for Agents
 

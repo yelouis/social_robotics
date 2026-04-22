@@ -49,6 +49,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | Tool | Purpose | Location |
 |---|---|---|
 | **aws-cli** | Downloading Ego4D datasets from S3 buckets | System Install |
+| **git** | Cloning EgoProceL and other GitHub repositories | System Install |
 | **wget / curl** | General dataset ingestion and script downloads | System Install |
 | **ffmpeg** | Audio extraction and video frame manipulation | System Install |
 

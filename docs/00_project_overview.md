@@ -6,9 +6,9 @@
 ---
 
 ## 🎯 Global Project Goal
-The objective of this pipeline is to extract **social-related features and metadata from any video**—with a specific focus on first-person (POV/egocentric) videos, such as those found in the Ego4D dataset. 
+The objective of this pipeline is to extract **social-related features and metadata from any video**—with a specific focus on first-person (POV/egocentric) videos, such as those found in **Ego4D, EPIC-KITCHENS, Charades-Ego, and EgoProceL**. 
 
-Rather than relying on closed-circuit rules or fixed pairings of videos (like in outdated versions of this repository), the system behaves as an extensible data processing engine. It ingests raw videos, runs multiple parallel validation and extraction filters over them, and outputs **dehydrated social metadata result files**. In the future, this data will be aggregated and pushed to platforms like Hugging Face.
+Rather than relying on closed-circuit rules or fixed pairings of videos, the system behaves as an extensible data processing engine. It ingests raw videos from multiple repositories, runs multiple parallel validation and extraction filters over them, and outputs **dehydrated social metadata result files**. In the future, this data will be aggregated and pushed to platforms like Hugging Face.
 
 ### Output format
 The final result of the pipeline is a dehydrated dataset. Because of license constraints of various video dataset platforms, we NEVER export raw video pixels. The final exported files strictly contain:
@@ -22,7 +22,7 @@ The final result of the pipeline is a dehydrated dataset. Because of license con
 The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by design.
 
 1. **Dataset Acquisition** (`01_dataset_acquisition.md`)
-   - Initial ingestion point to pull raw video sources (e.g., from Ego4d or other public repositories) to the local disk.
+   - Initial ingestion point to pull raw video sources (e.g., from Ego4d, EPIC-KITCHENS, Charades-Ego, or EgoProceL) to the local disk.
 
 2. **Filtering & Task Labeling** (`02_filtering_and_labeling.md`)
    - *Social Presence Filter*: We strictly filter the dataset for videos containing *more than one person* (excluding the POV cameraperson). 
