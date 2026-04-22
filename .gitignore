@@ -24,3 +24,6 @@ charades_ego_data/
 .Spotlight-V100
 .Trashes
 debug_smoke_test.jpg
+
+# Environment
+.env

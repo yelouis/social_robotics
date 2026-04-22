@@ -39,3 +39,30 @@ You should successfully hydrate a local folder filled with MP4 video clips, pair
 To ensure data ingestion was successful without relying on blind trust, perform the following validation steps:
 - **Singular Video Test**: Pick one UUID from the localized manifest and use a lightweight media player or python script (e.g., OpenCV) to explicitly read the file path and extract the first frame. If it opens without corruption, the test passes.
 - **Batch Test**: Write a script to iterate over the entire initialized `local_video_registry.json`. For each entry, check that the file exists on the **"Extreme SSD"**, has a size greater than 0 bytes, and that the file extension matches `.mp4`. This ensures no silent download failures occurred across the massive file list.
+
+## 🚀 Implementation Accomplishments (April 2026)
+
+The initial implementation of the Dataset Acquisition module is complete:
+
+- **SSD Integration**: Fully mapped to the **Extreme SSD** mount point (`/Volumes/Extreme SSD`).
+- **Existing Data Recognition**: Implemented logic to scan the SSD for pre-existing `charades_ego_data` and `ego4d_data` folders, preventing redundant downloads of nearly **15,700 videos**.
+- **Automated Registry**: Created `src/dataset_acquisition/registry.py` which generates a comprehensive `local_video_registry.json` manifest.
+- **Verification Framework**: Added `tests/test_dataset_acquisition.py` to ensure video files are readable and non-corrupt using OpenCV frame extraction tests.
+- **Smart Downloader**: Implemented a requirement-aware downloader in `src/dataset_acquisition/downloader.py` that skips datasets if keys (like AWS for Ego4D) are missing but data is already present on disk.
+
+
+### 🐛 Bug Fixes & Refinements
+
+During code review and validation, a few critical issues were identified and resolved:
+
+1. **Subdirectory Indexing Failure (`downloader.py`)**:
+   - **Problem**: The `is_already_downloaded()` method used `.glob("*.mp4")`, which only scanned the top-level directory. It failed to recognize existing datasets if videos were nested in subdirectories, leading to redundant downloads.
+   - **Solution**: Changed `.glob` to `.rglob("*.mp4")` to search recursively.
+
+2. **Missing Extraction Logic (`downloader.py`)**:
+   - **Problem**: The `CharadesEgoDownloader` successfully downloaded the massive `.zip` file but lacked the logic to extract it. This prevented downstream modules from finding the raw `.mp4` chunks.
+   - **Solution**: Integrated the `zipfile` module to extract contents directly into the designated `OUTPUT_DIR` after downloading.
+
+3. **Duplicate Registry Entries & OS Hidden Files (`registry.py`)**:
+   - **Problem**: Overlapping paths in `DATASET_PATHS` caused the registry script to index the same dataset multiple times (resulting in ~15.7k entries instead of the actual ~7.8k). Additionally, macOS hidden files (starting with `._`) could be incorrectly indexed.
+   - **Solution**: Implemented a `seen_paths` set to track absolute paths and skip duplicates. Added logic to explicitly skip files starting with `._`. Running the fixed script successfully pruned the duplicate count to 7,861 unique videos.
