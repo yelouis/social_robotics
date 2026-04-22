@@ -34,7 +34,7 @@ class DatasetDownloader(ABC):
         """Execute the download."""
         pass
 
-    def run(self):
+    def run(self, **kwargs):
         print(f"\n--- Processing Dataset: {self.name} ---")
         
         if self.is_already_downloaded():
@@ -46,7 +46,7 @@ class DatasetDownloader(ABC):
             return
         
         self.output_path.mkdir(parents=True, exist_ok=True)
-        self.download()
+        self.download(**kwargs)
 
 class Ego4DDownloader(DatasetDownloader):
     def __init__(self):
@@ -65,7 +65,7 @@ class Ego4DDownloader(DatasetDownloader):
             
         return True
 
-    def download(self):
+    def download(self, **kwargs):
         print("Ego4D download logic would go here.")
         # Implementation details...
         pass
@@ -77,7 +77,7 @@ class CharadesEgoDownloader(DatasetDownloader):
     def check_requirements(self) -> bool:
         return True
 
-    def download(self):
+    def download(self, **kwargs):
         url = config.CHARADES_EGO_URL
         zip_path = self.output_path / "Charades_Ego_v1.zip"
         
@@ -110,11 +110,86 @@ class CharadesEgoDownloader(DatasetDownloader):
         except Exception as e:
             print(f"Error downloading or extracting Charades-Ego: {e}")
 
+class EpicKitchensDownloader(DatasetDownloader):
+    def __init__(self):
+        super().__init__("epic_kitchens")
+        self.script_repo = "https://github.com/epic-kitchens/epic-kitchens-download-scripts.git"
+
+    def check_requirements(self) -> bool:
+        return True
+
+    def download(self, specific_videos=None, **kwargs):
+        repo_dir = self.output_path.parent / ".epic-scripts-repo"
+        if not repo_dir.exists():
+            print("Cloning epic-kitchens-download-scripts...")
+            subprocess.run(["git", "clone", self.script_repo, str(repo_dir)], check=True)
+            
+        print("Running epic_downloader.py...")
+        # The script downloads to <output_path>/EPIC-KITCHENS.
+        target_dir = self.output_path.parent
+        cmd = [
+            sys.executable, str(repo_dir / "epic_downloader.py"),
+            "--output-path", str(target_dir),
+            "--videos"
+        ]
+        
+        if specific_videos:
+            cmd.extend(["--specific-videos", ",".join(specific_videos)])
+            
+        print(f"Executing: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True, cwd=str(repo_dir))
+        except subprocess.CalledProcessError as e:
+            print(f"Error running epic_downloader.py: {e}")
+            return
+            
+        # Move files from EPIC-KITCHENS to epic_kitchens
+        downloaded_epic = target_dir / "EPIC-KITCHENS"
+        if downloaded_epic.exists():
+            import shutil
+            shutil.copytree(downloaded_epic, self.output_path, dirs_exist_ok=True)
+            shutil.rmtree(downloaded_epic)
+            print(f"Moved videos to {self.output_path}")
+
+class EgoProceLDownloader(DatasetDownloader):
+    def __init__(self):
+        super().__init__("egoprocel")
+
+    def check_requirements(self) -> bool:
+        try:
+            subprocess.run(["git", "--version"], check=True, capture_output=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Git not found. Please install git to clone EgoProceL.")
+            return False
+        return True
+
+    def download(self, **kwargs):
+        print(f"Cloning EgoProceL repository from {config.EGOPROCEL_REPO}...")
+        repo_path = self.output_path / "EgoProceL-Repo"
+        
+        if repo_path.exists():
+            print("EgoProceL repository already cloned.")
+        else:
+            try:
+                subprocess.run(["git", "clone", config.EGOPROCEL_REPO, str(repo_path)], check=True)
+                print("EgoProceL cloned successfully.")
+            except subprocess.CalledProcessError as e:
+                print(f"Error cloning EgoProceL: {e}")
+                return
+                
+        print("\n" + "="*60)
+        print("EgoProceL is a meta-dataset containing links and annotations.")
+        print("To download the actual video files (CMU-MMAC, EGTEA, etc.),")
+        print(f"please navigate to {repo_path} and follow the instructions in its README.md.")
+        print("="*60 + "\n")
+
 def download_all():
     config.ensure_dirs()
     downloaders = [
         Ego4DDownloader(),
         CharadesEgoDownloader(),
+        EpicKitchensDownloader(),
+        EgoProceLDownloader(),
     ]
     
     for downloader in downloaders:

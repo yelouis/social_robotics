@@ -16,11 +16,16 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 
+# EPIC-KITCHENS-100 configuration
+EPIC_KITCHENS_USER = os.getenv("EPIC_KITCHENS_USER")
+EPIC_KITCHENS_PASSWORD = os.getenv("EPIC_KITCHENS_PASSWORD")
+
 # Charades-Ego
 CHARADES_EGO_URL = os.getenv("CHARADES_EGO_URL", "https://prior-datasets.s3.us-east-2.amazonaws.com/charades/Charades_Ego_v1.zip")
 
 # EgoProceL
-EGOPROCEL_REPO = os.getenv("EGOPROCEL_REPO", "https://github.com/Tushar-N/EgoProceL")
+# Default updated to working repository
+EGOPROCEL_REPO = os.getenv("EGOPROCEL_REPO", "https://github.com/Sid2697/EgoProceL-egocentric-procedure-learning")
 
 # Known dataset locations on Extreme SSD to avoid redownloading
 DATASET_PATHS = {

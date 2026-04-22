@@ -16,6 +16,7 @@ vlm_env/
 *.tar
 *.zip
 charades_ego_data/
+test_raw_videos/
 
 # OS
 .DS_Store

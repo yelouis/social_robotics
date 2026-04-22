@@ -66,3 +66,18 @@ During code review and validation, a few critical issues were identified and res
 3. **Duplicate Registry Entries & OS Hidden Files (`registry.py`)**:
    - **Problem**: Overlapping paths in `DATASET_PATHS` caused the registry script to index the same dataset multiple times (resulting in ~15.7k entries instead of the actual ~7.8k). Additionally, macOS hidden files (starting with `._`) could be incorrectly indexed.
    - **Solution**: Implemented a `seen_paths` set to track absolute paths and skip duplicates. Added logic to explicitly skip files starting with `._`. Running the fixed script successfully pruned the duplicate count to 7,861 unique videos.
+
+## 🧪 Test Batch Results (April 2026)
+
+To verify the pipeline without downloading terabytes of data, a test batch was executed using a simulated acquisition process:
+
+- **Test Scope**: 5 videos from Charades-Ego and available samples from Ego4D.
+- **Process**:
+    1. Isolated 5 non-empty videos from the SSD.
+    2. Copied them to a dedicated `test_raw_videos/` directory to simulate a fresh download.
+    3. Ran the registry script to generate `test_video_registry.json`.
+    4. Performed automated verification using `pytest`.
+- **Results**:
+    - **Registry**: Successfully indexed the 5 test videos while correctly filtering out macOS metadata files (`._`).
+    - **Validation**: All 5 videos passed the existence, size, and frame extraction tests.
+- **Command**: `REGISTRY_FILE=test_video_registry.json pytest tests/test_dataset_acquisition.py`
