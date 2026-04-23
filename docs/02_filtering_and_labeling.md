@@ -9,7 +9,12 @@ To ensure computational efficiency and relevance, not all downloaded videos make
 Since our project relies on investigating social-affective interactions, a video of a person entirely alone is useless. 
 
 **Criteria**: 
-The video **must** contain more than one person. Since this is an egocentric/POV video, the person whose perspective is being shown (the camera wearer) *does not count* towards this total. There must be at least one other visible human actor present in the frame.
+The video **must** contain more than one person. Since this is an egocentric/POV video, the person whose perspective is being shown (the camera wearer) *does not count* towards this total. There must be at least one other visible human actor present in the frame. 
+
+To achieve this, the system uses a **Refined Anti-Wearer Heuristic**:
+- **Limb Filtering**: Ignore detections touching the bottom edge of the frame without showing a head/torso (likely wearer's hands/feet).
+- **Ghost Torso Exclusion**: Ignore full-height detections starting at the absolute top (`y1=0`), which are common false positives from the wearer's torso.
+- **Temporal Consistency**: A video is only "KEPT" if social presence is detected in at least **2 sampled frames** to filter out momentary YOLO glitches.
 
 > [!IMPORTANT]
 > **Integration Note**: To optimize storage on the "Extreme SSD", this filter is integrated directly into the **Dataset Acquisition** module via a **batched UID strategy**. Videos are downloaded in small groups (e.g., 50), filtered immediately, and non-social videos are purged. A persistent `processed_uids.json` tracks completion so that purged videos are never re-downloaded.
@@ -162,3 +167,7 @@ Following a comprehensive audit, the following critical refinements were impleme
 6. **Infrastructure & Robustness (Resolved)**:
    - **Problem**: Fragile temp directories and stale documentation.
    - **Solution**: Refactored to use `tempfile.TemporaryDirectory` for safe frame extraction. Updated all docstrings to reflect the upgrade to Qwen2.5-VL. Fixed `run_verification.py` to ensure manifests are written to the correct SSD output paths.
+
+7. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
+   - **Problem**: YOLOv8 incorrectly identified the camera wearer's limbs and background artifacts as bystanders.
+   - **Solution**: Implemented a multi-stage **Anti-Wearer Heuristic** including top/bottom edge exclusion, a 0.50 confidence floor, and a 2-frame temporal consistency requirement. This restored the expected purge rate and secured the SSD from storage overflow.

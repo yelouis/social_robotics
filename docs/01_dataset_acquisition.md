@@ -118,5 +118,9 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
    - **Solution**: Implemented **UID-based Batching** and **Processed UID Tracking**. The downloader now requests Ego4D videos in batches of 50. After each batch, the filter runs immediately and purges "bad" videos. A persistent `processed_uids.json` file ensures that discarded UIDs are never re-requested, effectively "finishing" the dataset in chunks without ever exceeding SSD capacity.
 
 6. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
-   - **Problem**: YOLOv8 incorrectly identified the camera wearer's own limbs (arms/legs) as "persons" in egocentric footage. This caused a 0% purge rate, as every video appeared to have "social presence" even if the wearer was alone.
-   - **Solution**: Implemented an **Anti-Wearer Heuristic** in `SocialPresenceDetector`. Detections that touch the bottom edge of the frame without showing a head/torso (indicating a foreground limb) are now explicitly ignored. This restored the expected purge rate and saves significant SSD space.
+   - **Problem**: YOLOv8 incorrectly identified the camera wearer's own limbs (arms/legs) and "ghost torsos" (full-frame background artifacts) as bystanders.
+   - **Solution**: Implemented a **Refined Anti-Wearer Heuristic**:
+     - **Limb Filtering**: Ignored boxes touching the bottom edge without a visible head/shoulders.
+     - **Ghost Exclusion**: Ignored full-height boxes starting exactly at the top edge (`y1=0`), a common egocentric false positive.
+     - **Confidence Boost**: Increased YOLO confidence threshold from 0.25 to **0.50**.
+     - **Temporal Consistency**: Required at least **2 frames** of social presence per video to confirm (filtering out 1-frame glitches).
