@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import json
+import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 import requests
@@ -67,6 +68,20 @@ class DatasetDownloader(ABC):
         print(f"Streaming Filter: Social presence confirmed. KEEPING {video_path.name}")
         return True
 
+    def check_disk_space(self, min_gb: float = 10.0) -> bool:
+        """Check if there is enough space left on the output disk."""
+        try:
+            usage = shutil.disk_usage(self.output_path.anchor if self.output_path.exists() else self.output_path.parent.anchor)
+            free_gb = usage.free / (1024**3)
+            if free_gb < min_gb:
+                print(f"\n[CRITICAL] Low Disk Space: {free_gb:.2f} GB remaining on {self.output_path.anchor}")
+                print(f"Required: at least {min_gb} GB. Stopping acquisition to prevent corruption.")
+                return False
+            return True
+        except Exception as e:
+            print(f"Warning: Could not check disk space: {e}")
+            return True # Proceed with caution if check fails
+
     def is_already_downloaded(self) -> bool:
         """Check if any of the possible paths contain mp4 files."""
         for path in self.possible_paths:
@@ -85,19 +100,23 @@ class DatasetDownloader(ABC):
         """Execute the download."""
         pass
 
-    def run(self, force: bool = False, **kwargs):
+    def run(self, force: bool = False, **kwargs) -> bool:
         print(f"\n--- Processing Dataset: {self.name} ---")
         
         if not force and self.is_already_downloaded():
             print(f"Skipping download for {self.name}: Data already exists on disk.")
-            return
+            return True
 
         if not self.check_requirements():
             print(f"Skipping {self.name}: Requirements not met.")
-            return
+            return False
+        
+        if not self.check_disk_space():
+            return False
         
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.download(**kwargs)
+        return True
 
 class Ego4DDownloader(DatasetDownloader):
     def __init__(self):
