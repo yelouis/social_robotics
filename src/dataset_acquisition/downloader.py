@@ -232,11 +232,16 @@ class Ego4DDownloader(DatasetDownloader):
                 print("Running immediate filtering for this batch...")
                 # We only want to filter the ones we just tried to download
                 # But since the CLI might have skipped some, we check what's actually there
-                videos = list(self.output_path.rglob("*.mp4"))
-                
-                # If we passed specific UIDs, only filter those
-                if video_uids:
-                    videos = [v for v in videos if any(uid in v.name for uid in video_uids)]
+                processed = self.get_processed_uids()
+                videos = []
+                for v in self.output_path.rglob("*.mp4"):
+                    # Check if filename (without extension) is in processed list
+                    # or if it's an Apple double file
+                    if v.name.startswith("._"):
+                        continue
+                    if v.stem in processed:
+                        continue
+                    videos.append(v)
 
                 for video in tqdm(videos, desc="Filtering Batch"):
                     self.filter_and_purge(video)
