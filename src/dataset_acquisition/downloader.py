@@ -57,18 +57,89 @@ class Ego4DDownloader(DatasetDownloader):
             print("Missing AWS credentials for Ego4D. (Skipping download but will still index if data exists)")
             return False
         
+        # Check for AWS CLI
+        aws_found = False
         try:
             subprocess.run(["aws", "--version"], check=True, capture_output=True)
+            aws_found = True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print("AWS CLI not found. Please install it.")
+            pass
+            
+        # Check for ego4d python package
+        ego4d_found = False
+        try:
+            import ego4d
+            ego4d_found = True
+        except ImportError:
+            # Check in vlm_env
+            vlm_python = config.BASE_DIR / "vlm_env" / "bin" / "python"
+            if vlm_python.exists():
+                try:
+                    subprocess.run([str(vlm_python), "-c", "import ego4d"], check=True, capture_output=True)
+                    ego4d_found = True
+                except subprocess.CalledProcessError:
+                    pass
+
+        if not aws_found and not ego4d_found:
+            print("Neither AWS CLI nor 'ego4d' python package found. Please install one of them.")
             return False
             
         return True
 
-    def download(self, **kwargs):
-        print("Ego4D download logic would go here.")
-        # Implementation details...
-        pass
+    def download(self, video_uids=None, **kwargs):
+        print(f"Starting Ego4D download to {self.output_path}...")
+        
+        # Ensure we have a place for temporary AWS credentials if they aren't in ~/.aws
+        aws_dir = Path.home() / ".aws"
+        aws_creds = aws_dir / "credentials"
+        
+        # If no credentials file exists, we'll create a temporary one for this session
+        temp_aws_dir = config.BASE_DIR / ".aws_temp"
+        temp_aws_creds = temp_aws_dir / "credentials"
+        
+        env = os.environ.copy()
+        
+        if not aws_creds.exists():
+            print("Creating temporary AWS credentials for Ego4D CLI...")
+            temp_aws_dir.mkdir(exist_ok=True)
+            with open(temp_aws_creds, "w") as f:
+                f.write(f"[default]\n")
+                f.write(f"aws_access_key_id = {config.AWS_ACCESS_KEY_ID}\n")
+                f.write(f"aws_secret_access_key = {config.AWS_SECRET_ACCESS_KEY}\n")
+            env["AWS_SHARED_CREDENTIALS_FILE"] = str(temp_aws_creds)
+            if config.AWS_DEFAULT_REGION:
+                env["AWS_DEFAULT_REGION"] = config.AWS_DEFAULT_REGION
+
+        # Use the ego4d module via the same python executable if possible
+        # or fall back to 'ego4d' command if available in path
+        python_exe = sys.executable
+        # If we're in a venv, sys.executable should be correct. 
+        # But for this specific task, we know vlm_env has it.
+        vlm_python = config.BASE_DIR / "vlm_env" / "bin" / "python"
+        if vlm_python.exists():
+            python_exe = str(vlm_python)
+
+        cmd = [
+            python_exe, "-m", "ego4d.cli.cli",
+            "-o", str(self.output_path),
+            "--datasets", "full_scale",
+            "-y"
+        ]
+        
+        if video_uids:
+            cmd.extend(["--video_uids"] + video_uids)
+        
+        print(f"Executing Ego4D CLI: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, env=env, check=True)
+            print("Ego4D download completed successfully.")
+        except subprocess.CalledProcessError as e:
+            print(f"Error during Ego4D download: {e}")
+        finally:
+            # Clean up temp credentials if created
+            if temp_aws_creds.exists():
+                import shutil
+                shutil.rmtree(temp_aws_dir)
 
 class CharadesEgoDownloader(DatasetDownloader):
     def __init__(self):
