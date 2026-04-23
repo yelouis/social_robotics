@@ -28,4 +28,5 @@ debug_smoke_test.jpg
 
 # Environment
 .env
+.gemini/
 scratch/
