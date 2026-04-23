@@ -59,10 +59,10 @@ class DatasetDownloader(ABC):
         """Execute the download."""
         pass
 
-    def run(self, **kwargs):
+    def run(self, force: bool = False, **kwargs):
         print(f"\n--- Processing Dataset: {self.name} ---")
         
-        if self.is_already_downloaded():
+        if not force and self.is_already_downloaded():
             print(f"Skipping download for {self.name}: Data already exists on disk.")
             return
 
@@ -161,7 +161,8 @@ class Ego4DDownloader(DatasetDownloader):
             
             if self.filter_on_the_fly:
                 print("Running post-download filtering for Ego4D...")
-                for video in list(self.output_path.rglob("*.mp4")):
+                videos = list(self.output_path.rglob("*.mp4"))
+                for video in tqdm(videos, desc="Filtering Ego4D"):
                     self.filter_and_purge(video)
                     
         except subprocess.CalledProcessError as e:
@@ -263,7 +264,8 @@ class EpicKitchensDownloader(DatasetDownloader):
         if downloaded_epic.exists():
             import shutil
             print("Running post-download filtering for EPIC-KITCHENS...")
-            for video in list(downloaded_epic.rglob("*.mp4")):
+            videos = list(downloaded_epic.rglob("*.mp4"))
+            for video in tqdm(videos, desc="Filtering EPIC"):
                 if self.filter_and_purge(video):
                     # Move only if kept
                     rel_path = video.relative_to(downloaded_epic)
@@ -306,7 +308,7 @@ class EgoProceLDownloader(DatasetDownloader):
         print(f"please navigate to {repo_path} and follow the instructions in its README.md.")
         print("="*60 + "\n")
 
-def download_all():
+def download_all(force: bool = False):
     config.ensure_dirs()
     # Priority Order: Ego4D > Charades-Ego > EPIC-KITCHENS-100 > EgoProceL
     downloaders = [
@@ -317,7 +319,12 @@ def download_all():
     ]
     
     for downloader in downloaders:
-        downloader.run()
+        downloader.run(force=force)
 
 if __name__ == "__main__":
-    download_all()
+    import argparse
+    parser = argparse.ArgumentParser(description="Download datasets for social robotics.")
+    parser.add_argument("--force", action="store_true", help="Force download even if data already exists.")
+    args = parser.parse_args()
+    
+    download_all(force=args.force)
