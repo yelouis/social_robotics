@@ -12,7 +12,7 @@ Since our project relies on investigating social-affective interactions, a video
 The video **must** contain more than one person. Since this is an egocentric/POV video, the person whose perspective is being shown (the camera wearer) *does not count* towards this total. There must be at least one other visible human actor present in the frame.
 
 > [!IMPORTANT]
-> **Integration Note**: To optimize storage on the "Extreme SSD", this filter is integrated directly into the **Dataset Acquisition** module. Videos are filtered immediately after ingestion, and non-social videos are deleted before they can consume permanent disk space.
+> **Integration Note**: To optimize storage on the "Extreme SSD", this filter is integrated directly into the **Dataset Acquisition** module via a **batched UID strategy**. Videos are downloaded in small groups (e.g., 50), filtered immediately, and non-social videos are purged. A persistent `processed_uids.json` tracks completion so that purged videos are never re-downloaded.
 
 **Task Requirements**:
 - Evaluate the raw videos from the initial manifest.

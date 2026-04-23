@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 import requests
@@ -18,6 +19,31 @@ class DatasetDownloader(ABC):
         self.possible_paths = config.DATASET_PATHS.get(name, [self.output_path])
         self.filter_on_the_fly = filter_on_the_fly
         self.filterer = StreamingFilter() if filter_on_the_fly else None
+        self.processed_uids_path = self.output_path / "processed_uids.json"
+
+    def get_processed_uids(self) -> set:
+        if not self.processed_uids_path.exists():
+            return set()
+        try:
+            with open(self.processed_uids_path, "r") as f:
+                return set(json.load(f))
+        except Exception as e:
+            print(f"Error loading processed UIDs for {self.name}: {e}")
+            return set()
+
+    def mark_as_processed(self, uids: list):
+        current = self.get_processed_uids()
+        current.update(uids)
+        try:
+            self.output_path.mkdir(parents=True, exist_ok=True)
+            with open(self.processed_uids_path, "w") as f:
+                json.dump(list(current), f)
+        except Exception as e:
+            print(f"Error saving processed UIDs for {self.name}: {e}")
+
+    def get_all_uids(self) -> list:
+        """Abstract method to retrieve all UIDs for this dataset."""
+        return []
 
     def filter_and_purge(self, video_path: Path):
         """
@@ -76,6 +102,30 @@ class DatasetDownloader(ABC):
 class Ego4DDownloader(DatasetDownloader):
     def __init__(self):
         super().__init__("ego4d")
+
+    def get_all_uids(self) -> list:
+        """Retrieve all UIDs from the Ego4D metadata."""
+        metadata_path = self.output_path / "ego4d.json"
+        # If not there, check one level up (common in Ego4D CLI)
+        if not metadata_path.exists():
+            metadata_path = self.output_path.parent / "ego4d.json"
+            
+        if not metadata_path.exists():
+            print(f"Ego4D metadata not found at {metadata_path}. Cannot retrieve all UIDs.")
+            return []
+            
+        print(f"Loading Ego4D metadata from {metadata_path}...")
+        try:
+            with open(metadata_path, "r") as f:
+                data = json.load(f)
+                # Ego4D metadata structure usually has a 'videos' list
+                if isinstance(data, dict) and "videos" in data:
+                    return [v["video_uid"] for v in data["videos"]]
+                elif isinstance(data, list):
+                    return [v["video_uid"] for v in data if "video_uid" in v]
+        except Exception as e:
+            print(f"Error parsing Ego4D metadata: {e}")
+        return []
 
     def check_requirements(self) -> bool:
         if not config.AWS_ACCESS_KEY_ID or not config.AWS_SECRET_ACCESS_KEY:
@@ -157,13 +207,24 @@ class Ego4DDownloader(DatasetDownloader):
         print(f"Executing Ego4D CLI: {' '.join(cmd)}")
         try:
             subprocess.run(cmd, env=env, check=True)
-            print("Ego4D download completed successfully.")
+            print("Ego4D download batch completed.")
             
             if self.filter_on_the_fly:
-                print("Running post-download filtering for Ego4D...")
+                print("Running immediate filtering for this batch...")
+                # We only want to filter the ones we just tried to download
+                # But since the CLI might have skipped some, we check what's actually there
                 videos = list(self.output_path.rglob("*.mp4"))
-                for video in tqdm(videos, desc="Filtering Ego4D"):
+                
+                # If we passed specific UIDs, only filter those
+                if video_uids:
+                    videos = [v for v in videos if any(uid in v.name for uid in video_uids)]
+
+                for video in tqdm(videos, desc="Filtering Batch"):
                     self.filter_and_purge(video)
+                
+                # Mark as processed regardless of whether they were kept or purged
+                if video_uids:
+                    self.mark_as_processed(video_uids)
                     
         except subprocess.CalledProcessError as e:
             print(f"Error during Ego4D download: {e}")
@@ -176,6 +237,22 @@ class Ego4DDownloader(DatasetDownloader):
 class CharadesEgoDownloader(DatasetDownloader):
     def __init__(self):
         super().__init__("charades_ego")
+
+    def get_all_uids(self) -> list:
+        """For Charades, the UIDs are the video filenames inside the ZIP."""
+        # This is a bit chicken-and-egg since we need the ZIP to see UIDs.
+        # However, we can often get them from a manifest if we had one.
+        # For now, we'll return an empty list until the ZIP is downloaded.
+        zip_path = self.output_path / "Charades_Ego_v1.zip"
+        if not zip_path.exists():
+            return []
+        
+        import zipfile
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                return [Path(m).stem for m in zip_ref.namelist() if m.endswith(".mp4")]
+        except Exception:
+            return []
 
     def check_requirements(self) -> bool:
         return True
@@ -206,15 +283,22 @@ class CharadesEgoDownloader(DatasetDownloader):
             
             print("Extracting Charades-Ego...")
             import zipfile
+            processed = self.get_processed_uids()
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 members = zip_ref.namelist()
                 for member in tqdm(members, desc="Extracting & Filtering"):
                     if member.endswith(".mp4"):
+                        uid = Path(member).stem
+                        if uid in processed:
+                            continue
+
                         # Extract individual file
                         zip_ref.extract(member, self.output_path)
                         extracted_path = self.output_path / member
                         # Filter immediately
                         self.filter_and_purge(extracted_path)
+                        # Mark as processed
+                        self.mark_as_processed([uid])
                     else:
                         zip_ref.extract(member, self.output_path)
             
@@ -230,6 +314,35 @@ class EpicKitchensDownloader(DatasetDownloader):
     def __init__(self):
         super().__init__("epic_kitchens")
         self.script_repo = "https://github.com/epic-kitchens/epic-kitchens-download-scripts.git"
+
+    def get_all_uids(self) -> list:
+        repo_dir = self.output_path.parent / ".epic-scripts-repo"
+        csv_path = repo_dir / "data" / "epic_100_splits.csv"
+        
+        if not csv_path.exists():
+            return []
+            
+        try:
+            import pandas as pd
+            df = pd.read_csv(csv_path)
+            # EPIC-KITCHENS video_id is unique
+            if "video_id" in df.columns:
+                return df["video_id"].unique().tolist()
+        except Exception:
+            # Fallback to manual parsing if pandas is missing
+            try:
+                uids = set()
+                with open(csv_path, "r") as f:
+                    lines = f.readlines()
+                    header = lines[0].strip().split(",")
+                    if "video_id" in header:
+                        idx = header.index("video_id")
+                        for line in lines[1:]:
+                            uids.add(line.strip().split(",")[idx])
+                return list(uids)
+            except Exception:
+                pass
+        return []
 
     def check_requirements(self) -> bool:
         return True
@@ -266,12 +379,16 @@ class EpicKitchensDownloader(DatasetDownloader):
             print("Running post-download filtering for EPIC-KITCHENS...")
             videos = list(downloaded_epic.rglob("*.mp4"))
             for video in tqdm(videos, desc="Filtering EPIC"):
+                uid = video.stem # EPIC filenames are video_ids
                 if self.filter_and_purge(video):
                     # Move only if kept
                     rel_path = video.relative_to(downloaded_epic)
                     dest_path = self.output_path / rel_path
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(video), str(dest_path))
+                
+                # Mark as processed regardless
+                self.mark_as_processed([uid])
             
             shutil.rmtree(downloaded_epic)
             print(f"Filtering and move complete. Remaining videos in {self.output_path}")

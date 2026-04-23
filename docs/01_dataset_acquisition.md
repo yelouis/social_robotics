@@ -27,9 +27,9 @@ Video datasets are inherently massive (often spanning terabytes).
 ## Streaming Filtering Strategy (Storage Optimization)
 To mitigate the massive storage requirements of these datasets, the system employs a **Streaming Filtering** strategy. 
 
-- **Download-Filter-Discard**: Videos are not simply staged. Instead, each video is subjected to the **Social Presence Filter** immediately after download/extraction.
+- **Download-Filter-Discard (Batched)**: Videos are processed in small batches (e.g., 50 UIDs at a time). For each batch, the system downloads the raw files, runs the social filter, and then immediately deletes non-compliant videos.
 - **Keep Criterion**: Only videos with **more than one person** (excluding the camera wearer) are persisted on the "Extreme SSD".
-- **Automatic Deletion**: If a video fails the filter, the raw `.mp4` file is deleted immediately to free up space for the next download.
+- **Resumability**: To avoid re-downloading videos that were previously discarded, the system maintains a `processed_uids.json` file. Once a UID has been evaluated (kept or purged), it is marked as processed and never requested from the downloader again.
 
 ## Recommended Implementation Steps for Agents
 
@@ -112,3 +112,7 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
 4. **Streaming Filter Diverges from Pipeline Filter (Resolved)**:
    - **Problem**: The streaming acquisition filter and the main processing pipeline had independent, divergent detection logic.
    - **Solution**: Consolidated all detection logic into `src/shared/social_presence.py`. Both modules now use the same YOLO-based engine, ensuring consistent behavior across the entire lifecycle of a video clip.
+
+5. **SSD Storage Overflow & Re-download Loops (Resolved - April 22)**:
+   - **Problem**: The raw Ego4D CLI download of 9,821 videos (~5-10TB) would fill the 2TB Extreme SSD before filtering could occur. Additionally, deleting discarded videos caused the CLI to re-download them on the next run.
+   - **Solution**: Implemented **UID-based Batching** and **Processed UID Tracking**. The downloader now requests Ego4D videos in batches of 50. After each batch, the filter runs immediately and purges "bad" videos. A persistent `processed_uids.json` file ensures that discarded UIDs are never re-requested, effectively "finishing" the dataset in chunks without ever exceeding SSD capacity.
