@@ -134,3 +134,31 @@ To ensure the filtering mechanisms are robust and correct:
 ### Current Implementation & Solutions
 - **Model Upgrade (Implemented)**: The pipeline has been upgraded to use **Qwen2.5-VL** via Ollama for the Contextual Task Labeling phase. This model possesses significantly stronger instruction-following capabilities and visual understanding, resolving the issues with structured output formatting and scene parsing accuracy.
 - **Robust Prompting**: Even with a stronger model, the pipeline maintains a robust fallback logic to categorize tasks as "Idling" if the VLM explicitly indicates no activity, ensuring only high-quality social data is persisted.
+
+## 🚀 Resolved Issues & Pipeline Hardening (April 2026)
+
+Following a comprehensive audit, the following critical refinements were implemented to ensure the pipeline is production-ready:
+
+1. **Multi-Person Social Presence Tracking (Resolved)**:
+   - **Problem**: The system previously only tracked the single most confident person per frame.
+   - **Solution**: The `social_presence_filter` now leverages the shared `SocialPresenceDetector` to capture **all** detected persons per frame. The output schema has been updated to return an array of `bystander_detections`, each with its own `person_id`, ensuring downstream layers can perform multi-actor social analysis.
+
+2. **Pipeline Resumability & Error Isolation (Resolved)**:
+   - **Problem**: Long runs were fragile and non-resumable.
+   - **Solution**: Implemented incremental state saving (write-after-each-video) and a processed-ID skip check. Processing errors are now caught and isolated to `02_filter_errors.json`, preventing a single corrupt video from crashing the entire batch.
+
+3. **Robust Task Labeling & Merging (Resolved)**:
+   - **Problem**: Exact string matching on VLM output caused task fragmentation.
+   - **Solution**: Implemented label normalization (lowercasing, stripping punctuation) during the merging phase. Additionally, `task_confidence` is now dynamically calculated based on the temporal consistency (merge count) of the task rather than being a hardcoded value.
+
+4. **Stage 2 VLM Climax Refinement (Resolved)**:
+   - **Problem**: Optical flow alone was insufficient for slow/cognitive tasks.
+   - **Solution**: Implemented the documented two-stage climax identification. For tasks with `slow` velocity, the pipeline now samples candidate frames and uses **Qwen2.5-VL** to score and refine the climax timestamp.
+
+5. **Schema Consistency & Temporal Bounds (Resolved)**:
+   - **Problem**: Task start/end times were missing from the final manifest.
+   - **Solution**: Formally promoted `task_start_sec` and `task_end_sec` to the official output schema. This provides critical temporal context for downstream social layers like Reasonable Emotion (03b).
+
+6. **Infrastructure & Robustness (Resolved)**:
+   - **Problem**: Fragile temp directories and stale documentation.
+   - **Solution**: Refactored to use `tempfile.TemporaryDirectory` for safe frame extraction. Updated all docstrings to reflect the upgrade to Qwen2.5-VL. Fixed `run_verification.py` to ensure manifests are written to the correct SSD output paths.

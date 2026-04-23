@@ -64,7 +64,6 @@ The initial implementation of the Dataset Acquisition module is complete:
 - **Verification Framework**: Added `tests/test_dataset_acquisition.py` to ensure video files are readable and non-corrupt using OpenCV frame extraction tests.
 - **Smart Downloader**: Implemented a requirement-aware downloader in `src/dataset_acquisition/downloader.py` that skips datasets if keys (like AWS for Ego4D) are missing but data is already present on disk.
 
-
 ### 🐛 Bug Fixes & Refinements
 
 During code review and validation, a few critical issues were identified and resolved:
@@ -109,3 +108,7 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
 3. **macOS Hidden Files on External SSD (Resolved)**:
    - **Problem**: Git operations on the Extreme SSD generated `non-monotonic index` errors due to `._` files.
    - **Solution**: Implemented explicit filtering in `registry.py` to skip files starting with `._` and documented the use of `dot_clean` for SSD maintenance.
+
+4. **Streaming Filter Diverges from Pipeline Filter (Resolved)**:
+   - **Problem**: The streaming acquisition filter and the main processing pipeline had independent, divergent detection logic.
+   - **Solution**: Consolidated all detection logic into `src/shared/social_presence.py`. Both modules now use the same YOLO-based engine, ensuring consistent behavior across the entire lifecycle of a video clip.
