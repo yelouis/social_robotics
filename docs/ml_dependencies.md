@@ -9,8 +9,8 @@ This document outlines the machine learning dependencies, models, and libraries 
 |---|---|---|---|---|
 | **YOLOv8** (`yolov8n` or `yolov8s`) | Social Presence Filter (Bystander Box Detection) | ~6-25 MB | Internal SSD (`~/.cache/ultralytics`) or Local Project | AGPL-3.0 |
 | **L2CS-Net** (or CrossGaze) | 3D Gaze / Head Pose Estimation | ~200 MB | Internal SSD or Local Project | MIT |
-| **moondream** (via Ollama) | Fast VLM for visual classification + Task Climax VLM refinement (Node 02) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
-| **Qwen2.5-VL** (via Ollama) | VLM Alternative (Heavy) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
+| **Qwen2.5-VL** (via Ollama) | Primary VLM for visual classification + Task Climax VLM refinement (Node 02) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
+| **moondream** (via Ollama) | Fast VLM alternative (Lightweight) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **Gemma 4** `gemma4:e4b` (via Ollama) | Fast multimodal model for action expectation & reasoning logic | ~2.5 GB (4-bit) | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **emotion2vec+** `large` (via FunASR) | Acoustic Prosody — primary SER model (9-class emotion + 768-dim embeddings) | ~600 MB | Internal SSD or Local Project | MIT |
 | **SenseVoice** (`SenseVoiceSmall`) | Acoustic Prosody — supplementary Audio Event Detection (laughter, applause, crying) | ~500 MB | Internal SSD or Local Project | Apache-2.0 |
@@ -23,7 +23,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 > **All models in this table are license-clean** (MIT, Apache-2.0, or AGPL-3.0). No CC-BY-NC or non-commercial restrictions remain. The exported `social_metadata.parquet` can be distributed freely.
 
 > [!IMPORTANT]
-> **Task Climax Detection (Node 02)**: This pipeline does NOT use a dedicated highlight detection model. Instead, it uses a **hybrid Optical Flow + VLM refinement** approach: (1) OpenCV's `cv2.calcOpticalFlowFarneback` finds the kinetic peak within each task segment, (2) for slow/cognitive tasks, `moondream` VLM refines the climax timestamp using the task label. This requires zero new model downloads.
+> **Task Climax Detection (Node 02)**: This pipeline does NOT use a dedicated highlight detection model. Instead, it uses a **hybrid Optical Flow + VLM refinement** approach: (1) OpenCV's `cv2.calcOpticalFlowFarneback` finds the kinetic peak within each task segment, (2) for slow/cognitive tasks, **Qwen2.5-VL** VLM refines the climax timestamp using the task label. This requires zero new model downloads.
 
 > [!IMPORTANT]
 > **Gemma 4 variant**: The documented "~2.5 GB" refers specifically to the `gemma4:e4b` (4B parameter, 4-bit quantized) variant. Do NOT pull larger variants (`gemma4:26b` at ~15 GB or `gemma4:31b` at ~18 GB) as they will consume the entire 24GB unified memory of the Mac mini M4 Pro and cause system instability.

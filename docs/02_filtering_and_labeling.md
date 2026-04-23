@@ -113,3 +113,21 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
 To ensure the filtering mechanisms are robust and correct:
 - **Singular Video Test**: Execute the filter module against a single chosen `.mp4` video that is visually verified to have multiple interacting people. Inspect the generated JSON output to confirm the `bystander_detections` bounding boxes accurately surround the actors.
 - **Batch Test**: Run the node over a subset folder (e.g., 50 videos). Aggregate the output to check distribution metrics (e.g., % dropped due to no social presence, % dropped due to idling). Assert that every entry in the `filtered_manifest.json` has `identified_tasks` with non-empty attributes, effectively proving the system scaled accurately without unhandled `None` crashes. Furthermore, utilize the **24GB RAM Mac mini M4 Pro** environment effectively by ensuring the batched VLM calls do not trigger out-of-memory unified memory kills.
+
+---
+
+## Implementation Status & Findings
+
+### Accomplished
+- **Social Presence Filter**: Successfully implemented using YOLOv8 (`yolov8n.pt`) via the `ultralytics` package. Downsampled frames (1 FPS) are scanned for 'person' classes. Output properly structures the strictly co-indexed bounding boxes, timestamps, and confidence scores.
+- **Contextual Task Labeling**: Implemented the frame sampling logic and integration with `ollama` Python client to query a local VLM. 
+- **Temporal Task Climax Identification**: Successfully implemented `cv2.calcOpticalFlowFarneback` to compute dense optical flow at ~5 FPS within the identified task segment. The kinetic peak magnitude and dynamic `task_reaction_window_sec` are accurately captured.
+- **Schema Validation**: The pipeline accurately outputs `filtered_manifest.json` completely aligned with the defined schema, correctly dropping videos when no tasks or no bystanders are present.
+
+### Encountered Problems
+1. **Moondream Instruction Following (Resolved)**: The initial use of `moondream` (1.8B) resulted in poor instruction following for complex, multi-part prompt formatting. It frequently returned empty strings or hallucinatory text.
+2. **Empty Task Extraction (Resolved)**: Using the lightweight model caused valid social interactions to be dropped due to inaccurate scene parsing.
+
+### Current Implementation & Solutions
+- **Model Upgrade (Implemented)**: The pipeline has been upgraded to use **Qwen2.5-VL** via Ollama for the Contextual Task Labeling phase. This model possesses significantly stronger instruction-following capabilities and visual understanding, resolving the issues with structured output formatting and scene parsing accuracy.
+- **Robust Prompting**: Even with a stronger model, the pipeline maintains a robust fallback logic to categorize tasks as "Idling" if the VLM explicitly indicates no activity, ensuring only high-quality social data is persisted.
