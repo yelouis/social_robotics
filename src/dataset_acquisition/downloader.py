@@ -449,9 +449,9 @@ def download_all(force: bool = False):
     # Priority Order: Ego4D > Charades-Ego > EPIC-KITCHENS-100 > EgoProceL
     downloaders = [
         Ego4DDownloader(),
-        CharadesEgoDownloader(),
-        EpicKitchensDownloader(),
-        EgoProceLDownloader(),
+        # CharadesEgoDownloader(),
+        # EpicKitchensDownloader(),
+        # EgoProceLDownloader(),
     ]
     
     for downloader in downloaders:

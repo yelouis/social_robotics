@@ -62,6 +62,19 @@ class SocialPresenceDetector:
                     # Format: [x1, y1, x2, y2]
                     coords = [int(v) for v in box.xyxy[0].tolist()]
                     
+                    # Anti-Wearer Heuristic:
+                    # In egocentric video, limbs of the wearer often appear at the bottom/sides.
+                    # We ignore detections that:
+                    # 1. Touch the bottom edge (y2 > 95% height)
+                    # 2. Start significantly below the top (y1 > 20% height) - i.e., no head/shoulders
+                    x1, y1, x2, y2 = coords
+                    img_h, img_w = frame.shape[:2]
+                    
+                    is_wearer = (y2 > 0.95 * img_h) and (y1 > 0.15 * img_h)
+                    
+                    if is_wearer:
+                        continue
+
                     frame_detections.append({
                         "timestamp_sec": timestamp,
                         "bounding_box": coords,
