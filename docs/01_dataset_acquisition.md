@@ -11,11 +11,25 @@ The system is built to parse First-Person POV interactions. While the pipeline i
 - **Charades-Ego**: Open download from Allen AI.
 - **EgoProceL**: Open GitHub repository + links to source datasets.
 
+## 🔝 Dataset Download Priority
+Due to storage constraints and project focus, datasets are prioritized in the following order:
+1.  **Ego4D** (Highest Priority: Primary target for unstructured interaction)
+2.  **Charades-Ego** (Second Priority: Large-scale egocentric dataset)
+3.  **EPIC-KITCHENS-100** (Third Priority: Specialized task-based interaction)
+4.  **EgoProceL** (Meta-dataset repository)
+
 ## ⚠️ Critical Action for Hardware Management
 Video datasets are inherently massive (often spanning terabytes). 
 **DO NOT** run these data pipelines directly on strict internal SSD setups if space/wear are concerns. 
 - Ensure your `OUTPUT_DIR` maps out to the external **2TB SSD called "Extreme SSD"**. This is explicitly designated to handle the large size of the Ego4D and other video datasets.
 - **Hardware Profile**: As we are running a **Mac mini M4 Pro with 24GB RAM**, be strictly mindful of memory ceilings when unpacking or indexing these massive datasets in Python. Rely on streaming processors or chunked extraction.
+
+## Streaming Filtering Strategy (Storage Optimization)
+To mitigate the massive storage requirements of these datasets, the system employs a **Streaming Filtering** strategy. 
+
+- **Download-Filter-Discard**: Videos are not simply staged. Instead, each video is subjected to the **Social Presence Filter** immediately after download/extraction.
+- **Keep Criterion**: Only videos with **more than one person** (excluding the camera wearer) are persisted on the "Extreme SSD".
+- **Automatic Deletion**: If a video fails the filter, the raw `.mp4` file is deleted immediately to free up space for the next download.
 
 ## Recommended Implementation Steps for Agents
 
@@ -81,3 +95,17 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
     - **Registry**: Successfully indexed the 5 test videos while correctly filtering out macOS metadata files (`._`).
     - **Validation**: All 5 videos passed the existence, size, and frame extraction tests.
 - **Command**: `REGISTRY_FILE=test_video_registry.json pytest tests/test_dataset_acquisition.py`
+
+## 🧪 Resolved Issues & Implementation Refinements (April 2026)
+
+1. **Storage Capacity vs. Massive Datasets (Resolved)**:
+   - **Problem**: Large-scale datasets like Ego4D and EPIC-KITCHENS-100 can exceed the 1.6 TiB available on the Extreme SSD.
+   - **Solution**: Implemented the **Streaming Filtering Strategy**. Videos are now evaluated for social presence immediately after download or extraction. Non-social videos are purged on-the-fly, ensuring that only relevant data (estimated to be <20% of the raw volume) is persisted.
+
+2. **Download Throughput (Mitigated)**:
+   - **Problem**: Standard python-based downloads were throttled or inefficient.
+   - **Solution**: The system now supports prioritized downloads (Ego4D > Charades-Ego > EPIC) and uses the more robust `ego4d` CLI for the primary dataset.
+
+3. **macOS Hidden Files on External SSD (Resolved)**:
+   - **Problem**: Git operations on the Extreme SSD generated `non-monotonic index` errors due to `._` files.
+   - **Solution**: Implemented explicit filtering in `registry.py` to skip files starting with `._` and documented the use of `dot_clean` for SSD maintenance.

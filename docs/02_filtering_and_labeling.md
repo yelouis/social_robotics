@@ -11,6 +11,9 @@ Since our project relies on investigating social-affective interactions, a video
 **Criteria**: 
 The video **must** contain more than one person. Since this is an egocentric/POV video, the person whose perspective is being shown (the camera wearer) *does not count* towards this total. There must be at least one other visible human actor present in the frame.
 
+> [!IMPORTANT]
+> **Integration Note**: To optimize storage on the "Extreme SSD", this filter is integrated directly into the **Dataset Acquisition** module. Videos are filtered immediately after ingestion, and non-social videos are deleted before they can consume permanent disk space.
+
 **Task Requirements**:
 - Evaluate the raw videos from the initial manifest.
 - Drop any video where zero exterior individuals are found.

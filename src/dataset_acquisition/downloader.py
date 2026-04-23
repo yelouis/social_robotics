@@ -9,12 +9,37 @@ from tqdm import tqdm
 # Add src to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import config
+from .filterer import StreamingFilter
 
 class DatasetDownloader(ABC):
-    def __init__(self, name: str):
+    def __init__(self, name: str, filter_on_the_fly: bool = True):
         self.name = name
         self.output_path = config.OUTPUT_DIR / name
         self.possible_paths = config.DATASET_PATHS.get(name, [self.output_path])
+        self.filter_on_the_fly = filter_on_the_fly
+        self.filterer = StreamingFilter() if filter_on_the_fly else None
+
+    def filter_and_purge(self, video_path: Path):
+        """
+        Run the social presence filter on a video. 
+        If it fails, delete the video.
+        """
+        if not self.filter_on_the_fly:
+            return True
+
+        print(f"Streaming Filter: Evaluating {video_path.name}...")
+        has_presence = self.filterer.check_social_presence(video_path)
+        
+        if not has_presence:
+            print(f"Streaming Filter: No social presence detected. PURGING {video_path.name}")
+            try:
+                video_path.unlink()
+            except Exception as e:
+                print(f"Error deleting file: {e}")
+            return False
+        
+        print(f"Streaming Filter: Social presence confirmed. KEEPING {video_path.name}")
+        return True
 
     def is_already_downloaded(self) -> bool:
         """Check if any of the possible paths contain mp4 files."""
@@ -133,6 +158,12 @@ class Ego4DDownloader(DatasetDownloader):
         try:
             subprocess.run(cmd, env=env, check=True)
             print("Ego4D download completed successfully.")
+            
+            if self.filter_on_the_fly:
+                print("Running post-download filtering for Ego4D...")
+                for video in list(self.output_path.rglob("*.mp4")):
+                    self.filter_and_purge(video)
+                    
         except subprocess.CalledProcessError as e:
             print(f"Error during Ego4D download: {e}")
         finally:
@@ -175,8 +206,21 @@ class CharadesEgoDownloader(DatasetDownloader):
             print("Extracting Charades-Ego...")
             import zipfile
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(self.output_path)
-            print("Extraction complete.")
+                members = zip_ref.namelist()
+                for member in tqdm(members, desc="Extracting & Filtering"):
+                    if member.endswith(".mp4"):
+                        # Extract individual file
+                        zip_ref.extract(member, self.output_path)
+                        extracted_path = self.output_path / member
+                        # Filter immediately
+                        self.filter_and_purge(extracted_path)
+                    else:
+                        zip_ref.extract(member, self.output_path)
+            
+            # Delete the large zip after extraction
+            print(f"Cleaning up {zip_path.name}...")
+            zip_path.unlink()
+            print("Extraction and filtering complete.")
             
         except Exception as e:
             print(f"Error downloading or extracting Charades-Ego: {e}")
@@ -218,9 +262,17 @@ class EpicKitchensDownloader(DatasetDownloader):
         downloaded_epic = target_dir / "EPIC-KITCHENS"
         if downloaded_epic.exists():
             import shutil
-            shutil.copytree(downloaded_epic, self.output_path, dirs_exist_ok=True)
+            print("Running post-download filtering for EPIC-KITCHENS...")
+            for video in list(downloaded_epic.rglob("*.mp4")):
+                if self.filter_and_purge(video):
+                    # Move only if kept
+                    rel_path = video.relative_to(downloaded_epic)
+                    dest_path = self.output_path / rel_path
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(video), str(dest_path))
+            
             shutil.rmtree(downloaded_epic)
-            print(f"Moved videos to {self.output_path}")
+            print(f"Filtering and move complete. Remaining videos in {self.output_path}")
 
 class EgoProceLDownloader(DatasetDownloader):
     def __init__(self):
@@ -256,6 +308,7 @@ class EgoProceLDownloader(DatasetDownloader):
 
 def download_all():
     config.ensure_dirs()
+    # Priority Order: Ego4D > Charades-Ego > EPIC-KITCHENS-100 > EgoProceL
     downloaders = [
         Ego4DDownloader(),
         CharadesEgoDownloader(),
