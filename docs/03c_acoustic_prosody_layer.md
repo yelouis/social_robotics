@@ -68,12 +68,3 @@ The layer outputs an isolated JSON mapping the acoustic payload per task.
 - **Singular Video Test**: Extract the 2-second audio chunk of a known "yell" video. Run the Python `funasr` emotion2vec+ inference and print the 9-class emotion scores to the console. Listen to the `.wav` slice to manually confirm the model caught the exact peak of the shout.
 - **Batch Test**: Run over 100 clips. Verify that videos classified as "Alarming" correlate with high `angry` + `fearful` scores and high delta in `max_amplitude_dbFS`. Ensure audio loading does not bottleneck the **24GB RAM Mac mini M4 Pro**; use chunked torchaudio streaming interfaces where possible.
 
----
-
-## 🚀 Implementation Accomplishments (April 2026)
-
-The Acoustic Prosody Layer is now operational:
-- **Core Script**: Created `analyze_prosody.py` which implements the full audio pipeline.
-- **SER Integration**: Successfully integrated `emotion2vec+ large` via FunASR for robust emotion classification.
-- **Acoustic Profiling**: Implemented deterministic volume spike (dBFS) and pitch variance (YIN algorithm) metrics using `librosa`.
-- **Hardware Optimization**: Designed to run efficiently on the **Mac mini M4 Pro**, utilizing MPS (Metal Performance Shaders) for tensor operations and temporary WAV slicing to minimize memory pressure.
