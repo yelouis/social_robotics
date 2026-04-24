@@ -12,6 +12,9 @@ import time
 
 def run_selective():
     # Increase open file limit to avoid OSError: [Errno 24]
+    # This is primarily for macOS, where the default limit (often 256) is too low 
+    # for modern ML frameworks (PyTorch, YOLO, OpenCV) which open many internal 
+    # handles for libraries and model weights.
     try:
         import resource
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
