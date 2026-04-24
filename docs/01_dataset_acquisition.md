@@ -124,3 +124,9 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
      - **Ghost Exclusion**: Ignored full-height boxes starting exactly at the top edge (`y1=0`), a common egocentric false positive.
      - **Confidence Boost**: Increased YOLO confidence threshold from 0.25 to **0.50**.
      - **Temporal Consistency**: Required at least **2 frames** of social presence per video to confirm (filtering out 1-frame glitches).
+
+7. **Robust Batch Filtering & Error Recovery (Resolved - April 23)**:
+   - **Problem**: The batched acquisition pipeline occasionally missed downloaded videos during the filtering phase if the Ego4D CLI nested them in unexpected subdirectories. Additionally, transient network errors could halt the entire multi-hour acquisition process.
+   - **Solution**: 
+     - **Tethered UID Mapping**: Refactored `downloader.py` to explicitly verify the existence of every requested UID in the batch. If standard paths fail, it performs a targeted recursive scan to ensure no downloaded byte goes unfiltered.
+     - **Batch-Level Resiliency**: Wrapped the Ego4D execution loop in `run_selective_download.py` with granular exception handling. The system now logs failed batches and continues to the next set of UIDs rather than crashing, ensuring maximum uptime for large-scale ingestion.

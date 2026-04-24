@@ -30,6 +30,7 @@ class SocialPresenceDetector:
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
+            cap.release()
             return False if fast_mode else []
 
         fps = cap.get(cv2.CAP_PROP_FPS)

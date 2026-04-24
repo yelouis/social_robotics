@@ -216,7 +216,8 @@ class Ego4DDownloader(DatasetDownloader):
         cmd = [
             python_exe, "-m", "ego4d.cli.cli",
             "-o", str(self.output_path),
-            "--datasets", "full_scale",
+            "--datasets", "full_scale", "annotations",
+            "--metadata",
             "-y"
         ]
         
@@ -230,18 +231,31 @@ class Ego4DDownloader(DatasetDownloader):
             
             if self.filter_on_the_fly:
                 print("Running immediate filtering for this batch...")
-                # We only want to filter the ones we just tried to download
-                # But since the CLI might have skipped some, we check what's actually there
                 processed = self.get_processed_uids()
                 videos = []
-                for v in self.output_path.rglob("*.mp4"):
-                    # Check if filename (without extension) is in processed list
-                    # or if it's an Apple double file
-                    if v.name.startswith("._"):
-                        continue
-                    if v.stem in processed:
-                        continue
-                    videos.append(v)
+                
+                # Optimization: If we have specific UIDs, check their expected paths first
+                # to avoid a full recursive scan of the entire directory
+                if video_uids:
+                    # Standard Ego4D structure is flat or in v2/full_scale
+                    search_dirs = [
+                        self.output_path,
+                        self.output_path / "v2" / "full_scale"
+                    ]
+                    for uid in video_uids:
+                        for s_dir in search_dirs:
+                            v_path = s_dir / f"{uid}.mp4"
+                            if v_path.exists() and not v_path.name.startswith("._"):
+                                videos.append(v_path)
+                                break
+                
+                # If no videos found via direct path, or no specific UIDs, fall back to scan
+                # but limit it to what's actually new/unprocessed
+                if not videos:
+                    for v in self.output_path.rglob("*.mp4"):
+                        if v.name.startswith("._") or v.stem in processed:
+                            continue
+                        videos.append(v)
 
                 for video in tqdm(videos, desc="Filtering Batch"):
                     self.filter_and_purge(video)

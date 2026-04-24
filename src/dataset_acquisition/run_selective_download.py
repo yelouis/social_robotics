@@ -11,6 +11,17 @@ from tqdm import tqdm
 import time
 
 def run_selective():
+    # Increase open file limit to avoid OSError: [Errno 24]
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        # Try to set to hard limit, or at least a much higher value
+        target_limit = min(hard, 65535) # 65k is usually plenty
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target_limit, hard))
+        print(f"[System] Increased open file limit: {soft} -> {target_limit}")
+    except Exception as e:
+        print(f"[Warning] Could not increase open file limit: {e}")
+
     tasks = [
         ("Ego4D", True), # (Name, Force)
         # ("EPIC-KITCHENS-100", False),
@@ -35,9 +46,6 @@ def run_selective():
             
             batches_run = 0
             for i in range(0, len(to_process), batch_size):
-                if batches_run >= 3:
-                    print("\n[TEST] Completed 3 batches. Stopping for review.")
-                    break
                     
                 batch = to_process[i:i + batch_size]
                 current_batch_num = i // batch_size + 1
