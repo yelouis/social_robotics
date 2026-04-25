@@ -42,57 +42,60 @@ class SocialPresenceDetector:
             frame_interval = int(max(1, fps / sample_rate_fps))
             
             all_detections = []
-            has_bystander = False
             detected_frames_count = 0
             
-            # In egocentric footage, we assume any detected 'person' is a bystander
-            # because the camera wearer is behind the lens.
-            
-            for frame_idx in range(0, total_frames, frame_interval):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            # Use sequential reading instead of seeking for stability on macOS
+            current_frame_idx = 0
+            while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                timestamp = frame_idx / fps
-                # Higher confidence threshold (0.5) to avoid weak false positives
-                results = self.model(frame, classes=[0], verbose=False, conf=0.5) 
-                
-                frame_detections = []
-                has_bystander_in_frame = False
-                for result in results:
-                    for box in result.boxes:
-                        coords = [int(v) for v in box.xyxy[0].tolist()]
-                        x1, y1, x2, y2 = coords
-                        img_h, img_w = frame.shape[:2]
-                        
-                        # Refined Anti-Wearer Heuristic:
-                        # 1. Limb: Touches bottom AND starts significantly below top.
-                        is_limb = (y2 > 0.95 * img_h) and (y1 > 0.15 * img_h)
-                        
-                        # 2. Ghost Torso: Full height box starting exactly at top (y1=0).
-                        # Real bystanders usually have some top-margin unless they are extremely close.
-                        is_ghost = (y1 == 0) and (y2 > 0.90 * img_h)
-                        
-                        if is_limb or is_ghost:
-                            continue
+                # Only process frames at the specified interval
+                if current_frame_idx % frame_interval == 0:
+                    if frame is None or frame.size == 0:
+                        current_frame_idx += 1
+                        continue
 
-                        frame_detections.append({
-                            "timestamp_sec": timestamp,
-                            "bounding_box": coords,
-                            "confidence": float(box.conf[0])
-                        })
-                        has_bystander_in_frame = True
-                
-                if has_bystander_in_frame:
-                    detected_frames_count += 1
-                    has_bystander = True
-                
-                if fast_mode and (detected_frames_count >= min_consistency):
-                    return True
+                    timestamp = current_frame_idx / fps
+                    # Use the specified device or let it auto-select (defaulting to MPS/CPU)
+                    results = self.model(frame, classes=[0], verbose=False, conf=0.5) 
                     
-                if frame_detections:
-                    all_detections.append(frame_detections)
+                    frame_detections = []
+                    has_bystander_in_frame = False
+                    for result in results:
+                        for box in result.boxes:
+                            coords = [int(v) for v in box.xyxy[0].tolist()]
+                            x1, y1, x2, y2 = coords
+                            img_h, img_w = frame.shape[:2]
+                            
+                            # Refined Anti-Wearer Heuristic
+                            is_limb = (y2 > 0.95 * img_h) and (y1 > 0.15 * img_h)
+                            is_ghost = (y1 == 0) and (y2 > 0.90 * img_h)
+                            
+                            if is_limb or is_ghost:
+                                continue
+
+                            frame_detections.append({
+                                "timestamp_sec": timestamp,
+                                "bounding_box": coords,
+                                "confidence": float(box.conf[0])
+                            })
+                            has_bystander_in_frame = True
+                    
+                    if has_bystander_in_frame:
+                        detected_frames_count += 1
+                    
+                    if fast_mode and (detected_frames_count >= min_consistency):
+                        return True
+                        
+                    if frame_detections:
+                        all_detections.append(frame_detections)
+                
+                current_frame_idx += 1
+                # Small safety break if we exceed total_frames (sometimes cap.read() returns True past total_frames)
+                if current_frame_idx >= total_frames:
+                    break
             
             if fast_mode:
                 return detected_frames_count >= min_consistency

@@ -44,7 +44,13 @@ def run_selective():
         print(f"\n[Ego4D Status] Total: {len(all_uids)}, Processed: {len(processed_uids)}, Remaining: {len(to_process)}")
         
         if to_process:
-            batch_size = 50
+            import signal
+            def signal_handler(sig, frame):
+                print('\n[INTERRUPT] Gracefully shutting down...')
+                sys.exit(0)
+            signal.signal(signal.SIGINT, signal_handler)
+
+            batch_size = 10 # Reduced from 50 for stability and better tracking
             num_batches = (len(to_process) + batch_size - 1) // batch_size
             
             batches_run = 0
@@ -55,12 +61,15 @@ def run_selective():
                 print(f"\n>>> Ego4D Batch {current_batch_num}/{num_batches} ({len(batch)} UIDs)")
                 
                 # Execute batch download and immediate filter
+                print(f"[Debug] Starting ego4d.run for batch {current_batch_num}...")
                 success = ego4d.run(force=True, video_uids=batch)
+                print(f"[Debug] ego4d.run completed with success={success}")
                 if not success:
                     print("\n[STOP] Ego4D acquisition halted (Check disk space or requirements).")
                     return
 
                 # Optional: Brief sleep to allow system to cool down or user to interrupt
+                print(f"[Debug] Sleeping 1s...")
                 time.sleep(1)
                 batches_run += 1
         else:

@@ -54,19 +54,25 @@ class DatasetDownloader(ABC):
         if not self.filter_on_the_fly:
             return True
 
-        print(f"Streaming Filter: Evaluating {video_path.name}...")
-        has_presence = self.filterer.check_social_presence(video_path)
-        
-        if not has_presence:
-            print(f"Streaming Filter: No social presence detected. PURGING {video_path.name}")
-            try:
-                video_path.unlink()
-            except Exception as e:
-                print(f"Error deleting file: {e}")
-            return False
-        
-        print(f"Streaming Filter: Social presence confirmed. KEEPING {video_path.name}")
-        return True
+        try:
+            print(f"Streaming Filter: Evaluating {video_path.name}...")
+            has_presence = self.filterer.check_social_presence(video_path)
+            
+            if not has_presence:
+                print(f"Streaming Filter: No social presence detected. PURGING {video_path.name}")
+                try:
+                    video_path.unlink()
+                except Exception as e:
+                    print(f"Error deleting file: {e}")
+                return False
+            
+            print(f"Streaming Filter: Social presence confirmed. KEEPING {video_path.name}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Streaming Filter failed for {video_path.name}: {e}")
+            # In case of a hard crash (like a bus error in the library), 
+            # we might not even hit this catch block, but it's good practice.
+            return True # Keep the video if we can't decide, to be safe
 
     def check_disk_space(self, min_gb: float = 10.0) -> bool:
         """Check if there is enough space left on the output disk."""
@@ -257,8 +263,11 @@ class Ego4DDownloader(DatasetDownloader):
                             continue
                         videos.append(v)
 
+                print(f"[Debug] Found {len(videos)} videos to filter.")
                 for video in tqdm(videos, desc="Filtering Batch"):
+                    print(f"[Debug] Filtering video: {video.name}")
                     self.filter_and_purge(video)
+                    print(f"[Debug] Finished filtering video: {video.name}")
                 
                 # Mark as processed regardless of whether they were kept or purged
                 if video_uids:
