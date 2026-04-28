@@ -156,14 +156,7 @@ class AttentionLayerPipeline:
                 variance = sum((s - avg_score) ** 2 for s in scores) / (len(scores) - 1)
                 
             # Sustained engagement (longest contiguous window >= 0.7)
-            max_sustained = 0
-            current_sustained = 0
-            for score in scores:
-                if score >= 0.7:
-                    # roughly 0.5s per sample at default stride, but it can be adaptive.
-                    # This is an approximation. A more accurate one uses the actual 't' diffs.
-                    pass
-            # Accurate sustained logic based on 't'
+            # Uses actual 't' timestamps for accuracy across adaptive stride changes
             sustained_windows = []
             current_start = None
             last_t = None
@@ -272,16 +265,17 @@ class AttentionLayerPipeline:
                         yaw_rad = float(results.yaw[0][0]) if results.yaw.size > 0 else 0.0
                         
                         # Geometric Heuristic for attention_score
-                        v_look_x = math.sin(yaw_rad)
-                        v_look_y = -math.sin(pitch_rad)
-                        v_look_z = math.cos(yaw_rad) * math.cos(pitch_rad)
+                        # Using L2CS gazeto3d convention for correct coordinate system
+                        v_look_x = -math.cos(yaw_rad) * math.sin(pitch_rad)
+                        v_look_y = -math.sin(yaw_rad)
+                        v_look_z = -math.cos(yaw_rad) * math.cos(pitch_rad)
                         
                         cx = (x1 + x2) / 2.0
                         cy = (y1 + y2) / 2.0
                         
                         v_cam_x = (w / 2.0) - cx
                         v_cam_y = (h / 2.0) - cy
-                        v_cam_z = float(w) # Assume focal length ~ width
+                        v_cam_z = -float(w) # Negative Z = into screen in L2CS coordinate frame
                         
                         norm_cam = math.sqrt(v_cam_x**2 + v_cam_y**2 + v_cam_z**2)
                         if norm_cam > 0:
@@ -295,7 +289,7 @@ class AttentionLayerPipeline:
                         mapped_score = max(0.0, (dot_prod - 0.5) * 2.0)
                         score = round(min(1.0, mapped_score), 2)
                     except Exception as e:
-                        pass
+                        print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")
                 
                 trace.append({
                     "t": round(current_t, 2),
