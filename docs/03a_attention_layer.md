@@ -87,3 +87,20 @@ This dehydrated result can then be successfully merged into the master database 
 To validate the reliability of the attention scoring mechanics:
 - **Singular Video Test**: Process a single known interaction video. Output the `attention_trace` timeseries and write a quick visualization script (e.g., using `matplotlib`) to graph the `attention_score` over time alongside the video timeline. Manually verify if the peaks visually match the moments the bystander looks at the POV camera/hands.
 - **Batch Test**: Point the layer script at a batch of 100 clips from the `filtered_manifest.json`. During this batch, actively monitor the process on the **24GB RAM Mac mini M4 Pro** to ensure 3D Gaze Estimation tensor operations run stably via MPS without memory leaks over prolonged loops. Assert that the resulting `03a_attention_result.json` handles missing detections gracefully and outputs valid scores bounded between 0 and 1.
+
+---
+
+## 🚀 Implementation Status & Known Limitations
+
+**What was accomplished:**
+The layer has been fully implemented in `src/layer_03a_attention/pipeline.py` using the **SOTA 3D Gaze Raycasting method** (L2CS-Net). It successfully reads `filtered_manifest.json`, leverages the pre-computed bounding boxes from the `bystander_detections` array to crop images of the bystanders, and queries the L2CS ResNet50 model to extract exact `pitch_rad` and `yaw_rad` vectors. 
+
+To determine the final `attention_score`, the layer utilizes a **3D geometric dot-product heuristic** that projects a 3D unit vector representing the bystander's gaze against a unit vector pointing from their bounding box center towards the center of the camera. The layer features adaptive sampling, computes temporal metrics (peak engagement, variance, sustained engagement), and performs safe atomic writes.
+
+**Potential Errors & Solutions:**
+1. **Inaccurate Geometric Heuristic**: The dot-product algorithm assumes the focal length is roughly equivalent to the frame width and projects the camera at `(W/2, H/2)`. If the camera is heavily distorted (e.g. fish-eye POV lenses without un-distortion), the projection angle might mismatch the real-world gaze ray.
+   - *Solution*: Extract camera intrinsics from the specific dataset (Ego4D or EPIC-KITCHENS) to properly calibrate the `v_cam_z` (focal length) parameter in the projection math.
+2. **Missing Actor Hand Detection**: The current heuristic only scores attention towards the POV wearer's *camera/face*. The document requests checking for attention towards the POV actor's *hands* as well.
+   - *Solution (Documented)*: Implement a MediaPipe Egocentric Hand Detector in Node 02, log the hand bounding boxes, and pass them into Layer 03a to calculate a secondary dot-product vector `V_hands`.
+3. **Tracking Loss**: Because Node 02's output doesn't natively include a robust SORT tracker, bounding boxes might shift IDs across frames if multiple people intersect.
+   - *Solution (Documented)*: Implement an explicit DeepSORT or ByteTrack step in Node 02, or build a lightweight bounding-box IoU linker in this layer to strictly maintain `person_id` temporal consistency.
