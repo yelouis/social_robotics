@@ -171,3 +171,11 @@ Following a comprehensive audit, the following critical refinements were impleme
 7. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
    - **Problem**: YOLOv8 incorrectly identified the camera wearer's limbs and background artifacts as bystanders.
    - **Solution**: Implemented a multi-stage **Anti-Wearer Heuristic** including top/bottom edge exclusion, a 0.50 confidence floor, and a 2-frame temporal consistency requirement. This restored the expected purge rate and secured the SSD from storage overflow.
+
+8. **`NameError` / `KeyError` Crashes in `process_video` (Resolved - April 27)**:
+   - **Problem**: `pipeline.py`'s `process_video()` method had three latent crash bugs:
+     1. **`NameError: video_id`** on the "No bystanders detected" log line — `video_id` was never defined as a local variable in `process_video`, only in the caller `run()`.
+     2. **`KeyError: 'id'`** on the "No clear tasks identified" log line — used `entry['id']` directly, but Ego4D manifests may use `'video_id'` as the key instead, which the method's caller already handled with a safe `.get()`.
+     3. **`KeyError: 'id'`** in the output dict — same unsafe `entry['id']` access when constructing the `filtered_manifest.json` entry.
+   - **Impact**: Any video that failed the social presence or task filter would crash the entire pipeline run with a `NameError`, preventing further processing. Videos from Ego4D manifests using `'video_id'` as the key would crash on the output construction even for *passing* videos.
+   - **Solution**: Added `video_id = entry.get('id', entry.get('video_id'))` at the top of `process_video()` and replaced all three unsafe references with the resolved `video_id` variable.

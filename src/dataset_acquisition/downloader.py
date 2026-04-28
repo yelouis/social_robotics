@@ -278,7 +278,6 @@ class Ego4DDownloader(DatasetDownloader):
         finally:
             # Clean up temp credentials if created
             if temp_aws_creds.exists():
-                import shutil
                 shutil.rmtree(temp_aws_dir)
 
 class CharadesEgoDownloader(DatasetDownloader):

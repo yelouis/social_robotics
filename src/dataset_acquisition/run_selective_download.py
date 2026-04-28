@@ -112,16 +112,16 @@ def run_selective():
                 time.sleep(1)
         else:
             print("EPIC: All videos already processed or metadata missing.")
-        """
         pbar.update(1)
+        """
 
         # 3. EgoProceL (Disabled for now)
         """
         pbar.set_postfix(dataset="EgoProceL")
         egoprocel = EgoProceLDownloader()
         egoprocel.run()
-        """
         pbar.update(1)
+        """
 
 if __name__ == "__main__":
     print("\n" + "="*60)

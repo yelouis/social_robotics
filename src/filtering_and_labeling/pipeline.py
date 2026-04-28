@@ -87,6 +87,7 @@ class FilteringPipeline:
             json.dump(errors, f, indent=4)
 
     def process_video(self, entry):
+        video_id = entry.get('id', entry.get('video_id'))
         video_path = Path(entry['file_path'])
         if not video_path.exists():
             print(f"File not found: {video_path}")
@@ -115,7 +116,7 @@ class FilteringPipeline:
         # 2. Contextual Task Labeling & Velocity (Every 5 seconds)
         identified_tasks = self.contextual_task_labeling(cap, fps, total_frames, duration_sec)
         if not identified_tasks:
-            print(f"Dropped {entry['id']}: No clear tasks identified.")
+            print(f"Dropped {video_id}: No clear tasks identified.")
             cap.release()
             return None
             
@@ -125,7 +126,7 @@ class FilteringPipeline:
         cap.release()
         
         return {
-            "video_id": entry['id'],
+            "video_id": video_id,
             "source_dataset": entry['dataset'],
             "video_path": str(video_path),
             "fps": fps,

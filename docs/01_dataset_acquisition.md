@@ -130,3 +130,7 @@ To verify the pipeline without downloading terabytes of data, a test batch was e
    - **Solution**: 
      - **Tethered UID Mapping**: Refactored `downloader.py` to explicitly verify the existence of every requested UID in the batch. If standard paths fail, it performs a targeted recursive scan to ensure no downloaded byte goes unfiltered.
      - **Batch-Level Resiliency**: Wrapped the Ego4D execution loop in `run_selective_download.py` with granular exception handling. The system now logs failed batches and continues to the next set of UIDs rather than crashing, ensuring maximum uptime for large-scale ingestion.
+
+8. **Progress Bar Overflow in `run_selective_download.py` (Resolved - April 27)**:
+   - **Problem**: The `tqdm` progress bar in `run_selective()` called `pbar.update(1)` three times (once for each of Ego4D, EPIC, and EgoProceL), even though EPIC and EgoProceL were fully disabled with triple-quoted string blocks. The `pbar.update(1)` calls for the disabled tasks were **outside** the triple-quoted regions, so they still executed. With `total=1` (only Ego4D in the active `tasks` list), this produced a misleading 300% completion indicator.
+   - **Solution**: Moved the `pbar.update(1)` calls for EPIC and EgoProceL **inside** their respective triple-quoted comment blocks so they are inert when those datasets are disabled.
