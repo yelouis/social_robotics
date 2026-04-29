@@ -37,7 +37,8 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **Py-Feat** | SOTA Emotion inference on bystander faces | ~300-500 MB (incl. models) | Python virtual environment | ⚠️ CPU-only on macOS (no MPS/GPU support) |
 | **MediaPipe** | Egocentric Hand Detection tracker | ~100 MB | Python virtual environment | |
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
-| **huggingface_hub** | Interacting with Hugging Face exports | ~20 MB | Python virtual environment | |
+| **transformers** | Loading Hugging Face models like Depth Anything V2 | ~150 MB | Python virtual environment | |
+| **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment | |
 | **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, Py-Feat, etc. | ~2-3 GB | Python virtual environment | MPS backend works on M4 Pro |
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
