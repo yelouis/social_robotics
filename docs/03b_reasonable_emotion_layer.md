@@ -182,3 +182,15 @@ The initial implementation of the Reasonable Emotion Layer is complete:
      - **Retry with escalating temperature**: Both `_llm_generate_expectations` and `_llm_evaluate_transition` retry up to 3 times, increasing the temperature by `0.2` per attempt (`0.3 → 0.5 → 0.7`) to escape degenerate output loops.
      - **Graceful degradation**: If all retries fail, the system falls back to `DEFAULT_EXPECTATIONS` (Step 1) or `_rule_based_classify` (Step 3), which classifies by simple set membership. This ensures the pipeline never crashes on an LLM failure.
    - **Test Coverage**: Added 5 new pydantic validation tests (`test_expectation_schema_validates_valid_input`, `test_expectation_schema_coerces_single_string`, `test_expectation_schema_rejects_missing_key`, `test_transition_eval_schema_validates`, `test_transition_eval_schema_rejects_bad_direction`) and 3 fallback tests (`test_expectation_fallback_when_ollama_unavailable`, `test_transition_fallback_when_ollama_unavailable`, `test_rule_based_classify`). All 11 tests pass.
+
+8. **Ollama Model Tag Mismatch (Resolved - April 30)**:
+   - **Problem**: The pipeline was hardcoded to `gemma4:e4b`, but the local Ollama instance only contained the `gemma4:latest` tag, causing a "model not found" error during E2E testing.
+   - **Solution**: Updated `OLLAMA_MODEL` to `gemma4:latest` to match the environment.
+
+9. **Transition Evaluation Latency (Suggested - April 30)**:
+   - **Problem**: Evaluating every emotional transition (sampled at ~3 FPS) via Gemma 4 is computationally expensive and slow (~2-3 minutes per 4s reaction window). Many transitions are redundant (e.g., `neutral -> neutral`).
+   - **Solution**: Implementing a "state change" filter is recommended to only trigger LLM evaluation when the detected emotion label actually changes. This will dramatically reduce token consumption and latency for stagnant emotional states.
+
+10. **E2E Validation on Ego4D Test Set (Completed - April 30)**:
+    - **Observation**: Conducted a full E2E test using `001e3e4e-2743-47fc-8564-d5efd11f9e90.mp4`. The system correctly ingested 03a attention scores (0.23 avg) and processed a "Loading laundry" task.
+    - **Smell Test Results**: The LLM correctly classified `neutral -> fear` and `neutral -> anger` transitions as `negative`. The final `late_stage_weighted_success_score` (-0.39) logically reflected the mixed-to-negative emotional journey. Output schema conformance was 100% verified.

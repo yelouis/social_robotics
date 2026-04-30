@@ -65,7 +65,7 @@ DEFAULT_EXPECTATIONS = {
 }
 
 # LLM configuration
-OLLAMA_MODEL = "gemma4:e4b"
+OLLAMA_MODEL = "gemma4:latest"
 LLM_MAX_RETRIES = 3
 
 
