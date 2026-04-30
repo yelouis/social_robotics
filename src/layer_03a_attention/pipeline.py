@@ -261,8 +261,8 @@ class AttentionLayerPipeline:
                     try:
                         results = self.gaze_pipeline.step(crop_rgb)
                         # Results container structure from l2cs
-                        pitch_rad = float(results.pitch[0][0]) if results.pitch.size > 0 else 0.0
-                        yaw_rad = float(results.yaw[0][0]) if results.yaw.size > 0 else 0.0
+                        pitch_rad = float(results.pitch[0]) if results.pitch.size > 0 else 0.0
+                        yaw_rad = float(results.yaw[0]) if results.yaw.size > 0 else 0.0
                         
                         # Geometric Heuristic for attention_score
                         # Using L2CS gazeto3d convention for correct coordinate system

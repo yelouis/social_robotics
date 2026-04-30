@@ -118,3 +118,10 @@ During code review and validation of the initial implementation, the following c
      - Installed via `brew install ffmpeg` (v8.1 now at `/opt/homebrew/bin/ffmpeg`).
      - Added `shutil.which("ffmpeg")` check in `_init_models()` that raises `RuntimeError` with install instructions if the binary is absent. This prevents silent degradation on a fresh machine.
 
+9. **Test Manifest Latency — Ego4D Full-Length Videos (Resolved)**:
+   - **Problem**: Initial E2E tests against the `ego4d_test_input.json` manifest were extremely slow. Some videos were >900s, causing the upstream Node 02 (filtering) to take over an hour per video due to VLM interval processing.
+   - **Solution**: Refined the test manifest to specifically include shorter Ego4D samples (~128s) to accelerate validation cycles. For 03c specific logic, created a `mock_filtered_manifest.json` pointing to valid video files but with pre-defined task windows, allowing for sub-minute E2E verification of audio-to-prosody logic.
+
+10. **SER Label Parsing Failure — 'Chinese/English' Format (Resolved)**:
+    - **Problem**: The `emotion2vec+` model returns labels in a composite format (e.g., `'生气/angry'`). The initial parsing logic looked for exact matches with lowercase English keys (e.g., `'angry'`), causing all emotion scores to fail mapping and default to `0.0`. This resulted in every task being incorrectly classified based solely on volume heuristics.
+    - **Solution**: Updated `_run_ser_model` to split labels by `/` and extract the English component. Verified via "smell test" that a laundry video correctly mapped to 'happy' (Soothing) instead of 'angry' (Alarming).

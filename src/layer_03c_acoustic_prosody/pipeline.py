@@ -198,7 +198,11 @@ class AcousticProsodyPipeline:
             
             emotion_scores = {}
             for label, score in zip(labels, scores):
+                # Handle 'Chinese/English' format labels (e.g. '生气/angry')
                 clean_label = label.lower().strip()
+                if '/' in clean_label:
+                    clean_label = clean_label.split('/')[-1].strip()
+                
                 if clean_label in default_scores:
                     emotion_scores[clean_label] = float(score)
             

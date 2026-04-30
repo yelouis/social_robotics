@@ -119,3 +119,16 @@ To determine the final `attention_score`, the layer utilizes a **3D geometric do
 7. **Silently Swallowed Gaze Inference Exceptions (Resolved)**:
    - **Problem**: The `except Exception as e: pass` block in `_track_and_score` caught and discarded all errors from L2CS inference, including model crashes, tensor shape mismatches, and MPS backend failures. When inference failed, the frame received a default score of `0.0` with no indication that an error occurred, making systematic model failures invisible during batch runs.
    - **Solution**: Replaced with `print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")` to surface failures in the console log while still allowing the pipeline to continue processing remaining frames.
+
+8. **Invalid Indexing in Gaze Inference (Resolved)**:
+    - **Problem**: The pipeline used `results.pitch[0][0]` to extract angles. However, the L2CS `Pipeline.step()` returns 1D arrays of shape `(N,)`. Accessing `[0][0]` on a 1D array raised an `IndexError`, causing all scores to fallback to `0.0`.
+    - **Solution**: Updated `pipeline.py` to use `results.pitch[0]` and `results.yaw[0]`.
+
+9. **Inefficient Temporal Seeking in Batch Processing**:
+    - **Problem**: Using `cap.set(cv2.CAP_PROP_POS_FRAMES)` for adaptive sampling is slow on macOS with high-resolution Ego4D clips, leading to significant overhead.
+    - **Solution**: Future refactor should implement a sequential reading loop that skips frames in-memory to reach the next sampling point.
+
+10. **VLM Bottleneck in E2E Pipeline**:
+    - **Problem**: Node 02's Task Labeling executes a Chat query every 5 seconds, creating a massive bottleneck during E2E verification of Layer 03a.
+    - **Solution**: Use a "fast-track" manifest or increase `interval_sec` for verification runs where only social geometry is being tested.
+
