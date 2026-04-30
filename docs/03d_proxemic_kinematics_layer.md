@@ -88,9 +88,14 @@ During code audit and validation of the initial implementation, the following is
    - **Problem**: The `math` module was imported at the top of `pipeline.py` but never used anywhere in the file.
    - **Solution**: Removed the unused import.
 
+5. **HF_HOME Cache Location Ignored (Resolved - April 29)**:
+   - **Problem**: The `HF_HOME` environment variable was being set inside the class initialization, but the `transformers` library was imported at the module level. Since `transformers` performs some path initialization upon import, it ignored the late-set `HF_HOME` and defaulted to `~/.cache/huggingface`.
+   - **Solution**: Moved the `os.environ['HF_HOME']` assignment to the very top of `pipeline.py`, before any `transformers` or `torch` imports.
+
 ### ⚠️ Known Limitations & Troubleshooting
 
 - **Missing `transformers` Dependency**: If you encounter an error stating `transformers and torch are required`, ensure you have installed them in your active virtual environment (`pip install transformers huggingface_hub`).
 - **Occlusion Glitches**: Fast-moving objects (like hands or tools) passing in front of the bystander's bounding box can skew the median depth map calculation. The system relies on the YOLO person bounding box to mask the depth map, which does not currently perform instance segmentation (pixel-perfect masking). A future improvement would be to use a SAM-style instance segmentation mask instead of the rectangular YOLO bbox.
 - **Adaptive Frame Sampling**: To maintain performance, the depth estimator extracts a maximum of 5 evenly spaced frames from the task reaction window. This prevents GPU/MPS memory exhaustion but may miss micro-movements occurring between sampled frames.
 - **Test Suite Fragility (`test_schema_conformance`)**: The `test_schema_conformance` test globally patches `pathlib.Path.exists` to always return `True`. This is necessary to bypass the file-existence check for the dummy video path, but it also affects the resumability guard in `__init__` (which checks if the output file already exists). If tests are run in certain orders or combined with other test files that create real output files, the global patch could cause unexpected behavior. A more surgical mock (patching only the specific `Path` instance) would be safer but is deferred for now as the current test suite runs cleanly.
+- **Conflicting Scale vs. Depth Signals**: In edge cases (e.g., camera moving while bystander is moving), the bounding box scale delta and Depth Anything V2 depth delta may produce opposite vectors. The current weighted average (40% scale, 60% depth) tends to yield a "Neutral" classification in these scenarios, which is the safest default. Future iterations may include a "Confidence" score based on signal agreement.

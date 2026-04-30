@@ -1,9 +1,15 @@
 import os
+from pathlib import Path
+
+# Set HuggingFace Cache to Extreme SSD to prevent local drive fillup
+# This must be set BEFORE transformers is imported
+SSD_HF_CACHE = "/Volumes/Extreme SSD/huggingface_cache"
+os.environ['HF_HOME'] = SSD_HF_CACHE
+
 import json
 import cv2
 import traceback
 import numpy as np
-from pathlib import Path
 from PIL import Image
 
 try:
@@ -40,10 +46,8 @@ class ProxemicKinematicsPipeline:
                                "Please install them via 'pip install transformers torch torchvision huggingface_hub'.")
 
         try:
-            # Set HuggingFace Cache to Extreme SSD to prevent local drive fillup
-            ssd_hf_cache = "/Volumes/Extreme SSD/huggingface_cache"
-            os.makedirs(ssd_hf_cache, exist_ok=True)
-            os.environ['HF_HOME'] = ssd_hf_cache
+            # Create SSD cache directory if it doesn't exist
+            os.makedirs(SSD_HF_CACHE, exist_ok=True)
 
             # Check for MPS/GPU
             if torch.backends.mps.is_available():
@@ -57,11 +61,11 @@ class ProxemicKinematicsPipeline:
             elif self.device == 'cuda':
                 device_id = 0
                 
-            print(f"Initializing Depth Anything V2-Small on {self.device} (Cache: {ssd_hf_cache})...")
+            print(f"Initializing Depth Anything V2-Small on {self.device} (Cache: {SSD_HF_CACHE})...")
             self.depth_estimator = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=device_id)
             
             # Validate download path
-            model_cache_path = Path(ssd_hf_cache) / "hub" / "models--depth-anything--Depth-Anything-V2-Small-hf"
+            model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--depth-anything--Depth-Anything-V2-Small-hf"
             if not model_cache_path.exists():
                 print("Warning: Model does not appear to be saved in the expected Extreme SSD cache location.")
                 
