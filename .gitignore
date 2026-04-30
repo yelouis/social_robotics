@@ -13,6 +13,7 @@ vlm_env/
 # Data & Results
 *.json
 *.csv
+*.wav
 *.tar
 *.zip
 charades_ego_data/

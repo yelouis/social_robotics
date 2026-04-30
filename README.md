@@ -41,7 +41,9 @@ The heart of the project. Independent modules analyze the filtered video chunks 
 | **03b** | **Reasonable Emotion** | Context-aware emotional analysis | Py-Feat / Gemma 4 |
 | **03c** | **Acoustic Prosody** | Non-verbal vocal cues & tone | emotion2vec+ / SenseVoice |
 | **03d** | **Proxemic Kinematics** | Relative depth & physical spacing | Depth Anything V2 |
-| **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | RTMPose |
+| **03e** | **Affirmation Gesture** | Head nodding & shaking detection | SciPy / Signal Processing |
+| **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | RTMPose / EgoMotion |
+| **03g** | **Shared Reality** | Social referencing & validation seeking | Saliency / Optical Flow |
 
 ### 4. Dehydrated Export
 The final output is a **Dehydrated Social Metadata Dataset**. We never export raw pixels. Instead, we provide:
@@ -61,6 +63,13 @@ The final output is a **Dehydrated Social Metadata Dataset**. We never export ra
 -   [Project Overview](docs/00_project_overview.md)
 -   [Dataset Acquisition Guide](docs/01_dataset_acquisition.md)
 -   [Social Layer Registry](docs/03_social_layer_architecture.md)
+    -   [03a: Attention Layer](docs/03a_attention_layer.md)
+    -   [03b: Reasonable Emotion Layer](docs/03b_reasonable_emotion_layer.md)
+    -   [03c: Acoustic Prosody Layer](docs/03c_acoustic_prosody_layer.md)
+    -   [03d: Proxemic Kinematics Layer](docs/03d_proxemic_kinematics_layer.md)
+    -   [03e: Affirmation Gesture Layer](docs/03e_affirmation_gesture_layer.md)
+    -   [03f: Motor Resonance Layer](docs/03f_motor_resonance_layer.md)
+    -   [03g: Shared Reality Layer](docs/03g_shared_reality_layer.md)
 -   [ML Dependencies & Models](docs/ml_dependencies.md)
 
 ---
