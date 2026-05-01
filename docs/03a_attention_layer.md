@@ -90,45 +90,37 @@ To validate the reliability of the attention scoring mechanics:
 
 ---
 
-## 🚀 Implementation Status & Known Limitations
+## 🚀 Implementation Status
 
-**What was accomplished:**
-The layer has been fully implemented in `src/layer_03a_attention/pipeline.py` using the **SOTA 3D Gaze Raycasting method** (L2CS-Net). It successfully reads `filtered_manifest.json`, leverages the pre-computed bounding boxes from the `bystander_detections` array to crop images of the bystanders, and queries the L2CS ResNet50 model to extract exact `pitch_rad` and `yaw_rad` vectors. 
+The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py`. It utilizes 3D Gaze Raycasting (L2CS-Net) to analyze bystander focus relative to the POV camera and task environment, with support for adaptive sampling and automated temporal metric extraction.
 
-To determine the final `attention_score`, the layer utilizes a **3D geometric dot-product heuristic** that projects a 3D unit vector representing the bystander's gaze against a unit vector pointing from their bounding box center towards the center of the camera. The layer features adaptive sampling, computes temporal metrics (peak engagement, variance, sustained engagement), and performs safe atomic writes.
 
-**Potential Errors & Solutions:**
-1. **Inaccurate Geometric Heuristic**: The dot-product algorithm assumes the focal length is roughly equivalent to the frame width and projects the camera at `(W/2, H/2)`. If the camera is heavily distorted (e.g. fish-eye POV lenses without un-distortion), the projection angle might mismatch the real-world gaze ray.
-   - *Solution*: Extract camera intrinsics from the specific dataset (Ego4D or EPIC-KITCHENS) to properly calibrate the `v_cam_z` (focal length) parameter in the projection math.
-2. **Missing Actor Hand Detection**: The current heuristic only scores attention towards the POV wearer's *camera/face*. The document requests checking for attention towards the POV actor's *hands* as well.
-   - *Solution (Documented)*: Implement a MediaPipe Egocentric Hand Detector in Node 02, log the hand bounding boxes, and pass them into Layer 03a to calculate a secondary dot-product vector `V_hands`.
-3. **Tracking Loss**: Because Node 02's output doesn't natively include a robust SORT tracker, bounding boxes might shift IDs across frames if multiple people intersect.
-   - *Solution (Documented)*: Implement an explicit DeepSORT or ByteTrack step in Node 02, or build a lightweight bounding-box IoU linker in this layer to strictly maintain `person_id` temporal consistency.
-4. **`include_detector=False` Crashes L2CS Pipeline (Resolved)**:
-   - **Problem**: The pipeline passes `include_detector=False` to the L2CS `Pipeline` constructor because bounding boxes are pre-computed by Node 02. However, the upstream `Pipeline.step()` method unconditionally called `np.stack(bboxes)`, `np.stack(landmarks)`, and `np.stack(scores)` on empty lists after the `predict_gaze` call, raising a `ValueError` on every inference. This was a critical runtime crash that prevented any real gaze inference from completing.
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **L2CS Pipeline Crash on Detector Bypass (Resolved - April 28)**:
+   - **Problem**: The pipeline passes `include_detector=False` to the L2CS `Pipeline` constructor because bounding boxes are pre-computed by Node 02. However, the upstream `Pipeline.step()` method unconditionally called `np.stack(bboxes)`, `np.stack(landmarks)`, and `np.stack(scores)` on empty lists after the `predict_gaze` call, raising a `ValueError` on every inference.
    - **Solution**: Patched `models/l2cs-net/l2cs/pipeline.py` to guard all three `np.stack()` calls with empty-list checks, returning `np.empty((0, 4))`, `np.empty((0, 5, 2))`, and `np.empty((0,))` for bboxes, landmarks, and scores respectively when no detector is used.
 
-5. **Gaze Vector Convention Mismatch (Resolved)**:
-   - **Problem**: The pipeline's 3D dot-product heuristic in `_track_and_score` used `(sin(yaw), -sin(pitch), cos(yaw)*cos(pitch))` to construct the gaze direction vector. However, L2CS's own `gazeto3d` utility defines the convention as `(-cos(yaw)*sin(pitch), -sin(yaw), -cos(yaw)*cos(pitch))`. These are different coordinate systems, meaning the pipeline was silently producing incorrect attention scores. Additionally, the camera-to-bystander direction vector `v_cam_z` was set to `+float(w)` (positive Z), while the L2CS coordinate frame uses negative Z to represent "into the screen" (toward the camera). Together, these two mismatches could invert the meaning of high vs. low attention.
-   - **Solution**: Replaced the hand-rolled vector math in `_track_and_score` with the L2CS `gazeto3d` convention: `v_look = (-cos(yaw)*sin(pitch), -sin(yaw), -cos(yaw)*cos(pitch))`. Corrected `v_cam_z` from `+float(w)` to `-float(w)` to align with the L2CS coordinate frame. The test suite confirms that `pitch=0, yaw=0` (looking straight at camera) still produces the expected attention score of `0.92`.
+2. **Gaze Vector Convention Mismatch (Resolved - April 28)**:
+   - **Problem**: The pipeline's 3D dot-product heuristic in `_track_and_score` used a coordinate system that mismatched L2CS's internal `gazeto3d` utility. Specifically, `v_cam_z` was set to positive Z, while the L2CS coordinate frame uses negative Z to represent "into the screen". This resulted in inverted or nonsensical attention scores.
+   - **Solution**: Replaced the hand-rolled vector math in `_track_and_score` with the L2CS `gazeto3d` convention: `v_look = (-cos(yaw)*sin(pitch), -sin(yaw), -cos(yaw)*cos(pitch))`. Corrected `v_cam_z` to `-float(w)` to align with the L2CS coordinate frame.
 
-6. **Dead Code in Sustained Engagement Calculation (Resolved)**:
-   - **Problem**: Lines 159-165 of `pipeline.py` contained a `for score in scores` loop with a `pass` body and two unused variables (`max_sustained`, `current_sustained`), left over from an incomplete initial implementation. The correct timestamp-based sustained engagement logic was already implemented immediately after this block, making the dead code misleading.
-   - **Solution**: Removed the dead loop and unused variables from `pipeline.py`, keeping only the accurate timestamp-based sustained engagement calculation.
+3. **Dead Code Cleanup in Engagement Logic (Resolved - April 28)**:
+   - **Problem**: Leftover implementation stubs and unused variables (`max_sustained`, `current_sustained`) remained in `pipeline.py`, making the production logic difficult to audit.
+   - **Solution**: Removed redundant loops and variables, strictly enforcing the validated timestamp-based sustained engagement calculation.
 
-7. **Silently Swallowed Gaze Inference Exceptions (Resolved)**:
-   - **Problem**: The `except Exception as e: pass` block in `_track_and_score` caught and discarded all errors from L2CS inference, including model crashes, tensor shape mismatches, and MPS backend failures. When inference failed, the frame received a default score of `0.0` with no indication that an error occurred, making systematic model failures invisible during batch runs.
-   - **Solution**: Replaced with `print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")` to surface failures in the console log while still allowing the pipeline to continue processing remaining frames.
+4. **Silent Exception Handling in Inference (Resolved - April 28)**:
+   - **Problem**: An `except Exception as e: pass` block caught and discarded all errors from L2CS inference, making systematic model failures (like MPS backend crashes) invisible during batch runs.
+   - **Solution**: Implemented explicit error logging to the console while maintaining pipeline continuity, ensuring that hardware or tensor shape errors are surfaced for debugging.
 
-8. **Invalid Indexing in Gaze Inference (Resolved)**:
-    - **Problem**: The pipeline used `results.pitch[0][0]` to extract angles. However, the L2CS `Pipeline.step()` returns 1D arrays of shape `(N,)`. Accessing `[0][0]` on a 1D array raised an `IndexError`, causing all scores to fallback to `0.0`.
-    - **Solution**: Updated `pipeline.py` to use `results.pitch[0]` and `results.yaw[0]`.
+5. **Invalid Indexing in Gaze Inference (Resolved - April 30)**:
+   - **Problem**: The pipeline attempted to access angles via `results.pitch[0][0]`, but the L2CS `Pipeline.step()` returns 1D arrays of shape `(N,)`. This raised an `IndexError` on every frame.
+   - **Solution**: Updated `pipeline.py` to use 1D indexing (`results.pitch[0]` and `results.yaw[0]`).
 
-9. **Inefficient Temporal Seeking in Batch Processing**:
-    - **Problem**: Using `cap.set(cv2.CAP_PROP_POS_FRAMES)` for adaptive sampling is slow on macOS with high-resolution Ego4D clips, leading to significant overhead.
-    - **Solution**: Future refactor should implement a sequential reading loop that skips frames in-memory to reach the next sampling point.
+## ⚠️ Unresolved Issues & Suggestions
 
-10. **VLM Bottleneck in E2E Pipeline**:
-    - **Problem**: Node 02's Task Labeling executes a Chat query every 5 seconds, creating a massive bottleneck during E2E verification of Layer 03a.
-    - **Solution**: Use a "fast-track" manifest or increase `interval_sec` for verification runs where only social geometry is being tested.
-
+- **Inaccurate Geometric Heuristic**: The dot-product algorithm assumes a simplified camera model. Integrating camera intrinsics from the Ego4D/EPIC-KITCHENS metadata to calibrate the focal length parameter is suggested for higher precision.
+- **Missing Actor Hand Detection**: The current implementation only scores attention towards the camera lens. Integrating a MediaPipe Egocentric Hand Detector into Node 02 to provide hand bounding boxes for scoring is recommended.
+- **Tracking Loss**: Bounding boxes may shift IDs across frames during multi-person intersections. Implementing DeepSORT or ByteTrack in Node 02 is suggested to maintain `person_id` temporal consistency.
+- **Inefficient Temporal Seeking**: Using `cap.set()` for adaptive sampling is slow on macOS. Refactoring the pipeline to use a sequential reading loop with frame-skipping is recommended for batch processing performance.
+- **VLM Bottleneck in E2E Pipeline**: Node 02's task labeling creates high latency. Using a "fast-track" manifest with reduced VLM sampling frequency is suggested for geometry-only verification runs.

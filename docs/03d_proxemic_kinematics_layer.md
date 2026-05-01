@@ -68,34 +68,32 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
 - **Strict Model Enforcement**: The bounding box fallback has been removed per architecture review. The pipeline now explicitly requires `transformers` and `torch` to be installed and will raise a `RuntimeError` if the Depth Anything V2 model cannot be initialized.
 - **Resilient Batch Processing**: Errors during depth map generation or video extraction are safely caught, logged to `03d_proxemic_kinematics_errors.json`, and the pipeline gracefully continues to the next video.
 
-### 🐛 Bug Fixes & Refinements
+## 🧪 Resolved Issues & Implementation Refinements
 
-During code audit and validation of the initial implementation, the following issues were identified and resolved:
+1. **Depth Map Resolution Mismatch (Resolved - April 28)**:
+   - **Problem**: The Depth Anything V2 pipeline returns depth maps at model-specific resolutions (e.g., 518x518), causing frame-level bounding box coordinates (e.g., 1920x1080) to index out-of-bounds or mask incorrect regions.
+   - **Solution**: Implemented dynamic rescaling of bounding box coordinates based on the ratio between the original frame dimensions and the returned depth map dimensions.
 
-1. **Depth Map Resolution Mismatch with Bounding Box Coordinates (Resolved - April 28)**:
-   - **Problem**: The Depth Anything V2 pipeline returns a depth map that may be a *different resolution* than the input frame (e.g., the model's internal processing size). The original code applied the raw bounding box pixel coordinates from the *original frame* directly onto the depth map array to create the masking region. If the depth map was, for example, 518×518 while the frame was 1920×1080, the mask coordinates would be completely wrong — producing either an out-of-bounds index error or masking the wrong region of the depth map, yielding garbage depth deltas.
-   - **Solution**: After obtaining the depth map array, the code now reads its actual `(dh, dw)` dimensions and computes `scale_x = dw / w` and `scale_y = dh / h` to rescale the bounding box coordinates before masking.
+2. **`VideoCapture` Resource Leak (Resolved - April 28)**:
+   - **Problem**: An early return in `_calculate_depth_delta` (triggered when `fps == 0`) failed to call `cap.release()`, leading to file descriptor leakage and potential `OSError: [Errno 24]` during large batch runs.
+   - **Solution**: Added explicit `cap.release()` calls before all early return paths.
 
-2. **`VideoCapture` Resource Leak on `fps == 0` Early Return (Resolved - April 28)**:
-   - **Problem**: In `_calculate_depth_delta`, if `cap.get(cv2.CAP_PROP_FPS)` returned 0, the method returned `None` without calling `cap.release()`. On long batch runs, this leaked file descriptors and could eventually trigger `OSError: [Errno 24] Too many open files`.
-   - **Solution**: Added `cap.release()` before the early return.
+3. **Performance Degradation via Inline Imports (Resolved - April 28)**:
+   - **Problem**: `from PIL import Image` was re-imported inside the frame processing hot loop, adding redundant overhead for every sampled frame.
+   - **Solution**: Moved all `PIL` imports to the module's top-level scope.
 
-3. **`PIL.Image` Re-imported Inside Hot Loop (Resolved - April 28)**:
-   - **Problem**: `from PIL import Image` was placed inside the `for t, bbox in valid_frames` loop in `_calculate_depth_delta`. Python re-resolves the import statement on every iteration, adding unnecessary overhead for every frame processed.
-   - **Solution**: Moved the `from PIL import Image` import to the module's top-level imports.
-
-4. **Dead `import math` (Resolved - April 28)**:
-   - **Problem**: The `math` module was imported at the top of `pipeline.py` but never used anywhere in the file.
+4. **Dead Code Removal (Resolved - April 28)**:
+   - **Problem**: Unused `import math` remained in `pipeline.py`, increasing module load time and cluttering the codebase.
    - **Solution**: Removed the unused import.
 
-5. **HF_HOME Cache Location Ignored (Resolved - April 29)**:
-   - **Problem**: The `HF_HOME` environment variable was being set inside the class initialization, but the `transformers` library was imported at the module level. Since `transformers` performs some path initialization upon import, it ignored the late-set `HF_HOME` and defaulted to `~/.cache/huggingface`.
-   - **Solution**: Moved the `os.environ['HF_HOME']` assignment to the very top of `pipeline.py`, before any `transformers` or `torch` imports.
+5. **HuggingFace Cache Location Override (Resolved - April 29)**:
+   - **Problem**: Setting `os.environ['HF_HOME']` inside the class constructor was too late, as the `transformers` library initializes its cache paths upon module-level import.
+   - **Solution**: Moved the `HF_HOME` environment assignment to the absolute top of `pipeline.py`, ensuring it precedes any `transformers` or `torch` imports.
 
-### ⚠️ Known Limitations & Troubleshooting
+## ⚠️ Unresolved Issues & Suggestions
 
-- **Missing `transformers` Dependency**: If you encounter an error stating `transformers and torch are required`, ensure you have installed them in your active virtual environment (`pip install transformers huggingface_hub`).
-- **Occlusion Glitches**: Fast-moving objects (like hands or tools) passing in front of the bystander's bounding box can skew the median depth map calculation. The system relies on the YOLO person bounding box to mask the depth map, which does not currently perform instance segmentation (pixel-perfect masking). A future improvement would be to use a SAM-style instance segmentation mask instead of the rectangular YOLO bbox.
-- **Adaptive Frame Sampling**: To maintain performance, the depth estimator extracts a maximum of 5 evenly spaced frames from the task reaction window. This prevents GPU/MPS memory exhaustion but may miss micro-movements occurring between sampled frames.
-- **Test Suite Fragility (`test_schema_conformance`)**: The `test_schema_conformance` test globally patches `pathlib.Path.exists` to always return `True`. This is necessary to bypass the file-existence check for the dummy video path, but it also affects the resumability guard in `__init__` (which checks if the output file already exists). If tests are run in certain orders or combined with other test files that create real output files, the global patch could cause unexpected behavior. A more surgical mock (patching only the specific `Path` instance) would be safer but is deferred for now as the current test suite runs cleanly.
-- **Conflicting Scale vs. Depth Signals**: In edge cases (e.g., camera moving while bystander is moving), the bounding box scale delta and Depth Anything V2 depth delta may produce opposite vectors. The current weighted average (40% scale, 60% depth) tends to yield a "Neutral" classification in these scenarios, which is the safest default. Future iterations may include a "Confidence" score based on signal agreement.
+- **Occlusion Glitches**: Fast-moving objects passing between the camera and bystander can skew the median depth calculation. Transitioning from rectangular YOLO bounding box masks to pixel-perfect **Segment Anything (SAM)** instance masks is suggested for higher precision.
+- **Micro-movement Aliasing**: The current adaptive sampling (max 5 frames per window) may miss rapid micro-movements. Implementing a sequential frame-skipping loop instead of random seeking is recommended to improve temporal resolution without exceeding memory limits.
+- **Test Suite Resumability Guard**: The `test_schema_conformance` mock globally patches `pathlib.Path.exists`, which can interfere with the pipeline's resumability logic during concurrent test runs. Moving to a more surgical, instance-level mock is suggested.
+- **Heuristic Signal Conflict**: In scenarios with simultaneous camera and bystander movement, scale and depth deltas can contradict each other. Implementing a "Confidence" score based on signal agreement is suggested to flag ambiguous results.
+- **Missing Dependency Validation**: The pipeline requires `transformers` and `torch`. Adding a more robust startup dependency check that offers one-line install commands (e.g., `pip install transformers huggingface_hub`) is recommended.

@@ -77,51 +77,49 @@ The Acoustic Prosody Layer has been implemented and successfully integrated:
 - **Robust Heuristics**: Finalized the mathematical mappings to correlate acoustic payload probabilities with discrete scalar outcomes ("Alarming", "Soothing", "Discouraging", "Neutral").
 - **Verification Framework**: Fully mocked test suite using `pytest` implemented in `tests/test_layer_03c.py` ensuring pipeline math and schema output validations pass successfully.
 
-## 🧪 Resolved Issues & Implementation Refinements (April 2026)
+## 🧪 Resolved Issues & Implementation Refinements
 
-During code review and validation of the initial implementation, the following critical issues were identified and resolved:
+1. **Missing `__init__.py` (Resolved - April 28)**:
+   - **Problem**: The `src/layer_03c_acoustic_prosody/` directory lacked an `__init__.py` file, preventing the module from being imported by the test suite or cross-layer consumers.
+   - **Solution**: Added an empty `__init__.py` to match the project's modular package structure.
 
-1. **Missing `__init__.py` (Resolved)**:
-   - **Problem**: The `src/layer_03c_acoustic_prosody/` directory lacked an `__init__.py` file. While the CLI entrypoint (`if __name__ == "__main__"`) worked, the module could not be imported by the test suite (`from src.layer_03c_acoustic_prosody.pipeline import ...`) or by any future cross-layer consumer, breaking Python's package resolution.
-   - **Solution**: Added an empty `__init__.py` to match the pattern established by all sibling layer modules (`03a`, `03b`).
+2. **Temp File Collision on Concurrent Runs (Resolved - April 28)**:
+   - **Problem**: Audio extraction used deterministic filenames in `/tmp`, leading to silent overwrites or reading stale data when processing multiple videos concurrently.
+   - **Solution**: Replaced hardcoded paths with `tempfile.mkstemp(suffix=".wav", prefix="prosody_")` to ensure guaranteed-unique, OS-assigned paths.
 
-2. **Temp File Collision on Concurrent Runs (Resolved)**:
-   - **Problem**: The original `_extract_audio_chunk` used a deterministic filename constructed from `os.path.basename(video_path)` + start/end seconds in the system `/tmp` directory (e.g., `temp_audio_clip.mp4_1.0_3.0.wav`). If two pipeline instances processed the same video concurrently, or if a previous run crashed leaving the file behind, the second process would silently overwrite or read a stale/partial `.wav`.
-   - **Solution**: Replaced with `tempfile.mkstemp(suffix=".wav", prefix="prosody_")`, which returns a guaranteed-unique, OS-assigned path. The file descriptor is immediately closed so `ffmpeg` can write to the path.
+3. **`librosa.pyin` Voiced Flag Misuse (Resolved - April 28)**:
+   - **Problem**: The code used a float probability array as a boolean mask for pitch filtering, causing incorrect calculations and potential `IndexError`.
+   - **Solution**: Changed filtering logic to `f0[~np.isnan(f0)]`, which correctly isolates voiced frames across all numpy versions.
 
-3. **`librosa.pyin` Voiced Flag Misuse (Resolved)**:
-   - **Problem**: The original code did `f0[voiced_flag]` to filter pitch values to only voiced frames. However, `librosa.pyin` returns `voiced_flag` as a float probability array (not a boolean mask), and `f0` contains `NaN` for unvoiced frames. Using a float array as an index produced incorrect filtering and potential `IndexError` on some numpy versions.
-   - **Solution**: Changed to `f0[~np.isnan(f0)]`, which correctly filters to only the voiced frames regardless of the `voiced_flag` dtype.
+4. **Empty WAV Header-Only Guard Missing (Resolved - April 28)**:
+   - **Problem**: FFmpeg produces 44-byte header-only files when reaction windows exceed video duration. The original `getsize > 0` check allowed these invalid files through, crashing downstream models.
+   - **Solution**: Updated guard to `os.path.getsize(out_wav) > 44` to ensure only files with actual sample data are processed.
 
-4. **Empty WAV Header-Only Guard Missing (Resolved)**:
-   - **Problem**: When `ffmpeg` extracts audio from a reaction window that extends beyond the video's actual duration (common in the manifest — e.g., video `61EI0` has duration 17.09s but task t_04's window is `[18.04, 22.04]`), it produces a valid `.wav` file containing only the 44-byte WAV header and zero audio samples. The original code checked `os.path.getsize(out_wav) > 0`, which passed for these header-only files, causing downstream `librosa` and `funasr` to process silence or crash.
-   - **Solution**: Changed the guard to `os.path.getsize(out_wav) > 44` (the standard WAV header size), ensuring only files with actual audio data are forwarded to the models.
+5. **No Error Log File — Architecture Policy Violation (Resolved - April 28)**:
+   - **Problem**: The layer silently swallowed per-video exceptions, violating the architectural requirement for persistent error logging (`<layer>_errors.json`).
+   - **Solution**: Implemented a `_log_error()` method and wrapped the processing loop in a `try/except` block to record structured tracebacks to `03c_acoustic_prosody_errors.json`.
 
-5. **No Error Log File — Architecture Policy Violation (Resolved)**:
-   - **Problem**: The `03_social_layer_architecture.md` Failure & Resumability Policy requires every layer to log per-video errors to a `<layer>_errors.json` file. The initial implementation silently swallowed per-video exceptions via bare `continue` statements, making debugging impossible for batch runs.
-   - **Solution**: Added `_log_error()` method (mirroring `03b`'s pattern) that writes structured error entries with tracebacks to `03c_acoustic_prosody_errors.json`. Wrapped the per-video task loop in `try/except` to catch and log errors without halting the batch.
+6. **Missing Python Dependencies — `funasr`, `librosa`, `torchaudio` (Resolved - April 29)**:
+   - **Problem**: Core ML dependencies were missing from the environment, causing the pipeline to silently degrade to all-Neutral stubs.
+   - **Solution**: Installed required packages and implemented explicit `RuntimeError` raises at initialization time to ensure the pipeline "fails fast" if dependencies are absent.
 
-6. **Missing Python Dependencies — `funasr`, `librosa`, `torchaudio` (Resolved)**:
-   - **Problem**: `funasr` and `librosa` were not installed in the workspace virtual environment. The pipeline silently degraded to producing all-Neutral results, making it appear functional while producing no real analysis.
-   - **Solution**:
-     - Installed all required packages: `venv/bin/pip install librosa funasr torchaudio`.
-     - **Hardened startup validation**: Replaced the silent `try/except ImportError` fallbacks with explicit `RuntimeError` raises that include actionable install commands (e.g., `"Install with: venv/bin/pip install funasr torchaudio"`). The pipeline now fails fast at `__init__` time if any dependency is missing.
-     - Added 3 new unit tests (`test_init_raises_without_ffmpeg`, `test_init_raises_without_librosa`, `test_init_raises_without_funasr`) verifying that the startup validation triggers correctly.
+7. **First Run Latency — emotion2vec+ Model Download (Resolved - April 29)**:
+   - **Problem**: Automatic downloading of the ~600MB SER model on the first run caused significant cold-start latency and appeared to hang.
+   - **Solution**: Pre-fetched model weights and configured the pipeline to use `disable_update=True` for instantaneous offline loading.
 
-7. **First Run Latency — emotion2vec+ Model Download (Resolved)**:
-   - **Problem**: The `emotion2vec+ large` model weights (~600MB) would be downloaded from ModelScope on the very first execution, causing an apparent hang with no user feedback.
-   - **Solution**: Pre-fetched the model weights by running a one-shot initialization script. The weights are now cached at `~/.cache/modelscope/hub/models/iic/emotion2vec_plus_large/`. Subsequent runs use `disable_update=True` for instantaneous offline loading.
+8. **FFmpeg Binary Missing (Resolved - April 29)**:
+   - **Problem**: The Mac mini lacked `ffmpeg`, causing all audio slicing operations to fail silently.
+   - **Solution**: Installed `ffmpeg` via Homebrew and added a `shutil.which("ffmpeg")` startup check to enforce its presence.
 
-8. **FFmpeg Not Installed (Resolved)**:
-   - **Problem**: The Mac mini did not have `ffmpeg` installed. Audio slicing silently failed and every task produced a "Neutral" stub.
-   - **Solution**:
-     - Installed via `brew install ffmpeg` (v8.1 now at `/opt/homebrew/bin/ffmpeg`).
-     - Added `shutil.which("ffmpeg")` check in `_init_models()` that raises `RuntimeError` with install instructions if the binary is absent. This prevents silent degradation on a fresh machine.
+9. **Test Manifest Latency — Ego4D Full-Length Videos (Resolved - April 30)**:
+   - **Problem**: E2E validation against full Ego4D clips (>900s) was prohibitively slow for iterative development.
+   - **Solution**: Developed a `mock_filtered_manifest.json` with pre-defined task windows and targeted shorter clips to reduce validation cycles to sub-minute durations.
 
-9. **Test Manifest Latency — Ego4D Full-Length Videos (Resolved)**:
-   - **Problem**: Initial E2E tests against the `ego4d_test_input.json` manifest were extremely slow. Some videos were >900s, causing the upstream Node 02 (filtering) to take over an hour per video due to VLM interval processing.
-   - **Solution**: Refined the test manifest to specifically include shorter Ego4D samples (~128s) to accelerate validation cycles. For 03c specific logic, created a `mock_filtered_manifest.json` pointing to valid video files but with pre-defined task windows, allowing for sub-minute E2E verification of audio-to-prosody logic.
+10. **SER Label Parsing Failure — 'Chinese/English' Format (Resolved - April 30)**:
+    - **Problem**: The `emotion2vec+` model returns composite labels (e.g., `'生气/angry'`), which mismatched the English-only lookup keys and resulted in `0.0` scores.
+    - **Solution**: Updated `_run_ser_model` to split labels and extract the English component, ensuring correct mapping to social heuristics.
 
-10. **SER Label Parsing Failure — 'Chinese/English' Format (Resolved)**:
-    - **Problem**: The `emotion2vec+` model returns labels in a composite format (e.g., `'生气/angry'`). The initial parsing logic looked for exact matches with lowercase English keys (e.g., `'angry'`), causing all emotion scores to fail mapping and default to `0.0`. This resulted in every task being incorrectly classified based solely on volume heuristics.
-    - **Solution**: Updated `_run_ser_model` to split labels by `/` and extract the English component. Verified via "smell test" that a laundry video correctly mapped to 'happy' (Soothing) instead of 'angry' (Alarming).
+## ⚠️ Unresolved Issues & Suggestions
+
+- **Supplementary Audio Event Detection**: The current implementation focuses strictly on speech prosody. Integrating **SenseVoice** to detect non-speech events like laughter, applause, or crying is suggested to provide richer social context.
+- **torchaudio Streaming**: For processing extremely long clips, moving from `ffmpeg` subprocess slicing to **torchaudio chunked streaming** is suggested to further reduce disk I/O and temporary file overhead.
