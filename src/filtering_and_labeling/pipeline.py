@@ -1,15 +1,19 @@
 import json
 import cv2
+import gc
 import torch
 import numpy as np
 import tempfile
 import os
 import shutil
 import traceback
+import re
 from pathlib import Path
 from ultralytics import YOLO
 import ollama
 from shared.social_presence import SocialPresenceDetector
+import config
+
 
 class FilteringPipeline:
     def __init__(self, input_manifest_path, output_manifest_path, force=False):
@@ -18,10 +22,13 @@ class FilteringPipeline:
         self.error_log_path = self.output_manifest_path.parent / "02_filter_errors.json"
         self.force = force
         
-        # Load YOLOv8 model via shared detector
-        print("Loading YOLO model...")
+        # Shared components
         self.detector = SocialPresenceDetector('yolov8n.pt')
         self.vlm_model = "qwen2.5vl"
+        
+        # Pass storage
+        self.initial_registry = [] # For Pass 1
+        self.intermediate_results = [] # Pass 1 output
         
         self.processed_ids = set()
         if self.output_manifest_path.exists() and not self.force:
@@ -33,38 +40,121 @@ class FilteringPipeline:
             except Exception as e:
                 print(f"Error loading existing manifest: {e}. Starting fresh.")
         
+        # Load Ego4D Metadata
+        self.metadata = self._load_metadata()
+
+    def _load_metadata(self):
+        """ Load Ego4D metadata and index by video_uid """
+        metadata_path = config.EGO4D_METADATA_PATH
+        if metadata_path.exists():
+            print(f"Loading Ego4D metadata from {metadata_path}...")
+            try:
+                with open(metadata_path, 'r') as f:
+                    data = json.load(f)
+                    videos = data.get('videos', [])
+                    return {v['video_uid']: v for v in videos}
+            except Exception as e:
+                print(f"Error loading metadata: {e}")
+        else:
+            print(f"Metadata file not found at {metadata_path}")
+        return {}
+
+        
+    def cleanup_yolo(self):
+        """ Explicitly free YOLO memory before VLM pass """
+        if hasattr(self, 'detector'):
+            self.detector.unload()
+        gc.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
     def run(self):
         with open(self.input_manifest_path, 'r') as f:
-            registry = json.load(f)
+            self.initial_registry = json.load(f)
             
-        filtered_results = []
+        final_results = []
         # Load existing results to append to them if not forcing
         if self.output_manifest_path.exists() and not self.force:
             try:
                 with open(self.output_manifest_path, 'r') as f:
-                    filtered_results = json.load(f)
+                    final_results = json.load(f)
+                    self.processed_ids = {entry['video_id'] for entry in final_results}
             except:
                 pass
 
-        for entry in registry:
+        # --- PASS 1: Social Filter (YOLO) ---
+        print("\n--- PASS 1: Social Filter (YOLO) ---")
+        pass1_queue = []
+        for entry in self.initial_registry:
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
                 continue
+            
+            video_path = Path(entry['file_path'])
+            if not video_path.exists(): continue
 
-            print(f"Processing video: {video_id}")
+            print(f"Social Filter: {video_id}")
+            bystander_detections = self.social_presence_filter(video_path)
+            if bystander_detections:
+                entry['bystander_detections'] = bystander_detections
+                pass1_queue.append(entry)
+            else:
+                print(f"Dropped {video_id}: No social presence.")
+
+        # --- MEMORY CLEANUP ---
+        self.cleanup_yolo()
+
+        # --- PASS 2: Task Labeling & Climax (VLM) ---
+        print("\n--- PASS 2: Task Labeling & Climax (VLM) ---")
+        for entry in pass1_queue:
+            video_id = entry.get('id', entry.get('video_id'))
+            print(f"Task Refinement: {video_id}")
             try:
-                result = self.process_video(entry)
+                result = self.process_video_vlm_pass(entry)
                 if result:
-                    filtered_results.append(result)
+                    final_results.append(result)
                     self.processed_ids.add(video_id)
                     
                     # Incremental save
                     with open(self.output_manifest_path, 'w') as f:
-                        json.dump(filtered_results, f, indent=4)
+                        json.dump(final_results, f, indent=4)
             except Exception as e:
                 self.log_error(video_id, e)
                 
-        print(f"Final count: {len(filtered_results)} videos in manifest.")
+        print(f"Final count: {len(final_results)} videos in manifest.")
+
+    def process_video_vlm_pass(self, entry):
+        """ Pass 2: Labeling and Climax Identification """
+        video_id = entry.get('id', entry.get('video_id'))
+        video_path = Path(entry['file_path'])
+        
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened(): return None
+            
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration_sec = total_frames / fps
+        
+        # 2. Contextual Task Labeling
+        identified_tasks = self.contextual_task_labeling(video_id, duration_sec)
+        if not identified_tasks:
+            cap.release()
+            return None
+            
+        # 3. Temporal Task Climax Identification (Batched VLM)
+        self.temporal_climax_identification(cap, fps, total_frames, identified_tasks)
+        
+        cap.release()
+        
+        return {
+            "video_id": video_id,
+            "source_dataset": entry['dataset'],
+            "video_path": str(video_path),
+            "fps": fps,
+            "duration_sec": duration_sec,
+            "identified_tasks": identified_tasks,
+            "bystander_detections": entry['bystander_detections']
+        }
 
     def log_error(self, video_id, error):
         error_entry = {
@@ -86,54 +176,8 @@ class FilteringPipeline:
         with open(self.error_log_path, 'w') as f:
             json.dump(errors, f, indent=4)
 
-    def process_video(self, entry):
-        video_id = entry.get('id', entry.get('video_id'))
-        video_path = Path(entry['file_path'])
-        if not video_path.exists():
-            print(f"File not found: {video_path}")
-            return None
-            
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            print(f"Failed to open video: {video_path}")
-            return None
-            
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if fps == 0 or total_frames == 0:
-            cap.release()
-            return None
-            
-        duration_sec = total_frames / fps
-        
-        # 1. Social Presence Filter (1 FPS)
-        bystander_detections = self.social_presence_filter(video_path)
-        if not bystander_detections:
-            print(f"Dropped {video_id}: No bystanders detected.")
-            cap.release()
-            return None
-            
-        # 2. Contextual Task Labeling & Velocity (Every 5 seconds)
-        identified_tasks = self.contextual_task_labeling(cap, fps, total_frames, duration_sec)
-        if not identified_tasks:
-            print(f"Dropped {video_id}: No clear tasks identified.")
-            cap.release()
-            return None
-            
-        # 3. Temporal Task Climax Identification
-        self.temporal_climax_identification(cap, fps, total_frames, identified_tasks)
-        
-        cap.release()
-        
-        return {
-            "video_id": video_id,
-            "source_dataset": entry['dataset'],
-            "video_path": str(video_path),
-            "fps": fps,
-            "duration_sec": duration_sec,
-            "identified_tasks": identified_tasks,
-            "bystander_detections": bystander_detections
-        }
+    # No longer needed as we use two-pass
+    # def process_video(self, entry): ...
 
     def social_presence_filter(self, video_path, sample_rate_fps=1):
         """ Sample frames at sample_rate_fps and detect all persons. """
@@ -175,116 +219,62 @@ class FilteringPipeline:
                     
         return bystanders
 
-    def contextual_task_labeling(self, cap, fps, total_frames, duration_sec, interval_sec=5):
-        """ Use Qwen2.5-VL to classify tasks """
-        tasks = []
+    def contextual_task_labeling(self, video_id, duration_sec):
+        """ Use Ego4D metadata to identify tasks and map velocities """
+        if video_id not in self.metadata:
+            # Try removing extension if present in video_id
+            clean_id = video_id.split('.')[0]
+            if clean_id not in self.metadata:
+                print(f"Warning: No metadata found for video {video_id}")
+                return []
+            video_meta = self.metadata[clean_id]
+        else:
+            video_meta = self.metadata[video_id]
+
+        scenarios = video_meta.get('scenarios', [])
+        if not scenarios:
+            return []
+
+        # Map scenarios to identified_tasks
+        # Since we don't have per-interval metadata in ego4d.json (it's video-level),
+        # we treat the entire video as containing these tasks.
+        # Downstream optical flow will find the specific climax.
         
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            for time_sec in range(0, int(duration_sec), interval_sec):
-                frame_idx = int(time_sec * fps)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                img_path = temp_path / f"frame_{frame_idx}.jpg"
-                cv2.imwrite(str(img_path), frame)
-                
-                prompt = (
-                    "What task is the person performing in this egocentric/first-person video? "
-                    "Respond with a short phrase describing the task. "
-                    "If there is no clear task being performed, just say 'Idling'. "
-                    "Also, estimate the physical velocity of the task as one of: [fast, medium, slow]. "
-                    "Format your response EXACTLY as: 'Task: <task_description>. Velocity: <velocity>.'"
-                )
-                
-                try:
-                    response = ollama.chat(model=self.vlm_model, messages=[
-                        {
-                            'role': 'user',
-                            'content': prompt,
-                            'images': [str(img_path)]
-                        }
-                    ])
-                    content = response['message']['content'].strip()
-                    print(f"Raw VLM response: {content}")
-                    
-                    # Parse response
-                    task_label = "Idling"
-                    velocity = "medium"
-                    
-                    if "Task:" in content:
-                        parts = content.split("Velocity:")
-                        task_label = parts[0].replace("Task:", "").strip().strip('.')
-                        if len(parts) > 1:
-                            v = parts[1].strip().lower().strip('.')
-                            if v in ['fast', 'medium', 'slow']:
-                                velocity = v
-                    
-                    # Normalize labels
-                    normalized_label = task_label.lower().strip().strip('.')
-                    if not normalized_label or "idling" in normalized_label or "no clear task" in normalized_label:
-                        task_label = "Idling"
-                    
-                    tasks.append({
-                        "start_sec": time_sec,
-                        "end_sec": min(time_sec + interval_sec, duration_sec),
-                        "label": task_label,
-                        "velocity": velocity
-                    })
-                    
-                except Exception as e:
-                    print(f"Ollama error: {e}")
-                    
-        # Merge identical sequential tasks
-        merged_tasks = []
-        current_task = None
-        merge_count = 0
-        
-        for t in tasks:
-            label = t['label']
-            if label.lower().strip('.') in ["idling", "no clear task"]:
+        identified_tasks = []
+        for i, scenario in enumerate(scenarios):
+            # Normalize label
+            label = scenario.strip()
+            if not label or label.lower() in ["idling", "no clear task", "ambiguous activity"]:
                 continue
-                
-            # Normalize for comparison
-            normalized_label = label.lower().strip().strip('.')
+
+            # Heuristic velocity mapping
+            velocity = self._get_velocity_from_label(label)
             
-            if current_task is None:
-                current_task = {
-                    "task_id": f"t_{len(merged_tasks)+1:02d}",
-                    "task_label": label,
-                    "task_confidence": 0.0, # Placeholder
-                    "task_velocity": t['velocity'],
-                    "task_start_sec": t['start_sec'],
-                    "task_end_sec": t['end_sec'],
-                    "task_temporal_metadata": {}
-                }
-                merge_count = 1
-            elif current_task['task_label'].lower().strip().strip('.') == normalized_label:
-                current_task['task_end_sec'] = t['end_sec']
-                merge_count += 1
-            else:
-                # Calculate confidence before switching
-                current_task['task_confidence'] = round(min(0.95, 0.7 + (merge_count * 0.05)), 2)
-                merged_tasks.append(current_task)
-                current_task = {
-                    "task_id": f"t_{len(merged_tasks)+1:02d}",
-                    "task_label": label,
-                    "task_confidence": 0.0,
-                    "task_velocity": t['velocity'],
-                    "task_start_sec": t['start_sec'],
-                    "task_end_sec": t['end_sec'],
-                    "task_temporal_metadata": {}
-                }
-                merge_count = 1
-                
-        if current_task:
-            current_task['task_confidence'] = round(min(0.95, 0.7 + (merge_count * 0.05)), 2)
-            merged_tasks.append(current_task)
-            
-        return merged_tasks
+            task = {
+                "task_id": f"t_{len(identified_tasks)+1:02d}",
+                "task_label": label,
+                "task_confidence": 1.0, # Ground truth metadata
+                "task_velocity": velocity,
+                "task_start_sec": 0.0,
+                "task_end_sec": round(duration_sec, 2),
+                "task_temporal_metadata": {}
+            }
+            identified_tasks.append(task)
+
+        return identified_tasks
+
+    def _get_velocity_from_label(self, label):
+        """ Heuristic to map task labels to physical velocity """
+        l = label.lower()
+        fast_keywords = ['drop', 'slip', 'fall', 'throw', 'hit', 'impact', 'jump', 'run', 'fast', 'accident', 'shatter']
+        slow_keywords = ['read', 'write', 'think', 'solve', 'puzzle', 'watch', 'look', 'sit', 'slow', 'wait', 'rest']
+        
+        if any(k in l for k in fast_keywords):
+            return 'fast'
+        if any(k in l for k in slow_keywords):
+            return 'slow'
+        return 'medium'
+
 
     def temporal_climax_identification(self, cap, fps, total_frames, identified_tasks):
         """ Compute optical flow to find task climax, with VLM refinement for slow tasks """
@@ -337,51 +327,59 @@ class FilteringPipeline:
             extraction_method = "optical_flow_peak"
             vlm_confidence = None
             
-            # Stage 2: VLM Refinement for slow tasks
+            # Stage 2: Batched VLM Refinement for slow tasks
             if task['task_velocity'] == 'slow' and len(flow_data) > 1:
                 # Sort by flow and pick top 3 candidates around the peak
                 candidates = sorted(flow_data, key=lambda x: x[1], reverse=True)[:3]
+                candidates = sorted(candidates, key=lambda x: x[0]) # Chronological
                 
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_path = Path(temp_dir)
-                    best_vlm_score = -1
-                    refined_climax_frame = climax_frame
+                    img_paths = []
                     
-                    for cand_frame, cand_mag in candidates:
+                    for i, (cand_frame, _) in enumerate(candidates):
                         cap.set(cv2.CAP_PROP_POS_FRAMES, cand_frame)
                         ret, frame = cap.read()
                         if not ret: continue
                         
-                        img_path = temp_path / f"cand_{cand_frame}.jpg"
+                        # Resize for VLM memory efficiency (max 1024px)
+                        h, w = frame.shape[:2]
+                        max_dim = 1024
+                        if max(h, w) > max_dim:
+                            scale = max_dim / max(h, w)
+                            frame = cv2.resize(frame, (0,0), fx=scale, fy=scale)
+                        
+                        img_path = temp_path / f"cand_{i+1}.jpg"
                         cv2.imwrite(str(img_path), frame)
-                        
-                        prompt = (
-                            f"The person is performing the task: '{task['task_label']}'. "
-                            "On a scale of 0 to 10, how well does this image represent the 'climax' or "
-                            "the most critical moment of this action? Respond with just the number."
-                        )
-                        
-                        try:
-                            response = ollama.chat(model=self.vlm_model, messages=[
-                                {'role': 'user', 'content': prompt, 'images': [str(img_path)]}
-                            ])
-                            score_str = response['message']['content'].strip()
-                            # Extract first number
-                            import re
-                            scores = re.findall(r'\d+', score_str)
-                            if scores:
-                                score = int(scores[0])
-                                if score > best_vlm_score:
-                                    best_vlm_score = score
-                                    refined_climax_frame = cand_frame
-                        except:
-                            pass
+                        img_paths.append(str(img_path))
                     
-                    if best_vlm_score != -1:
-                        climax_frame = refined_climax_frame
-                        climax_sec = climax_frame / fps
-                        extraction_method = "optical_flow_peak+vlm_refinement"
-                        vlm_confidence = round(best_vlm_score / 10.0, 2)
+                    if not img_paths: continue
+
+                    prompt = (
+                        f"The person is performing the task: '{task['task_label']}'. "
+                        f"I have provided {len(img_paths)} images from the video. "
+                        "Which image (respond with just the number 1, 2, or 3) "
+                        "best represents the 'climax' or the most critical moment of this action? "
+                        "If you are unsure, pick the one with the most active motion."
+                    )
+                    
+                    try:
+                        response = ollama.chat(model=self.vlm_model, messages=[
+                            {'role': 'user', 'content': prompt, 'images': img_paths}
+                        ])
+                        content = response['message']['content'].strip()
+                        matches = re.findall(r'[1-3]', content)
+                        if matches:
+                            choice = int(matches[0]) - 1 # 0-indexed
+                            if choice < len(candidates):
+                                climax_frame = candidates[choice][0]
+                                climax_sec = climax_frame / fps
+                                extraction_method = "optical_flow_peak+vlm_refinement"
+                                # We treat the choice as "confidence 1.0" for the selected frame
+                                vlm_confidence = 1.0 
+                    except Exception as e:
+                        print(f"VLM Refinement failed: {e}")
+                        pass
 
             # Dynamic Reaction Window based on velocity
             velocity = task['task_velocity']

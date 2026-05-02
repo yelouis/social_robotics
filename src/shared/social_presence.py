@@ -1,4 +1,6 @@
 import cv2
+import gc
+import torch
 from ultralytics import YOLO
 from pathlib import Path
 
@@ -11,8 +13,23 @@ class SocialPresenceDetector:
     def model(self):
         if self._model is None:
             # Lazy loading to save memory if not used
+            print(f"[SocialPresenceDetector] Loading YOLO model: {self.model_path}")
             self._model = YOLO(self.model_path)
         return self._model
+
+    def unload(self):
+        """ Explicitly unload the model and clear memory """
+        if self._model is not None:
+            print(f"[SocialPresenceDetector] Unloading YOLO model...")
+            del self._model
+            self._model = None
+            
+        # Force garbage collection and clear MPS/CUDA cache
+        gc.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        elif torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def detect(self, video_path: Path, sample_rate_fps=1, fast_mode=False, min_consistency=2):
         """

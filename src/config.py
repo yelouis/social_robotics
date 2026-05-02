@@ -15,6 +15,7 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/Volumes/Extreme SSD/social_robotics/
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+EGO4D_METADATA_PATH = Path(os.getenv("EGO4D_METADATA_PATH", "/Volumes/Extreme SSD/ego4d_data/v2/annotations/ego4d.json"))
 
 # EPIC-KITCHENS-100 configuration
 EPIC_KITCHENS_USER = os.getenv("EPIC_KITCHENS_USER")
