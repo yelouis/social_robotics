@@ -82,6 +82,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_label": "Chopping vegetables",
       "task_confidence": 0.92,
       "task_velocity": "medium",
+      "task_start_sec": 0.0,
+      "task_end_sec": 45.0,
       "task_temporal_metadata": {
         "task_climax_sec": 5.2,
         "task_reaction_window_sec": [6.2, 8.2],
@@ -95,6 +97,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_label": "Dropping a plate",
       "task_confidence": 0.88,
       "task_velocity": "fast",
+      "task_start_sec": 0.0,
+      "task_end_sec": 45.0,
       "task_temporal_metadata": {
         "task_climax_sec": 24.1,
         "task_reaction_window_sec": [24.6, 26.1],
