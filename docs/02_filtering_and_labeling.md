@@ -124,58 +124,54 @@ To ensure the filtering mechanisms are robust and correct:
 
 ---
 
-## Implementation Status & Findings
+## 🚀 Implementation Status
 
-### Accomplished
-- **Social Presence Filter**: Successfully implemented using YOLOv8 (`yolov8n.pt`) via the `ultralytics` package. Downsampled frames (1 FPS) are scanned for 'person' classes. Output properly structures the strictly co-indexed bounding boxes, timestamps, and confidence scores.
-- **Contextual Task Labeling**: Implemented the frame sampling logic and integration with `ollama` Python client to query a local VLM. 
-- **Temporal Task Climax Identification**: Successfully implemented `cv2.calcOpticalFlowFarneback` to compute dense optical flow at ~5 FPS within the identified task segment. The kinetic peak magnitude and dynamic `task_reaction_window_sec` are accurately captured.
-- **Schema Validation**: The pipeline accurately outputs `filtered_manifest.json` completely aligned with the defined schema, correctly dropping videos when no tasks or no bystanders are present.
+The filtering and labeling pipeline is fully operational within the `src/dataset_acquisition` and `src/filtering_and_labeling` modules. 
+- **Social Presence Filter**: Successfully implemented using YOLOv8 (`yolov8n.pt`) with a multi-stage Anti-Wearer Heuristic.
+- **Contextual Task Labeling**: Upgraded to **Qwen2.5-VL** via Ollama for superior instruction-following and visual accuracy compared to early `moondream` iterations.
+- **Temporal Climax Identification**: Implemented a hybrid two-stage approach using dense optical flow (`cv2.calcOpticalFlowFarneback`) and VLM-based refinement.
 
-### Encountered Problems
-1. **Moondream Instruction Following (Resolved)**: The initial use of `moondream` (1.8B) resulted in poor instruction following for complex, multi-part prompt formatting. It frequently returned empty strings or hallucinatory text.
-2. **Empty Task Extraction (Resolved)**: Using the lightweight model caused valid social interactions to be dropped due to inaccurate scene parsing.
+## 🧪 Resolved Issues & Implementation Refinements
 
-### Current Implementation & Solutions
-- **Model Upgrade (Implemented)**: The pipeline has been upgraded to use **Qwen2.5-VL** via Ollama for the Contextual Task Labeling phase. This model possesses significantly stronger instruction-following capabilities and visual understanding, resolving the issues with structured output formatting and scene parsing accuracy.
-- **Robust Prompting**: Even with a stronger model, the pipeline maintains a robust fallback logic to categorize tasks as "Idling" if the VLM explicitly indicates no activity, ensuring only high-quality social data is persisted.
+1. **Multi-Person Social Presence Tracking (Resolved - April 22)**:
+   - **Problem**: The system previously only tracked the single most confident person per frame, losing context for multi-actor interactions.
+   - **Solution**: Updated `social_presence_filter` to capture all detected persons per frame and updated the schema to support an array of `bystander_detections`.
 
-## 🚀 Resolved Issues & Pipeline Hardening (April 2026)
+2. **Pipeline Resumability & Error Isolation (Resolved - April 22)**:
+   - **Problem**: Long batch runs were fragile; a single error in one video would crash the entire process, and progress was not saved incrementally.
+   - **Solution**: Implemented incremental state saving (write-after-each-video) and isolated per-video errors to `02_filter_errors.json`.
 
-Following a comprehensive audit, the following critical refinements were implemented to ensure the pipeline is production-ready:
+3. **Robust Task Labeling & Merging (Resolved - April 22)**:
+   - **Problem**: Exact string matching on raw VLM outputs caused identical tasks to be treated as distinct due to minor formatting differences, leading to "task fragmentation."
+   - **Solution**: Implemented label normalization (lowercasing, punctuation stripping) and switched to dynamic confidence scoring based on temporal consistency.
 
-1. **Multi-Person Social Presence Tracking (Resolved)**:
-   - **Problem**: The system previously only tracked the single most confident person per frame.
-   - **Solution**: The `social_presence_filter` now leverages the shared `SocialPresenceDetector` to capture **all** detected persons per frame. The output schema has been updated to return an array of `bystander_detections`, each with its own `person_id`, ensuring downstream layers can perform multi-actor social analysis.
+4. **Stage 2 VLM Climax Refinement (Resolved - April 22)**:
+   - **Problem**: Optical flow analysis alone was insufficient for identifying action climaxes in slow or cognitive tasks (e.g., reading, solving puzzles).
+   - **Solution**: Implemented a two-stage refinement process where Qwen2.5-VL scores candidate frames around the optical flow peak for low-velocity tasks.
 
-2. **Pipeline Resumability & Error Isolation (Resolved)**:
-   - **Problem**: Long runs were fragile and non-resumable.
-   - **Solution**: Implemented incremental state saving (write-after-each-video) and a processed-ID skip check. Processing errors are now caught and isolated to `02_filter_errors.json`, preventing a single corrupt video from crashing the entire batch.
+5. **Schema Consistency & Temporal Bounds (Resolved - April 22)**:
+   - **Problem**: Critical temporal context (`task_start_sec`, `task_end_sec`) was missing from the output manifest, making it difficult for downstream layers to align their analysis.
+   - **Solution**: Formally promoted start and end timestamps to the official schema to support accurate alignment for layers like 03b (Reasonable Emotion).
 
-3. **Robust Task Labeling & Merging (Resolved)**:
-   - **Problem**: Exact string matching on VLM output caused task fragmentation.
-   - **Solution**: Implemented label normalization (lowercasing, stripping punctuation) during the merging phase. Additionally, `task_confidence` is now dynamically calculated based on the temporal consistency (merge count) of the task rather than being a hardcoded value.
-
-4. **Stage 2 VLM Climax Refinement (Resolved)**:
-   - **Problem**: Optical flow alone was insufficient for slow/cognitive tasks.
-   - **Solution**: Implemented the documented two-stage climax identification. For tasks with `slow` velocity, the pipeline now samples candidate frames and uses **Qwen2.5-VL** to score and refine the climax timestamp.
-
-5. **Schema Consistency & Temporal Bounds (Resolved)**:
-   - **Problem**: Task start/end times were missing from the final manifest.
-   - **Solution**: Formally promoted `task_start_sec` and `task_end_sec` to the official output schema. This provides critical temporal context for downstream social layers like Reasonable Emotion (03b).
-
-6. **Infrastructure & Robustness (Resolved)**:
-   - **Problem**: Fragile temp directories and stale documentation.
-   - **Solution**: Refactored to use `tempfile.TemporaryDirectory` for safe frame extraction. Updated all docstrings to reflect the upgrade to Qwen2.5-VL. Fixed `run_verification.py` to ensure manifests are written to the correct SSD output paths.
+6. **Infrastructure & Robustness (Resolved - April 22)**:
+   - **Problem**: Fragile temporary directory management and stale documentation regarding the model upgrade were causing maintenance overhead.
+   - **Solution**: Refactored to use `tempfile.TemporaryDirectory` and synchronized all docstrings and verification scripts with the Qwen2.5-VL implementation.
 
 7. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
-   - **Problem**: YOLOv8 incorrectly identified the camera wearer's limbs and background artifacts as bystanders.
-   - **Solution**: Implemented a multi-stage **Anti-Wearer Heuristic** including top/bottom edge exclusion, a 0.50 confidence floor, and a 2-frame temporal consistency requirement. This restored the expected purge rate and secured the SSD from storage overflow.
+   - **Problem**: YOLOv8 frequently misidentified the camera wearer's own limbs or torso as external bystanders, leading to false positives and SSD storage overflow.
+   - **Solution**: Implemented a multi-stage Anti-Wearer Heuristic (edge exclusion, confidence floor, temporal consistency) to filter out self-detections.
 
 8. **`NameError` / `KeyError` Crashes in `process_video` (Resolved - April 27)**:
-   - **Problem**: `pipeline.py`'s `process_video()` method had three latent crash bugs:
-     1. **`NameError: video_id`** on the "No bystanders detected" log line — `video_id` was never defined as a local variable in `process_video`, only in the caller `run()`.
-     2. **`KeyError: 'id'`** on the "No clear tasks identified" log line — used `entry['id']` directly, but Ego4D manifests may use `'video_id'` as the key instead, which the method's caller already handled with a safe `.get()`.
-     3. **`KeyError: 'id'`** in the output dict — same unsafe `entry['id']` access when constructing the `filtered_manifest.json` entry.
-   - **Impact**: Any video that failed the social presence or task filter would crash the entire pipeline run with a `NameError`, preventing further processing. Videos from Ego4D manifests using `'video_id'` as the key would crash on the output construction even for *passing* videos.
-   - **Solution**: Added `video_id = entry.get('id', entry.get('video_id'))` at the top of `process_video()` and replaced all three unsafe references with the resolved `video_id` variable.
+   - **Problem**: Three latent bugs in `pipeline.py` (missing `video_id` definition and unsafe `entry['id']` access) caused the pipeline to crash whenever a video failed a filter or used a different ID key format.
+   - **Solution**: Resolved the ID key dynamically (`entry.get('id', entry.get('video_id'))`) and ensured `video_id` was correctly scoped at the start of the processing method.
+
+9. **VLM Instruction Following (Resolved - April 15)**:
+   - **Problem**: Initial use of `moondream` (1.8B) resulted in poor instruction following for complex, multi-part prompt formatting, frequently returning empty strings or hallucinatory text.
+   - **Solution**: Upgraded the pipeline to use **Qwen2.5-VL** via Ollama, which possesses significantly stronger visual understanding and structured output reliability.
+
+## ⚠️ Unresolved Issues & Suggestions
+
+- **Optical Flow Density Calibration**: The current 5 FPS sampling for optical flow may miss ultra-fast actions (e.g., a lightning-fast impact). Increasing sampling density for "Fast" velocity tasks is suggested.
+- **VLM Context Windowing**: For very long clips (>10 mins), the current sparse frame sampling might miss task transitions. Implementing a sliding window approach for VLM labeling is suggested to ensure temporal coverage.
+- **Advanced Wearer Removal**: While the geometric anti-wearer heuristic is effective, it still produces occasional false positives. Using a dedicated **egocentric pose estimator** or "wearer segmentation" mask is suggested for higher precision.
+- **Performance Optimization**: Batching VLM calls more aggressively to utilize the 24GB RAM of the M4 Pro is suggested, though care must be taken to avoid unified memory overflow.

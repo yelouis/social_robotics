@@ -54,83 +54,59 @@ To ensure data ingestion was successful without relying on blind trust, perform 
 - **Singular Video Test**: Pick one UUID from the localized manifest and use a lightweight media player or python script (e.g., OpenCV) to explicitly read the file path and extract the first frame. If it opens without corruption, the test passes.
 - **Batch Test**: Write a script to iterate over the entire initialized `local_video_registry.json`. For each entry, check that the file exists on the **"Extreme SSD"**, has a size greater than 0 bytes, and that the file extension matches `.mp4`. This ensures no silent download failures occurred across the massive file list.
 
-## 🚀 Implementation Accomplishments (April 2026)
+## 🚀 Implementation Status
 
-The initial implementation of the Dataset Acquisition module is complete:
+The Dataset Acquisition module is fully operational at `src/dataset_acquisition/`.
+- **SSD Integration**: Fully mapped to the **Extreme SSD** (`/Volumes/Extreme SSD`).
+- **Streaming Filter**: Implemented "Download-Filter-Discard" batching logic in `run_selective_download.py` to manage multi-terabyte datasets within a 2TB limit.
+- **Smart Registry**: Automated indexing of 7,861 unique videos via `registry.py`, with explicit filtering for macOS metadata.
+- **Requirement-Aware Downloader**: `downloader.py` handles authentication-gated datasets (Ego4D) and open-source datasets (Charades-Ego) with integrated extraction logic.
 
-- **SSD Integration**: Fully mapped to the **Extreme SSD** mount point (`/Volumes/Extreme SSD`).
-- **Existing Data Recognition**: Implemented logic to scan the SSD for pre-existing `charades_ego_data` and `ego4d_data` folders, preventing redundant downloads of nearly **15,700 videos**.
-- **Automated Registry**: Created `src/dataset_acquisition/registry.py` which generates a comprehensive `local_video_registry.json` manifest.
-- **Verification Framework**: Added `tests/test_dataset_acquisition.py` to ensure video files are readable and non-corrupt using OpenCV frame extraction tests.
-- **Smart Downloader**: Implemented a requirement-aware downloader in `src/dataset_acquisition/downloader.py` that skips datasets if keys (like AWS for Ego4D) are missing but data is already present on disk.
+## 🧪 Resolved Issues & Implementation Refinements
 
-### 🐛 Bug Fixes & Refinements
+1. **Subdirectory Indexing Failure (Resolved - April 21)**:
+   - **Problem**: The `is_already_downloaded()` method in `downloader.py` used `.glob("*.mp4")`, which failed to detect videos nested in subdirectories, causing redundant downloads.
+   - **Solution**: Changed scanning logic to `.rglob("*.mp4")` to search all subfolders recursively.
 
-During code review and validation, a few critical issues were identified and resolved:
+2. **Missing Extraction Logic (Resolved - April 21)**:
+   - **Problem**: `CharadesEgoDownloader` downloaded large `.zip` files but lacked extraction code, preventing the pipeline from accessing raw `.mp4` chunks.
+   - **Solution**: Integrated the `zipfile` module to automatically extract contents into the `OUTPUT_DIR` upon download completion.
 
-1. **Subdirectory Indexing Failure (`downloader.py`)**:
-   - **Problem**: The `is_already_downloaded()` method used `.glob("*.mp4")`, which only scanned the top-level directory. It failed to recognize existing datasets if videos were nested in subdirectories, leading to redundant downloads.
-   - **Solution**: Changed `.glob` to `.rglob("*.mp4")` to search recursively.
+3. **Duplicate Registry Entries & OS Metadata (Resolved - April 21)**:
+   - **Problem**: Overlapping paths in the registry caused nearly 8,000 duplicate entries, and macOS hidden files (`._`) were incorrectly indexed as valid videos.
+   - **Solution**: Implemented a `seen_paths` set to ensure absolute uniqueness and added explicit string filtering to skip files starting with `._`.
 
-2. **Missing Extraction Logic (`downloader.py`)**:
-   - **Problem**: The `CharadesEgoDownloader` successfully downloaded the massive `.zip` file but lacked the logic to extract it. This prevented downstream modules from finding the raw `.mp4` chunks.
-   - **Solution**: Integrated the `zipfile` module to extract contents directly into the designated `OUTPUT_DIR` after downloading.
+4. **Storage Capacity vs. Massive Datasets (Resolved - April 22)**:
+   - **Problem**: Ego4D and EPIC-KITCHENS-100 can exceed the 1.6 TiB available on the SSD if downloaded in full.
+   - **Solution**: Implemented the **Streaming Filtering Strategy**. Videos are evaluated immediately after download and non-social clips are purged on-the-fly, reducing the persisted volume to <20% of the raw dataset.
 
-3. **Duplicate Registry Entries & OS Hidden Files (`registry.py`)**:
-   - **Problem**: Overlapping paths in `DATASET_PATHS` caused the registry script to index the same dataset multiple times (resulting in ~15.7k entries instead of the actual ~7.8k). Additionally, macOS hidden files (starting with `._`) could be incorrectly indexed.
-   - **Solution**: Implemented a `seen_paths` set to track absolute paths and skip duplicates. Added logic to explicitly skip files starting with `._`. Running the fixed script successfully pruned the duplicate count to 7,861 unique videos.
+5. **Download Throughput (Mitigated - April 22)**:
+   - **Problem**: Standard Python-based downloads were inefficient for massive file counts.
+   - **Solution**: Prioritized the download queue (Ego4D > Charades-Ego) and integrated the native `ego4d` CLI for high-throughput AWS-backed transfers.
 
-## 🧪 Test Batch Results (April 2026)
+6. **Streaming Filter Logic Divergence (Resolved - April 22)**:
+   - **Problem**: The acquisition filter and the main processing pipeline used independent, divergent detection logic, leading to inconsistent datasets.
+   - **Solution**: Consolidated all detection heuristics into `src/shared/social_presence.py`, ensuring a "Single Source of Truth" for the entire lifecycle of a video clip.
 
-To verify the pipeline without downloading terabytes of data, a test batch was executed using a simulated acquisition process:
+7. **SSD Storage Overflow & Re-download Loops (Resolved - April 22)**:
+   - **Problem**: Deleting discarded videos caused the Ego4D CLI to re-download them on subsequent runs, leading to infinite download loops and SSD overflow.
+   - **Solution**: Implemented **UID-based Batching** and **Processed UID Tracking**. A persistent `processed_uids.json` ledger ensures that purged videos are never re-requested.
 
-- **Test Scope**: 5 videos from Charades-Ego and available samples from Ego4D.
-- **Process**:
-    1. Isolated 5 non-empty videos from the SSD.
-    2. Copied them to a dedicated `test_raw_videos/` directory to simulate a fresh download.
-    3. Ran the registry script to generate `test_video_registry.json`.
-    4. Performed automated verification using `pytest`.
-- **Results**:
-    - **Registry**: Successfully indexed the 5 test videos while correctly filtering out macOS metadata files (`._`).
-    - **Validation**: All 5 videos passed the existence, size, and frame extraction tests.
-- **Command**: `REGISTRY_FILE=test_video_registry.json pytest tests/test_dataset_acquisition.py`
+8. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
+   - **Problem**: YOLOv8 incorrectly identified the camera wearer's own limbs or background torso-like artifacts as external bystanders.
+   - **Solution**: Implemented a **Refined Anti-Wearer Heuristic** involving bottom-edge exclusion, a 0.50 confidence floor, and a 2-frame temporal consistency requirement.
 
-## 🧪 Resolved Issues & Implementation Refinements (April 2026)
+9. **Robust Batch Filtering & Error Recovery (Resolved - April 23)**:
+   - **Problem**: Batched acquisition occasionally missed videos if the CLI nested them unexpectedly, and transient network errors would crash multi-hour runs.
+   - **Solution**: Implemented **Tethered UID Mapping** for recursive existence verification and wrapped the batch execution loop in granular exception handling to ensure the pipeline continues to the next set of UIDs after a failure.
 
-1. **Storage Capacity vs. Massive Datasets (Resolved)**:
-   - **Problem**: Large-scale datasets like Ego4D and EPIC-KITCHENS-100 can exceed the 1.6 TiB available on the Extreme SSD.
-   - **Solution**: Implemented the **Streaming Filtering Strategy**. Videos are now evaluated for social presence immediately after download or extraction. Non-social videos are purged on-the-fly, ensuring that only relevant data (estimated to be <20% of the raw volume) is persisted.
+10. **Progress Bar Overflow (Resolved - April 27)**:
+    - **Problem**: The `tqdm` progress bar incorrectly showed 300% completion because update calls for disabled datasets (EPIC, EgoProceL) were still executing outside of comment blocks.
+    - **Solution**: Moved all `pbar.update(1)` calls for inactive tasks inside their respective triple-quoted comment blocks.
 
-2. **Download Throughput (Mitigated)**:
-   - **Problem**: Standard python-based downloads were throttled or inefficient.
-   - **Solution**: The system now supports prioritized downloads (Ego4D > Charades-Ego > EPIC) and uses the more robust `ego4d` CLI for the primary dataset.
+## ⚠️ Unresolved Issues & Suggestions
 
-3. **macOS Hidden Files on External SSD (Resolved)**:
-   - **Problem**: Git operations on the Extreme SSD generated `non-monotonic index` errors due to `._` files.
-   - **Solution**: Implemented explicit filtering in `registry.py` to skip files starting with `._` and documented the use of `dot_clean` for SSD maintenance.
-
-4. **Streaming Filter Diverges from Pipeline Filter (Resolved)**:
-   - **Problem**: The streaming acquisition filter and the main processing pipeline had independent, divergent detection logic.
-   - **Solution**: Consolidated all detection logic into `src/shared/social_presence.py`. Both modules now use the same YOLO-based engine, ensuring consistent behavior across the entire lifecycle of a video clip.
-
-5. **SSD Storage Overflow & Re-download Loops (Resolved - April 22)**:
-   - **Problem**: The raw Ego4D CLI download of 9,821 videos (~5-10TB) would fill the 2TB Extreme SSD before filtering could occur. Additionally, deleting discarded videos caused the CLI to re-download them on the next run.
-   - **Solution**: Implemented **UID-based Batching** and **Processed UID Tracking**. The script `src/dataset_acquisition/run_selective_download.py` now requests Ego4D videos in batches of 50. After each batch, the filter runs immediately and purges "bad" videos. A persistent `processed_uids.json` file ensures that discarded UIDs are never re-requested, effectively "finishing" the dataset in chunks without ever exceeding SSD capacity.
-
-6. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
-   - **Problem**: YOLOv8 incorrectly identified the camera wearer's own limbs (arms/legs) and "ghost torsos" (full-frame background artifacts) as bystanders.
-   - **Solution**: Implemented a **Refined Anti-Wearer Heuristic**:
-     - **Limb Filtering**: Ignored boxes touching the bottom edge without a visible head/shoulders.
-     - **Ghost Exclusion**: Ignored full-height boxes starting exactly at the top edge (`y1=0`), a common egocentric false positive.
-     - **Confidence Boost**: Increased YOLO confidence threshold from 0.25 to **0.50**.
-     - **Temporal Consistency**: Required at least **2 frames** of social presence per video to confirm (filtering out 1-frame glitches).
-
-7. **Robust Batch Filtering & Error Recovery (Resolved - April 23)**:
-   - **Problem**: The batched acquisition pipeline occasionally missed downloaded videos during the filtering phase if the Ego4D CLI nested them in unexpected subdirectories. Additionally, transient network errors could halt the entire multi-hour acquisition process.
-   - **Solution**: 
-     - **Tethered UID Mapping**: Refactored `downloader.py` to explicitly verify the existence of every requested UID in the batch. If standard paths fail, it performs a targeted recursive scan to ensure no downloaded byte goes unfiltered.
-     - **Batch-Level Resiliency**: Wrapped the Ego4D execution loop in `run_selective_download.py` with granular exception handling. The system now logs failed batches and continues to the next set of UIDs rather than crashing, ensuring maximum uptime for large-scale ingestion.
-
-8. **Progress Bar Overflow in `run_selective_download.py` (Resolved - April 27)**:
-   - **Problem**: The `tqdm` progress bar in `run_selective()` called `pbar.update(1)` three times (once for each of Ego4D, EPIC, and EgoProceL), even though EPIC and EgoProceL were fully disabled with triple-quoted string blocks. The `pbar.update(1)` calls for the disabled tasks were **outside** the triple-quoted regions, so they still executed. With `total=1` (only Ego4D in the active `tasks` list), this produced a misleading 300% completion indicator.
-   - **Solution**: Moved the `pbar.update(1)` calls for EPIC and EgoProceL **inside** their respective triple-quoted comment blocks so they are inert when those datasets are disabled.
+- **Dynamic Batch Sizing**: The batch size is currently hardcoded to 50. Implementing a dynamic size based on available SSD space is suggested to maximize download windows without risk of overflow.
+- **Parallel Frame Filtering**: Filtering is currently serial. Leveraging the 24GB RAM of the M4 Pro to process frame batches in parallel across multiple CPU cores is suggested to accelerate the acquisition phase.
+- **Dataset Support Expansion**: While Ego4D and Charades-Ego are operational, adding full support for **EgoProceL** and **EPIC-KITCHENS-100** (currently disabled) is suggested for future diversity.
+- **Wearer Detection Refinement**: Occlusions from the wearer's hands can still occasionally trigger false positives. Investigating egocentric segmentation masks to explicitly subtract the wearer from the scene is suggested.
