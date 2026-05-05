@@ -56,3 +56,35 @@ If the local `result_file` review looks good, write an automated script leveragi
 To guarantee the export structure adheres to safety standards and schema requirements:
 - **Singular Video Test**: Load the final `social_metadata.parquet` into a Pandas DataFrame inside a standalone Jupyter notebook or script. Select one random row (a single video) and attempt to cleanly follow the `rehydrate_dataset.py` instructions to rebuild the social context. If any keys are mismatched, it fails.
 - **Batch Test**: Run an automated validation script across the entire merged DataFrame. Assert that there are absolutely zero raw visual bytes (no images/video buffers stored). Validate that the row count matches exactly the number of clips successfully parsed, and perform a null-check analysis. Verify that this Pandas aggregation does not exceed the data limits of our **24GB RAM Mac mini M4 Pro** when reading multi-gigabyte Parquets into memory.
+
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **Parquet Metadata Persistence (Resolved - May 04)**:
+   - **Problem**: Pandas' internal `attrs` dictionary is not consistently serialized into standard Apache Parquet metadata across all engines (e.g., PyArrow vs FastParquet), potentially leading to lost schema versioning and git tracking on export.
+   - **Solution**: Implemented a dual-export approach in `export.py` where the aggregated DataFrame is exported as `social_metadata.parquet` and the critical provenance data (`schema_version`, `export_timestamp`, `active_layers`, `pipeline_git_sha`) is explicitly serialized into a companion `export_metadata.json` file. The Hugging Face upload script was updated to push both files.
+
+2. **Shebang Typo in `rehydrate_dataset.py` (Resolved - May 04)**:
+   - **Problem**: The shebang line was `#!/usr/8in/env python3` instead of `#!/usr/bin/env python3`. This would cause `Permission denied` or `bad interpreter` errors when attempting to run the script directly on any Unix system.
+   - **Solution**: Corrected the shebang to `#!/usr/bin/env python3`.
+
+3. **Unused and Deprecated Imports in `huggingface_upload.py` (Resolved - May 04)**:
+   - **Problem**: The script imported `Repository` (deprecated since `huggingface_hub` v0.14) and `create_repo` (unused — the code calls `api.create_repo()` instead). This would trigger `DeprecationWarning` at import time and confuse static analyzers.
+   - **Solution**: Removed the unused `Repository` and `create_repo` imports, keeping only `HfApi`.
+
+4. **Manifest Schema Mismatch — Silent `task_label: Unknown` (Resolved - May 04)**:
+   - **Problem**: The aggregator tried to read a top-level `task_label` field from `filtered_manifest.json`, but the real production manifest stores task labels inside a nested `identified_tasks` array. Every video was silently assigned `task_label: "Unknown"`, corrupting the entire exported dataset's task metadata.
+   - **Solution**: Rewrote the manifest parser to iterate `identified_tasks` and produce a comma-separated `task_labels` column (e.g., `"Cooking, Stirring"`). Added a dedicated test (`test_manifest_task_labels_extracted`) to prevent regression.
+
+5. **Layer Output Schema Mismatch for 03b/03c — Silent Data Loss (Resolved - May 04)**:
+   - **Problem**: Layers 03b (Reasonable Emotion) and 03c (Acoustic Prosody) output their results under a `tasks_analyzed` key, not under `aggregate`/`per_person`. The original aggregator only handled the `aggregate`/`per_person` schema, meaning all 03b and 03c features were silently dropped from the exported Parquet. This is the most critical bug found during the audit — it would render the dataset incomplete for any downstream research.
+   - **Solution**: Added explicit Schema B handling in `aggregator.py` that detects the `tasks_analyzed` key, JSON-stringifies the full array into a `*_tasks_analyzed_raw` column, and extracts summary scalars (`avg_task_score` for 03b, `avg_prosody_scalar` for 03c). Added tests `test_schema_b_tasks_analyzed_flattening` and `test_schema_b_prosody_scalar_extraction`.
+
+6. **Deprecated `datetime.utcnow()` Usage (Resolved - May 04)**:
+   - **Problem**: `aggregator.py` used `datetime.utcnow()`, which is deprecated in Python 3.12+ because it returns a naive datetime that is ambiguously timezone-unaware.
+   - **Solution**: Replaced with `datetime.now(timezone.utc)`, which returns a timezone-aware UTC datetime per modern Python best practices.
+
+## ⚠️ Unresolved Issues & Suggestions
+
+- **Memory Limits with Massive Parquets**: While the current implementation handles merging correctly, loading extremely large datasets (hundreds of gigabytes) might still challenge the 24GB RAM limit of the Mac mini M4 Pro. It is suggested to explore Dask or Polars for out-of-core chunked processing in the `aggregator.py` if Ego4D's full scale causes OOM errors.
+- **Hugging Face Authentication Dependency**: The `huggingface_upload.py` script strictly requires an active `HF_TOKEN` environment variable. If the pipeline is run in an automated CI/CD environment where this token is omitted or rotated, the final export step will fail silently or throw unauthorized errors. It is suggested to implement a fail-safe that gracefully degrades to local-only export if the token is missing.
+- **Dehydration Validator Scope**: The current byte-check in `export.py` only catches Python `bytes` objects. It will not catch `numpy.ndarray` pixel buffers or base64-encoded image strings that a layer might accidentally inject. It is suggested to add `numpy.ndarray` type checking and a regex scan for common base64 image prefixes (e.g., `data:image/png;base64,`) to harden the dehydration guardrail.
