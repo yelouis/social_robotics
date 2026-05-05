@@ -119,8 +119,71 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-- **Inaccurate Geometric Heuristic**: The dot-product algorithm assumes a simplified camera model. Integrating camera intrinsics from the Ego4D/EPIC-KITCHENS metadata to calibrate the focal length parameter is suggested for higher precision.
-- **Missing Actor Hand Detection**: The current implementation only scores attention towards the camera lens. Integrating a MediaPipe Egocentric Hand Detector into Node 02 to provide hand bounding boxes for scoring is recommended.
-- **Tracking Loss**: Bounding boxes may shift IDs across frames during multi-person intersections. Implementing DeepSORT or ByteTrack in Node 02 is suggested to maintain `person_id` temporal consistency.
-- **Inefficient Temporal Seeking**: Using `cap.set()` for adaptive sampling is slow on macOS. Refactoring the pipeline to use a sequential reading loop with frame-skipping is recommended for batch processing performance.
-- **VLM Bottleneck in E2E Pipeline**: Node 02's task labeling creates high latency. Using a "fast-track" manifest with reduced VLM sampling frequency is suggested for geometry-only verification runs.
+### Issue 1: Inaccurate Geometric Heuristic (Camera Intrinsics)
+**Status**: ⚠️ Confirmed Unresolved — The dot-product algorithm in `_track_and_score` (pipeline.py, line ~269) assumes a simplified pinhole camera model with a hardcoded focal length approximation (`-float(w)` for `v_cam_z`). Ego4D videos are captured with various camera rigs (including Aria glasses with fisheye lenses), where the actual focal length and distortion parameters differ significantly from this assumption. This can cause systematic over- or under-estimation of the gaze-to-camera angle, especially at frame edges.
+
+**Option A (recommended)**: **Ego4D Camera Intrinsics Lookup** — Parse the `ego4d.json` metadata for per-clip camera parameters (`focal_length`, `principal_point`, `distortion_coefficients`) when available. Use these to compute a calibrated `v_cam_z` value. Fall back to the current heuristic when metadata is absent.
+  - *Pros*: Significantly improves gaze accuracy for clips with known intrinsics; non-breaking (fallback preserves current behavior); Ego4D provides this data for Aria glasses clips.
+  - *Cons*: Not all Ego4D clips have camera intrinsics; requires parsing additional metadata fields; different camera models may need different distortion correction.
+
+**Option B**: **Learned Gaze Calibration Offset** — Run a calibration pass on a small labeled subset (e.g., 20 clips with manually verified attention scores) to learn a per-camera-type correction factor. Apply this as a multiplicative offset to the raw dot-product score.
+  - *Pros*: Works even without explicit intrinsics; captures systematic biases across camera types.
+  - *Cons*: Requires manually labeled calibration data; may overfit to the calibration set; ongoing maintenance as new camera types are added.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 2: Missing Actor Hand Detection
+**Status**: ⚠️ Confirmed Unresolved — The current implementation (pipeline.py) only scores attention towards the camera lens (centroid of frame). The specification in Section 3 explicitly states: "High attention is scored if the bystander is watching *either* the camera lens *or* the task/hands." Hand bounding boxes are not available in the `filtered_manifest.json` schema and are not computed by any upstream module.
+
+**Option A (recommended)**: **Integrate MediaPipe Egocentric Hand Detection in Node 02** — Add a `hand_detections` field to the `filtered_manifest.json` schema (additive, non-breaking). Run MediaPipe Hands during the social presence filter pass to detect and persist wearer hand bounding boxes. Layer 03a then checks gaze intersection against both the camera centroid and the hand regions.
+  - *Pros*: MediaPipe is already listed in `ml_dependencies.md`; runs on CPU with minimal overhead (~5ms/frame); provides hand landmark coordinates for future layers.
+  - *Cons*: Adds ~5% processing time to Node 02; schema change requires updating all downstream consumers; MediaPipe hand detection is less reliable on heavily occluded egocentric views.
+
+**Option B**: **Heuristic Hand Zone Assumption** — Assume the wearer's hands are always in the bottom-center third of the frame (a reasonable assumption for most egocentric tasks like cooking, crafting, etc.). Score attention towards this zone in addition to the camera centroid.
+  - *Pros*: Zero additional dependencies or models; trivial to implement; no schema changes needed.
+  - *Cons*: Inaccurate when hands are raised (e.g., gesturing, pointing); does not adapt to the actual hand position; will produce false positives for bystanders looking at the ground.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 3: Tracking Loss (Person ID Consistency)
+**Status**: ⚠️ Confirmed Unresolved — Node 02's `bystander_detections` assigns `person_id` based on detection order per frame, not via temporal tracking. When multiple bystanders overlap or cross paths between sampled frames, the same physical person can receive different `person_id` values. This causes Layer 03a to produce fragmented attention traces where a single bystander's gaze data is split across multiple `person_id` entries.
+
+**Option A (recommended)**: **ByteTrack Integration in Node 02** — Replace the per-frame ID assignment with [ByteTrack](https://github.com/ifzhang/ByteTrack), a lightweight, high-performance multi-object tracker. ByteTrack assigns temporally consistent IDs using Kalman filtering and IoU-based association. It runs on CPU with negligible overhead.
+  - *Pros*: SOTA tracking accuracy; minimal compute cost (~1ms/frame); maintains consistent person_id across occlusions; widely adopted in detection pipelines.
+  - *Cons*: Adds a dependency (`byte_track` or inline implementation); requires refactoring the `bystander_detections` writer in Node 02; existing test manifests may need regeneration.
+
+**Option B**: **IoU-Based Greedy Matching** — For each new frame, match detected persons to the previous frame's persons using IoU of bounding boxes. Assign the same `person_id` to the highest-IoU match; create new IDs only for unmatched detections.
+  - *Pros*: Simple to implement (~30 lines of code); no external dependencies; works well for non-overlapping, slow-moving subjects.
+  - *Cons*: Fails catastrophically during occlusions and fast crossings; no motion model to predict through gaps; inferior to dedicated trackers.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 4: Inefficient Temporal Seeking
+**Status**: ⚠️ Confirmed Unresolved — The pipeline uses `cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)` for adaptive sampling, which on macOS requires seeking to the nearest keyframe and then decoding forward. For non-keyframe-aligned timestamps, this results in redundant decode cycles that can be 10-50x slower than sequential reads.
+
+**Option A (recommended)**: **Sequential Read with Frame Skip** — Replace random-access seeking with a single forward pass. Read frames sequentially from `start_sec` to `end_sec`, processing only frames whose index matches the sampling schedule (`frame_idx % stride == 0`). Skip non-target frames with `cap.grab()` (fast discard without decoding).
+  - *Pros*: Eliminates all seeking overhead; `cap.grab()` is ~10x faster than `cap.read()` for skipped frames; works identically across all codecs and OS.
+  - *Cons*: Must process the entire reaction window linearly (cannot skip to arbitrary timestamps mid-window); slightly more complex loop logic.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 5: VLM Bottleneck in E2E Pipeline
+**Status**: ⚠️ Confirmed Unresolved — Node 02's task labeling uses Qwen2.5-VL for climax refinement on slow/cognitive tasks. During full E2E pipeline runs (Node 02 → 03a → 03b → ...), the VLM inference in Node 02 creates a latency bottleneck that delays all downstream layer execution. For geometry-only verification runs (e.g., testing 03d Proxemic Kinematics), the VLM step is unnecessary overhead.
+
+**Option A (recommended)**: **`--skip-vlm` CLI Flag** — Add a command-line flag to the Node 02 pipeline that skips the Stage 2 VLM refinement step entirely. When set, the pipeline uses only the optical flow peak as the `task_climax_sec` and marks `climax_extraction_method` as `"optical_flow_peak_only"`. This allows fast geometry-only runs without loading the 3-10GB VLM.
+  - *Pros*: Trivial to implement (single `if` guard around the VLM call); no change to output schema (method field updates naturally); user-controlled.
+  - *Cons*: Reduces climax accuracy for slow tasks when used; users must remember to re-run with VLM for final production exports.
+
+**Option B**: **Pre-Computed Manifest Cache** — After a full VLM-enhanced run, cache the final `filtered_manifest.json` as a "gold" manifest. Subsequent E2E runs check for this cached manifest first, skipping Node 02 entirely when the video set hasn't changed.
+  - *Pros*: Zero latency for downstream layers on repeat runs; no accuracy compromise.
+  - *Cons*: Cache invalidation is fragile (any new video or re-filter requires a full re-run); adds cache management complexity.
+
+Your selection: Proceed with Option A

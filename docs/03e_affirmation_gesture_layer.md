@@ -85,10 +85,55 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-- **Gaze Vectors vs. Head Pose Vectors Conflation**: The layer consumes L2CS-Net gaze direction vectors rather than dedicated head orientation angles. Eye saccades can mimic head oscillations, potentially causing false positives. Replacing gaze vectors with a dedicated **head pose estimator** (e.g., `6DRepNet` or MediaPipe Face Mesh) is suggested.
-- **Nyquist Ceiling on Fast Nods**: Sampling rates of ~2.5 FPS physically limit detectable frequencies to ~1.25 Hz. Fast communicative nods (2-3 Hz) are aliased and undetectable. Increasing 03a's sampling density or performing **targeted high-fps sub-sampling** in 03e is recommended for higher fidelity.
-- **Confidence Formula Energy Weighting**: The current confidence metric is purely count-based. Incorporating the **RMS (root mean square) amplitude** of the filtered signal as a weighting factor is suggested to distinguish dramatic gestures from low-energy micro-movements.
-- **Misleading Field Semantics**: The fields `pitch_variance_hz` and `yaw_variance_hz` contain oscillation frequencies, not statistical variance. Renaming these to `pitch_oscillation_hz` and `yaw_oscillation_hz` in a future schema version is recommended to avoid cosmetic confusion.
+### Issue 1: Gaze Vectors vs. Head Pose Vectors Conflation
+**Status**: ⚠️ Confirmed Unresolved — Verified in the pipeline code: the layer consumes `pitch_rad` and `yaw_rad` from `03a_attention_result.json`, which are L2CS-Net **gaze direction** vectors (where the person is looking), not **head orientation** angles (where the head is physically pointed). Eye saccades — rapid eye movements independent of head rotation — can produce pitch/yaw oscillations that mimic head nodding/shaking patterns. For example, a person reading text left-to-right would produce periodic yaw oscillations that the bandpass filter could misclassify as head shaking.
+
+**Option A (recommended)**: **Dedicated Head Pose Estimator (6DRepNet)** — Replace L2CS-Net gaze vectors with [6DRepNet](https://github.com/thohemp/6DRepNet) head pose angles (pitch, yaw, roll). 6DRepNet outputs head orientation independent of eye gaze direction, which is precisely what nodding/shaking detection requires. Run 6DRepNet on the same bystander crops that 03a already processes, and add `head_pitch_rad`/`head_yaw_rad` fields to the 03a attention trace (additive schema change).
+  - *Pros*: Eliminates eye saccade false positives; 6DRepNet is MIT-licensed and ~50MB; purpose-built for head orientation; can coexist alongside L2CS-Net (gaze for attention, head pose for gestures).
+  - *Cons*: Requires modifying Layer 03a to run a second model per frame; adds ~20ms/frame inference time; increases 03a's complexity and memory footprint.
+
+**Option B**: **Gaze-to-Head Proxy Filtering** — Keep L2CS-Net gaze vectors but apply a **low-pass filter** before the bandpass. Head movements are inherently slower and larger-amplitude than eye saccades. A 0.5Hz low-pass filter on the raw pitch/yaw would suppress fast saccadic oscillations while preserving genuine head nods (1-3Hz range after low-pass pre-filtering).
+  - *Pros*: Zero additional model dependencies; trivial to implement (add one `scipy.signal.butter` call); no schema changes.
+  - *Cons*: Heuristic — cannot reliably distinguish all saccades from small head nods; may suppress fast but genuine nods; adds a tuning parameter.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 2: Nyquist Ceiling on Fast Nods
+**Status**: ⚠️ Confirmed Unresolved — Layer 03a's adaptive stride samples at ~2.5-5 FPS. By the Nyquist-Shannon theorem, the maximum detectable frequency at 2.5 FPS is 1.25 Hz. Standard communicative nods occur at 1.5-3 Hz, meaning a significant portion of genuine nods are physically undetectable at the current sampling rate. The three-tier Nyquist-aware bandpass strategy mitigates filter design issues but cannot recover information that was never sampled.
+
+**Option A (recommended)**: **Targeted High-FPS Sub-Sampling in 03e** — When 03e detects that the attention trace sampling rate is below 6 Hz (Nyquist for 3 Hz nods), re-read the source video within the reaction window at 10 FPS, running only L2CS-Net (or 6DRepNet per Issue 1) on the bystander crops. This creates a localized high-resolution pitch/yaw trace for gesture detection only, without requiring 03a to increase its global sampling rate.
+  - *Pros*: Decouples gesture temporal resolution from attention temporal resolution; only runs the high-FPS pass when needed; 03a's output schema is unchanged.
+  - *Cons*: Breaks 03e's "no re-inference" design principle; adds video file I/O to a layer that was previously pure signal processing; increases per-video processing time by ~5-10s.
+
+**Option B**: **Increase 03a's Default Sampling Rate** — Change 03a's default stride from 0.5s (2 FPS) to 0.2s (5 FPS) globally. At 5 FPS, the Nyquist ceiling is 2.5 Hz, which captures most communicative nods.
+  - *Pros*: Fixes the root cause for all downstream consumers; simple configuration change; no architectural complexity.
+  - *Cons*: 2.5x more L2CS-Net inference calls for every video; increases 03a processing time proportionally; may not be necessary for videos without gesture-relevant tasks.
+
+Your selection: Proceed with Option B but change the default stride to 8 FPS.
+
+---
+
+### Issue 3: Confidence Formula Energy Weighting
+**Status**: ⚠️ Confirmed Unresolved — The current `confidence` metric is based solely on the count of zero-crossings (peaks and troughs) detected by `find_peaks`. A vigorous, large-amplitude nod and a barely-perceptible micro-nod receive the same confidence score as long as they have the same number of oscillation cycles. This makes it impossible for downstream consumers (e.g., the Emotion Corollary in Section 3) to distinguish emphatic agreement from ambiguous head movement.
+
+**Option A (recommended)**: **RMS Amplitude Weighting** — Compute the RMS (root mean square) amplitude of the bandpass-filtered signal within the reaction window. Multiply the current count-based confidence by a normalized RMS factor: `confidence = count_confidence * min(1.0, rms / rms_threshold)`. Set `rms_threshold` to the median RMS observed across a calibration batch (e.g., 0.05 radians for nods).
+  - *Pros*: Distinguishes emphatic from subtle gestures; single multiplicative factor; preserves existing count-based logic.
+  - *Cons*: Requires calibrating `rms_threshold` on real data; RMS is sensitive to signal noise (pre-filtering quality matters).
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 4: Misleading Field Semantics (`*_variance_hz`)
+**Status**: ⚠️ Confirmed Unresolved — The output schema fields `pitch_variance_hz` and `yaw_variance_hz` contain oscillation frequencies (e.g., 2.1 Hz), not statistical variance measures. The name `variance_hz` is semantically incorrect and could mislead downstream consumers (e.g., a researcher might expect these to represent frequency-domain variance, not the dominant oscillation frequency).
+
+**Option A (recommended)**: **Rename to `*_oscillation_hz` in Next Schema Version** — Update the field names to `pitch_oscillation_hz` and `yaw_oscillation_hz` in the output schema. Since the schema follows an additive-only policy, add the new fields alongside the old ones (with identical values) for one version cycle, then deprecate the old names.
+  - *Pros*: Semantically correct; eliminates confusion for downstream consumers; follows the additive-only schema rule.
+  - *Cons*: Temporary field duplication during the deprecation cycle; requires updating all downstream consumers (03b Emotion Corollary, 04 export) to use the new field names.
+
+Your selection: Proceed with Option A.
 
 ### 🧪 Test Suite Results (6/6 Passed)
 
