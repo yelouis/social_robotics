@@ -16,11 +16,12 @@ import config
 
 
 class FilteringPipeline:
-    def __init__(self, input_manifest_path, output_manifest_path, force=False):
+    def __init__(self, input_manifest_path, output_manifest_path, force=False, skip_vlm=False):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_manifest_path = Path(output_manifest_path)
         self.error_log_path = self.output_manifest_path.parent / "02_filter_errors.json"
         self.force = force
+        self.skip_vlm = skip_vlm
         
         # Shared components
         self.detector = SocialPresenceDetector('yolov8n.pt')
@@ -94,9 +95,10 @@ class FilteringPipeline:
             if not video_path.exists(): continue
 
             print(f"Social Filter: {video_id}")
-            bystander_detections = self.social_presence_filter(video_path)
+            bystander_detections, hand_detections = self.social_presence_filter(video_path)
             if bystander_detections:
                 entry['bystander_detections'] = bystander_detections
+                entry['hand_detections'] = hand_detections
                 pass1_queue.append(entry)
             else:
                 print(f"Dropped {video_id}: No social presence.")
@@ -153,7 +155,8 @@ class FilteringPipeline:
             "fps": fps,
             "duration_sec": duration_sec,
             "identified_tasks": identified_tasks,
-            "bystander_detections": entry['bystander_detections']
+            "bystander_detections": entry['bystander_detections'],
+            "hand_detections": entry.get('hand_detections', [])
         }
 
     def log_error(self, video_id, error):
@@ -180,44 +183,30 @@ class FilteringPipeline:
     # def process_video(self, entry): ...
 
     def social_presence_filter(self, video_path, sample_rate_fps=1):
-        """ Sample frames at sample_rate_fps and detect all persons. """
-        detections_by_frame = self.detector.detect(video_path, sample_rate_fps=sample_rate_fps, fast_mode=False)
+        \"\"\" Sample frames at sample_rate_fps and detect all persons. \"\"\"
+        detections_by_frame, hands_by_frame = self.detector.detect(video_path, sample_rate_fps=sample_rate_fps, fast_mode=False, return_hands=True)
         
         if not detections_by_frame:
-            return []
+            return [], []
             
-        # Transform flat frame detections into the grouped bystander_detections schema
-        # For now, since we don't have a cross-frame tracker, we'll treat all detections
-        # in the video as potentially different people OR just group them by frame.
-        # The schema requires:
-        # { "person_id": X, "timestamps_sec": [], "bounding_boxes": [], "detection_confidence": [] }
-        
-        # Simple heuristic: If there are multiple people in a frame, they get different person_ids.
-        # Without tracking, we can't easily link person_id 0 in frame A to person_id 0 in frame B.
-        # But we MUST support multiple people.
-        
-        # To strictly follow the schema and support multi-person without a tracker:
-        # We will create N entries in bystander_detections where N is the MAX number of people
-        # seen in any single frame.
-        max_people = max(len(frame) for frame in detections_by_frame)
-        
-        bystanders = []
-        for i in range(max_people):
-            bystanders.append({
-                "person_id": i,
-                "timestamps_sec": [],
-                "bounding_boxes": [],
-                "detection_confidence": []
-            })
-            
+        # Group by tracked person_id
+        bystanders_map = {}
         for frame in detections_by_frame:
-            for i, det in enumerate(frame):
-                if i < max_people:
-                    bystanders[i]["timestamps_sec"].append(det["timestamp_sec"])
-                    bystanders[i]["bounding_boxes"].append(det["bounding_box"])
-                    bystanders[i]["detection_confidence"].append(det["confidence"])
-                    
-        return bystanders
+            for det in frame:
+                pid = det.get("person_id", 0)
+                if pid not in bystanders_map:
+                    bystanders_map[pid] = {
+                        "person_id": pid,
+                        "timestamps_sec": [],
+                        "bounding_boxes": [],
+                        "detection_confidence": []
+                    }
+                bystanders_map[pid]["timestamps_sec"].append(det["timestamp_sec"])
+                bystanders_map[pid]["bounding_boxes"].append(det["bounding_box"])
+                bystanders_map[pid]["detection_confidence"].append(det["confidence"])
+                
+        bystanders = list(bystanders_map.values())
+        return bystanders, hands_by_frame
 
     def contextual_task_labeling(self, video_id, duration_sec):
         """ Use Ego4D metadata to identify tasks and map velocities """
@@ -362,11 +351,16 @@ class FilteringPipeline:
                 max_flow = dense_max_flow if dense_max_flow > 0 else max_flow
                 
             climax_sec = climax_frame / fps
-            extraction_method = "optical_flow_peak"
+            
+            if self.skip_vlm:
+                extraction_method = "optical_flow_peak_only"
+            else:
+                extraction_method = "optical_flow_peak"
+                
             vlm_confidence = None
             
             # Stage 2: Batched VLM Refinement for slow tasks
-            if task['task_velocity'] == 'slow' and len(flow_data) > 1:
+            if not self.skip_vlm and task['task_velocity'] == 'slow' and len(flow_data) > 1:
                 # Sort by flow and pick top 3 candidates around the peak
                 candidates = sorted(flow_data, key=lambda x: x[1], reverse=True)[:3]
                 candidates = sorted(candidates, key=lambda x: x[0]) # Chronological

@@ -52,7 +52,7 @@ class SocialPresenceDetector:
         elif torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def detect(self, video_path: Path, sample_rate_fps=1, fast_mode=False, min_consistency=2):
+    def detect(self, video_path: Path, sample_rate_fps=1, fast_mode=False, min_consistency=2, return_hands=False):
         """
         Detect persons in a video.
         
@@ -80,6 +80,7 @@ class SocialPresenceDetector:
             frame_interval = int(max(1, fps / sample_rate_fps))
             
             all_detections = []
+            all_hands = []
             detected_frames_count = 0
             
             batch_frames = []
@@ -102,8 +103,8 @@ class SocialPresenceDetector:
                 
                 # Process batch if full or at end of video
                 if len(batch_frames) >= BATCH_SIZE or (is_end and len(batch_frames) > 0):
-                    # Use YOLO internal batching
-                    results = self.model(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames)) 
+                    # Use YOLO internal batching with ByteTrack
+                    results = self.model.track(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames), persist=True, tracker="bytetrack.yaml") 
                     
                     for i, result in enumerate(results):
                         timestamp = batch_timestamps[i]
@@ -155,7 +156,11 @@ class SocialPresenceDetector:
                             if is_hand:
                                 continue
 
+                            # Extract tracking ID if available
+                            person_id = int(box.id[0]) if box.id is not None else len(frame_detections)
+
                             frame_detections.append({
+                                "person_id": person_id,
                                 "timestamp_sec": timestamp,
                                 "bounding_box": coords,
                                 "confidence": float(box.conf[0])
@@ -165,8 +170,12 @@ class SocialPresenceDetector:
                         if has_bystander_in_frame:
                             detected_frames_count += 1
                         
-                        if frame_detections:
+                        if frame_detections or (return_hands and hand_boxes):
                             all_detections.append(frame_detections)
+                            all_hands.append({
+                                "timestamp_sec": timestamp,
+                                "hand_boxes": hand_boxes
+                            })
                     
                     batch_frames = []
                     batch_timestamps = []
@@ -180,6 +189,8 @@ class SocialPresenceDetector:
             
             if fast_mode:
                 return detected_frames_count >= min_consistency
+            if return_hands:
+                return all_detections, all_hands
             return all_detections
         finally:
             cap.release()
