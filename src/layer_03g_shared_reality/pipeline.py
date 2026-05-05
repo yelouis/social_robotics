@@ -113,11 +113,22 @@ class SharedRealityPipeline:
                 video_path, bystanders, start_sec, end_sec
             )
             
+            # Obtain frame diagonal for resolution-normalized threshold
+            cap = cv2.VideoCapture(str(video_path))
+            if cap.isOpened():
+                width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                cap.release()
+                frame_diagonal = np.sqrt(width**2 + height**2)
+                threshold = frame_diagonal * 0.04
+            else:
+                threshold = 30.0
+            
             # Social referencing requires BOTH a meaningful camera shift
             # (indicating the POV actor looked away from the task) AND
             # the bystander ending up centered in the FOV.
             shift_magnitude = np.sqrt(shift_vector[0]**2 + shift_vector[1]**2)
-            social_reference_sought = bool(bystander_centered and shift_magnitude > 30.0)
+            social_reference_sought = bool(bystander_centered and shift_magnitude > threshold)
             
             tasks_analyzed.append({
                 "task_id": task_id,
@@ -160,7 +171,7 @@ class SharedRealityPipeline:
             return [0.0, 0.0]
             
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        prev_gray = cv2.resize(prev_gray, (0, 0), fx=0.25, fy=0.25) # Downsample for speed
+        prev_gray = cv2.resize(prev_gray, (0, 0), fx=0.5, fy=0.5) # Downsample for speed
         
         current_frame_idx = start_frame + 1
         
@@ -173,7 +184,7 @@ class SharedRealityPipeline:
                 break
                 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.resize(gray, (0, 0), fx=0.25, fy=0.25)
+            gray = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
             
             flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             
@@ -185,8 +196,8 @@ class SharedRealityPipeline:
             mean_dy = -np.mean(flow[..., 1])
             
             # Upscale the shift back to original resolution scale
-            total_dx += mean_dx * 4.0
-            total_dy += mean_dy * 4.0
+            total_dx += mean_dx * 2.0
+            total_dy += mean_dy * 2.0
             
             prev_gray = gray
             current_frame_idx += 1

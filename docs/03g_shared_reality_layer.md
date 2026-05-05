@@ -25,6 +25,9 @@ Immediately following the task climax (the start of the `task_reaction_window_se
 - **Condition B (Social Referencing)**: The camera explicitly pans away from the task centroid and centers the bystander's bounding box directly into the middle 30% of the screen. The POV actor is "checking in" with the room.
 - *Note:* If the Ego4D dataset contains raw eye-tracking telemetry (often included in Aria glasses datasets), check the `gaze_x, gaze_y` arrays to see if the eye-gaze vector snapped to the bystander's face box.
 
+### 4. Future Possible Direction: Aria Glasses Gaze Telemetry Integration
+The current pipeline relies exclusively on optical flow and bounding box centering. Future iterations may explore extracting sub-degree gaze telemetry (`gaze_x`, `gaze_y`) from Aria glasses recordings (`.vrs` formats via `projectaria_tools`). This would provide high-precision ground-truth tracking for social referencing, although it is limited to the Aria-specific subset of clips.
+
 ---
 
 ## 📤 Output Schema and Integration
@@ -74,45 +77,20 @@ Immediately following the task climax (the start of the `task_reaction_window_se
 
 6. **`np.bool_` Type Leak Into JSON Output (Resolved - May 04)**:
    - **Problem**: The `shift_magnitude > 30.0` comparison returned `np.bool_` (a numpy scalar), not a native Python `bool`. When combined with `bystander_centered` via `and`, the result type was `np.True_` or `np.False_`. This caused `isinstance(value, bool)` checks to fail and would produce non-standard JSON serialization in some environments.
-   - **Solution**: Wrapped the expression with `bool(...)` to guarantee a native Python boolean is stored in the output dictionary: `social_reference_sought = bool(bystander_centered and shift_magnitude > 30.0)`.
+   - **Solution**: Wrapped the expression with `bool(...)` to guarantee a native Python boolean is stored in the output dictionary.
+
+7. **Deferred Gaze Telemetry Integration (Resolved - May 05)**:
+   - **Problem**: The specification mentions using raw eye-tracking telemetry (`gaze_x`, `gaze_y` arrays) from Aria glasses datasets as a high-precision fallback for social referencing detection. However, this requires complex `.vrs` parsing and a 200MB dependency, which only benefits a fraction of the dataset.
+   - **Solution**: Deferred the implementation of Aria gaze telemetry parsing to a future update to maintain a lighter footprint and rely on optical flow and bounding box centering, which covers all clips uniformly. Added a "Future Possible Direction" section in the Implementation Strategy.
+
+8. **Optical Flow Downsampling Artifacts (Resolved - May 05)**:
+   - **Problem**: The Farneback optical flow computation was heavily downsampling frames by a factor of 0.25 to maintain low latency. This aggressive reduction caused subtle micro-pans to fall below the optical flow noise floor, potentially missing important gaze shifts towards bystanders.
+   - **Solution**: Updated `_extract_camera_shift` in `pipeline.py` to use a 0.5x downsampling factor. This recovers significant spatial resolution for detecting micro-pans with an acceptable performance trade-off on the Mac mini M4 Pro.
+
+9. **Camera Shift Magnitude Threshold Tuning (Resolved - May 05)**:
+   - **Problem**: The `social_reference_sought` logic used an absolute shift magnitude threshold of `30.0` pixels, which was calibrated for 480p clips but was overly permissive and prone to false positives for higher resolution (e.g. 1080p, 4K) footage.
+   - **Solution**: Replaced the static absolute threshold in `process_video` with a resolution-normalized threshold dynamically computed as 4% of the frame's diagonal (`threshold = frame_diagonal * 0.04`). This properly scales the sensitivity across varying video resolutions.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Gaze Telemetry Integration (Aria Glasses)
-**Status**: ⚠️ Confirmed Unresolved — The specification (Section 3, Note) mentions using raw eye-tracking telemetry (`gaze_x`, `gaze_y` arrays) from Aria glasses datasets as a high-precision fallback for social referencing detection. This data is not parsed from the `filtered_manifest.json`, and no code path exists to load or consume Aria-specific telemetry. The layer relies exclusively on optical flow and bounding box centering.
-
-**Option A (recommended)**: **Deferred Until Aria Dataset Integration** — Aria glasses telemetry is only available for a subset of Ego4D clips captured with the Aria rig. Since the current pipeline does not distinguish between Aria and non-Aria clips, implementing gaze telemetry parsing would require: (1) identifying Aria clips in the manifest, (2) parsing the proprietary `.vrs` recording format, (3) aligning gaze timestamps with video frames. This is a significant integration effort for a feature that benefits only a fraction of the dataset.
-  - *Pros*: No engineering cost; the current optical flow + centering approach covers all clips equally.
-  - *Cons*: Misses the highest-fidelity social referencing signal available; Aria clips may have the most interesting social interactions (research-grade capture).
-
-**Option B**: **Implement Aria Gaze Fallback** — Parse the `projectaria_tools` Python SDK to extract `gaze_x`, `gaze_y` arrays from `.vrs` files. When Aria telemetry is available for a clip, use the gaze snap-to-face metric as the primary social referencing signal, falling back to optical flow for non-Aria clips.
-  - *Pros*: Sub-degree gaze precision; ground-truth social referencing detection; aligns with specification.
-  - *Cons*: `projectaria_tools` adds ~200MB dependency; `.vrs` format parsing is complex; only benefits Aria-subset clips; requires identifying Aria clips in the manifest.
-
-Your selection: Proceed with Option A. Make a note of future development in the Implementation Strategy maybe add this in a new section called Future Possible Direction. It would be nice to use Aria glasses in the future.
-
----
-
-### Issue 2: Optical Flow Downsampling Artifacts
-**Status**: ⚠️ Confirmed Unresolved — The Farneback optical flow computation currently downsamples the input frames by a factor of 0.25 (quarter resolution) to maintain acceptable latency on the Mac mini M4 Pro. At this aggressive downsampling, subtle micro-pans (e.g., a brief 5-pixel gaze shift towards the bystander at native resolution) are reduced to ~1.25 pixels, which falls below the noise floor of optical flow estimation and may be missed entirely.
-
-**Option A (recommended)**: **Benchmark 0.5x Downsampling** — Run a timing benchmark on 50 representative clips comparing 0.25x vs. 0.5x downsampling. If the latency increase is ≤50% (estimated ~1-2s per video based on typical optical flow performance), adopt 0.5x as the default. The 4x increase in effective resolution (from 0.25x to 0.5x) would recover most subtle pan vectors.
-  - *Pros*: Data-driven decision; minimal code change (single parameter); recovers significant spatial resolution.
-  - *Cons*: May increase per-video processing time from ~3s to ~5s; benchmark requires dedicated test time.
-
-**Option B**: **Adaptive Downsampling Based on Frame Size** — Use 0.5x for standard resolution (≤720p) and 0.25x for high resolution (≥1080p). This balances precision and performance based on the source material.
-  - *Pros*: Optimizes for both low and high resolution sources; no fixed performance penalty.
-  - *Cons*: Adds conditional logic; may produce inconsistent results across resolution tiers; requires testing both paths.
-
-Your selection: Lets just use 0.5x for all of them. The trade off isn't that bad.
-
----
-
-### Issue 3: Camera Shift Magnitude Threshold Tuning
-**Status**: ⚠️ Confirmed Unresolved — The `shift_magnitude > 30.0` pixel threshold for `social_reference_sought` is a heuristic calibrated for standard 480p Ego4D clips. On higher-resolution datasets (1080p, 4K), the same physical camera pan produces proportionally larger pixel displacements. A 30-pixel shift at 1080p represents a much smaller angular pan than at 480p, meaning the threshold is overly permissive for high-resolution content and would trigger false positives.
-
-**Option A (recommended)**: **Resolution-Normalized Threshold** — Replace the absolute pixel threshold with a percentage of the frame diagonal: `threshold = frame_diagonal * 0.04` (approximately 30 pixels at 480p, 78 pixels at 1080p, 155 pixels at 4K). This automatically scales the sensitivity to match the source resolution.
-  - *Pros*: Resolution-agnostic; single formula; eliminates per-resolution tuning; trivial to implement.
-  - *Cons*: The 0.04 ratio is still a heuristic that may need calibration; videos with unusual aspect ratios (e.g., ultrawide) may behave differently.
-
-Your selection: Proceed with option A.
+*None at this time.*
