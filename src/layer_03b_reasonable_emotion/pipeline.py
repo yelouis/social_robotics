@@ -374,6 +374,33 @@ class ReasonableEmotionPipeline:
                 start_emotion = timeseries[i]
                 end_emotion = timeseries[i + 1]
 
+                if start_emotion['emotion'] == end_emotion['emotion']:
+                    if slices:
+                        slices[-1]['window_sec'][1] = end_emotion['t']
+                        slices[-1]['terminal_magnitude'] = round(end_emotion['magnitude'], 2)
+                        scalar = end_emotion['magnitude']
+                        if slices[-1]['classified_direction'] == "negative":
+                            scalar = -scalar
+                        elif slices[-1]['classified_direction'] == "neutral":
+                            scalar = 0.0
+                        slices[-1]['slice_success_scalar'] = round(scalar, 2)
+                    else:
+                        direction = self._rule_based_classify(end_emotion['emotion'], expectations)['classified_direction']
+                        scalar = end_emotion['magnitude']
+                        if direction == "negative":
+                            scalar = -scalar
+                        elif direction == "neutral":
+                            scalar = 0.0
+                        slices.append({
+                            "slice_id": len(slices) + 1,
+                            "window_sec": [start_emotion['t'], end_emotion['t']],
+                            "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
+                            "terminal_magnitude": round(end_emotion['magnitude'], 2),
+                            "classified_direction": direction,
+                            "slice_success_scalar": round(scalar, 2)
+                        })
+                    continue
+
                 # Use LLM with pydantic validation + retry, or rule-based fallback
                 eval_result = self._llm_evaluate_transition(
                     task_label, expectations, accumulated_history,
@@ -383,7 +410,7 @@ class ReasonableEmotionPipeline:
 
                 # Build accumulated history string for next iteration
                 accumulated_history += (
-                    f"{i + 1}. {start_emotion['emotion']} -> {end_emotion['emotion']} "
+                    f"{len(slices) + 1}. {start_emotion['emotion']} -> {end_emotion['emotion']} "
                     f"(Classified: {direction})\n"
                 )
 
@@ -394,7 +421,7 @@ class ReasonableEmotionPipeline:
                     scalar = 0.0
 
                 slices.append({
-                    "slice_id": i + 1,
+                    "slice_id": len(slices) + 1,
                     "window_sec": [start_emotion['t'], end_emotion['t']],
                     "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
                     "terminal_magnitude": round(end_emotion['magnitude'], 2),
