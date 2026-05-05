@@ -50,15 +50,27 @@ def run_selective():
                 sys.exit(0)
             signal.signal(signal.SIGINT, signal_handler)
 
-            batch_size = 10 # Reduced from 50 for stability and better tracking
-            num_batches = (len(to_process) + batch_size - 1) // batch_size
+            import shutil
             
+            i = 0
+            current_batch_num = 1
             batches_run = 0
-            for i in range(0, len(to_process), batch_size):
-                    
+            
+            while i < len(to_process):
+                # Calculate dynamic batch size
+                try:
+                    usage = shutil.disk_usage("/Volumes/Extreme SSD")
+                    # Average size assumption: 500MB
+                    avg_size_bytes = 500 * 1024 * 1024
+                    safe_batch = int(usage.free / avg_size_bytes)
+                    # Clamp between 10 and 200
+                    batch_size = max(10, min(200, safe_batch))
+                except Exception as e:
+                    print(f"[Warning] Could not calculate dynamic batch size: {e}")
+                    batch_size = 10  # Fallback
+
                 batch = to_process[i:i + batch_size]
-                current_batch_num = i // batch_size + 1
-                print(f"\n>>> Ego4D Batch {current_batch_num}/{num_batches} ({len(batch)} UIDs)")
+                print(f"\n>>> Ego4D Batch {current_batch_num} (Dynamic Size: {batch_size}, {len(batch)} UIDs)")
                 
                 # Execute batch download and immediate filter
                 print(f"[Debug] Starting ego4d.run for batch {current_batch_num}...")
@@ -71,6 +83,9 @@ def run_selective():
                 # Optional: Brief sleep to allow system to cool down or user to interrupt
                 print(f"[Debug] Sleeping 1s...")
                 time.sleep(1)
+                
+                i += batch_size
+                current_batch_num += 1
                 batches_run += 1
         else:
             print("Ego4D: All videos already processed.")

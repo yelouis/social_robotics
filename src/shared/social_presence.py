@@ -1,6 +1,7 @@
 import cv2
 import gc
 import torch
+import mediapipe as mp
 from ultralytics import YOLO
 from pathlib import Path
 
@@ -8,6 +9,8 @@ class SocialPresenceDetector:
     def __init__(self, model_path='yolov8n.pt'):
         self.model_path = model_path
         self._model = None
+        self._mp_hands = None
+        self._hands_detector = None
 
     @property
     def model(self):
@@ -17,12 +20,30 @@ class SocialPresenceDetector:
             self._model = YOLO(self.model_path)
         return self._model
 
+    @property
+    def mp_hands(self):
+        if self._hands_detector is None:
+            print("[SocialPresenceDetector] Loading MediaPipe Hands model...")
+            self._mp_hands = mp.solutions.hands
+            self._hands_detector = self._mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+        return self._hands_detector
+
     def unload(self):
         """ Explicitly unload the model and clear memory """
         if self._model is not None:
             print(f"[SocialPresenceDetector] Unloading YOLO model...")
             del self._model
             self._model = None
+            
+        if self._hands_detector is not None:
+            print(f"[SocialPresenceDetector] Unloading MediaPipe Hands model...")
+            self._hands_detector.close()
+            self._hands_detector = None
             
         # Force garbage collection and clear MPS/CUDA cache
         gc.collect()
@@ -61,30 +82,53 @@ class SocialPresenceDetector:
             all_detections = []
             detected_frames_count = 0
             
+            batch_frames = []
+            batch_timestamps = []
+            BATCH_SIZE = 16  # Adjustable batch size based on memory
+
             # Use sequential reading instead of seeking for stability on macOS
             current_frame_idx = 0
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    break
                 
                 # Only process frames at the specified interval
-                if current_frame_idx % frame_interval == 0:
-                    if frame is None or frame.size == 0:
-                        current_frame_idx += 1
-                        continue
-
-                    timestamp = current_frame_idx / fps
-                    # Use the specified device or let it auto-select (defaulting to MPS/CPU)
-                    results = self.model(frame, classes=[0], verbose=False, conf=0.5) 
+                if ret and current_frame_idx % frame_interval == 0:
+                    if frame is not None and frame.size > 0:
+                        batch_frames.append(frame)
+                        batch_timestamps.append(current_frame_idx / fps)
+                
+                current_frame_idx += 1
+                is_end = not ret or current_frame_idx >= total_frames
+                
+                # Process batch if full or at end of video
+                if len(batch_frames) >= BATCH_SIZE or (is_end and len(batch_frames) > 0):
+                    # Use YOLO internal batching
+                    results = self.model(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames)) 
                     
-                    frame_detections = []
-                    has_bystander_in_frame = False
-                    for result in results:
+                    for i, result in enumerate(results):
+                        timestamp = batch_timestamps[i]
+                        frame_detections = []
+                        has_bystander_in_frame = False
+                        img_h, img_w = batch_frames[i].shape[:2]
+                        
+                        # MediaPipe Hand Detection
+                        frame_rgb = cv2.cvtColor(batch_frames[i], cv2.COLOR_BGR2RGB)
+                        hand_results = self.mp_hands.process(frame_rgb)
+                        hand_boxes = []
+                        if hand_results.multi_hand_landmarks:
+                            for hand_landmarks in hand_results.multi_hand_landmarks:
+                                x_min, y_min = img_w, img_h
+                                x_max, y_max = 0, 0
+                                for lm in hand_landmarks.landmark:
+                                    x, y = int(lm.x * img_w), int(lm.y * img_h)
+                                    x_min, y_min = min(x_min, x), min(y_min, y)
+                                    x_max, y_max = max(x_max, x), max(y_max, y)
+                                pad = 20
+                                hand_boxes.append((max(0, x_min - pad), max(0, y_min - pad), min(img_w, x_max + pad), min(img_h, y_max + pad)))
+
                         for box in result.boxes:
                             coords = [int(v) for v in box.xyxy[0].tolist()]
                             x1, y1, x2, y2 = coords
-                            img_h, img_w = frame.shape[:2]
                             
                             # Refined Anti-Wearer Heuristic
                             is_limb = (y2 > 0.95 * img_h) and (y1 > 0.15 * img_h)
@@ -93,25 +137,45 @@ class SocialPresenceDetector:
                             if is_limb or is_ghost:
                                 continue
 
+                            # MediaPipe Hand Overlap Suppression
+                            is_hand = False
+                            p_area = max(0, x2 - x1) * max(0, y2 - y1)
+                            if p_area > 0:
+                                for (hx1, hy1, hx2, hy2) in hand_boxes:
+                                    ix1 = max(x1, hx1)
+                                    iy1 = max(y1, hy1)
+                                    ix2 = min(x2, hx2)
+                                    iy2 = min(y2, hy2)
+                                    if ix1 < ix2 and iy1 < iy2:
+                                        i_area = (ix2 - ix1) * (iy2 - iy1)
+                                        # Use 40% overlap threshold
+                                        if (i_area / p_area) > 0.4:
+                                            is_hand = True
+                                            break
+                            if is_hand:
+                                continue
+
                             frame_detections.append({
                                 "timestamp_sec": timestamp,
                                 "bounding_box": coords,
                                 "confidence": float(box.conf[0])
                             })
                             has_bystander_in_frame = True
+                        
+                        if has_bystander_in_frame:
+                            detected_frames_count += 1
+                        
+                        if frame_detections:
+                            all_detections.append(frame_detections)
                     
-                    if has_bystander_in_frame:
-                        detected_frames_count += 1
+                    batch_frames = []
+                    batch_timestamps = []
                     
+                    # Return early in fast mode
                     if fast_mode and (detected_frames_count >= min_consistency):
                         return True
-                        
-                    if frame_detections:
-                        all_detections.append(frame_detections)
                 
-                current_frame_idx += 1
-                # Small safety break if we exceed total_frames (sometimes cap.read() returns True past total_frames)
-                if current_frame_idx >= total_frames:
+                if is_end:
                     break
             
             if fast_mode:

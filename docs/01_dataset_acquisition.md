@@ -100,70 +100,24 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
    - **Problem**: Batched acquisition occasionally missed videos if the CLI nested them unexpectedly, and transient network errors would crash multi-hour runs.
    - **Solution**: Implemented **Tethered UID Mapping** for recursive existence verification and wrapped the batch execution loop in granular exception handling to ensure the pipeline continues to the next set of UIDs after a failure.
 
-10. **Progress Bar Overflow (Resolved - April 27)**:
-    - **Problem**: The `tqdm` progress bar incorrectly showed 300% completion because update calls for disabled datasets (EPIC, EgoProceL) were still executing outside of comment blocks.
     - **Solution**: Moved all `pbar.update(1)` calls for inactive tasks inside their respective triple-quoted comment blocks.
+
+11. **Dynamic Batch Sizing (Resolved - May 04)**:
+    - **Problem**: The batch size for dataset downloads was hardcoded to `50` in `run_selective_download.py`, which failed to adapt to varying available SSD space, risking overflow or underutilization.
+    - **Solution**: Implemented Query-Based Dynamic Sizing using `shutil.disk_usage()`. The system now automatically calculates the safe batch size based on available storage at the start of each cycle, clamped between 10 and 200.
+
+12. **Parallel Frame Filtering Latency (Resolved - May 04)**:
+    - **Problem**: The social presence filter processed videos sequentially frame-by-frame, underutilizing compute resources and causing bottlenecks during the YOLO inference phase.
+    - **Solution**: Implemented Batched Frame-Level Parallelism in `social_presence.py`. The system now accumulates frames into an internal batch array and leverages YOLO's native GPU batch inference API, significantly improving throughput without multi-process complexity.
+
+13. **Dataset Support Expansion Scope (Resolved - May 04)**:
+    - **Problem**: EgoProceL and EPIC-KITCHENS-100 downloaders were stubbed out, leaving ambiguity on whether their absence was a bug or intentional.
+    - **Solution**: Deferred non-Ego4D datasets. Documented that the focus will exclusively remain on Ego4D and Charades-Ego to reach statistical significance before attempting complex integrations with gated or nested meta-datasets.
+
+14. **Wearer Detection Refinement (Hand Occlusion False Positives) (Resolved - May 04)**:
+    - **Problem**: The geometric anti-wearer heuristic produced false positives when the wearer's hands occluded or overlapped with bystander bounding boxes, mistakenly identifying hands as bystanders.
+    - **Solution**: Integrated MediaPipe Hands to generate accurate hand localization and filter out YOLO person detections that overlap heavily (>40%) with the detected hand bounding boxes.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Dynamic Batch Sizing
-**Status**: ⚠️ Confirmed Unresolved — The batch size is hardcoded to `50` in `run_selective_download.py`. This means the system cannot adapt to varying available SSD space. If the SSD has 500GB free, 50 videos per batch is overly conservative; if it has only 10GB free, 50 videos could overflow mid-batch.
-
-**Option A (recommended)**: **Query-Based Dynamic Sizing** — At the start of each batch cycle, query `shutil.disk_usage("/Volumes/Extreme SSD")` to determine available space. Divide available bytes by the average per-video size (derived from the previous batch's mean file size, or a conservative default of 500MB) to compute the max safe batch size, clamped to a `[10, 200]` range.
-  - *Pros*: Fully adaptive; prevents overflow and maximizes throughput; zero external dependencies.
-  - *Cons*: Relies on accurate average file size estimation; first batch uses a conservative default until calibrated.
-
-**Option B**: **Tiered Static Sizing** — Replace the single `50` constant with a lookup table: `{">500GB": 200, ">100GB": 100, ">50GB": 50, "<50GB": 20}`, checked once at startup.
-  - *Pros*: Simpler to implement; no per-batch overhead.
-  - *Cons*: Cannot react to space changes mid-run; requires manual tuning of tier boundaries.
-
-Your selection: Proceed with Option A
-
----
-
-### Issue 2: Parallel Frame Filtering
-**Status**: ⚠️ Confirmed Unresolved — The social presence filter processes videos sequentially in a `for` loop. On the Mac mini M4 Pro (10 CPU cores, 24GB RAM), this underutilizes available compute during the YOLO inference phase.
-
-**Option A (recommended)**: **`concurrent.futures.ProcessPoolExecutor` with Worker Pool** — Wrap the per-video filter call in a process pool (e.g., `max_workers=4`). Each worker loads its own YOLO model instance. The main process collects results and writes to the manifest atomically.
-  - *Pros*: 3-4x throughput improvement on 10-core M4 Pro; each worker is memory-isolated; straightforward implementation with stdlib.
-  - *Cons*: 4 YOLO instances × ~200MB ≈ 800MB additional memory; requires careful locking on the shared `processed_uids.json` and manifest files.
-
-**Option B**: **`multiprocessing.Pool` with Shared Model** — Use `torch.multiprocessing` with `fork` start method to share the YOLO model's read-only weights across workers.
-  - *Pros*: Lower memory overhead (shared weights); potentially faster startup.
-  - *Cons*: `fork` is unreliable on macOS (Apple discourages it); MPS tensors cannot be shared across forked processes; higher crash risk.
-
-**Option C**: **Batched Frame-Level Parallelism** — Keep sequential video processing but batch-submit sampled frames to YOLO using its native batch inference API (`model.predict(frames, batch=N)`).
-  - *Pros*: No multi-process complexity; leverages YOLO's internal GPU batching; minimal code change.
-  - *Cons*: Limited speedup (only parallelizes within a single video, not across videos); memory spike on large frame batches.
-
-Your selection: Proceed with Option C
-
----
-
-### Issue 3: Dataset Support Expansion (EgoProceL & EPIC-KITCHENS-100)
-**Status**: ⚠️ Confirmed Unresolved — The downloaders for EgoProceL and EPIC-KITCHENS-100 are stubbed out (commented/disabled) in `run_selective_download.py`. Only Ego4D and Charades-Ego are operational.
-
-**Option A (recommended)**: **Deferred Until Ego4D Saturation** — Continue with Ego4D and Charades-Ego until the filtered dataset reaches a statistically significant size (e.g., >5,000 social clips). Document this as a deliberate prioritization, not a bug. Enable EPIC-KITCHENS-100 next (it has structured task annotations similar to Ego4D), then EgoProceL last (meta-dataset, requires recursive source resolution).
-  - *Pros*: Focused engineering effort; avoids splitting attention across 4 dataset integrations; Ego4D alone provides sufficient diversity for initial research.
-  - *Cons*: Delays cross-dataset generalization validation.
-
-**Option B**: **Parallel Dataset Integration Sprint** — Implement all four dataset downloaders simultaneously with a unified `DatasetAdapter` interface.
-  - *Pros*: Maximum dataset diversity immediately; identifies cross-dataset schema issues early.
-  - *Cons*: High engineering cost; EPIC-KITCHENS-100 requires university-gated access; EgoProceL's nested source resolution is complex.
-
-Your selection: Let's only do Ego4D for now.
-
----
-
-### Issue 4: Wearer Detection Refinement (Hand Occlusion False Positives)
-**Status**: ⚠️ Confirmed Unresolved — The geometric anti-wearer heuristic (edge exclusion, confidence floor, temporal consistency) is effective but still produces occasional false positives when the wearer's hands occlude or overlap with bystander bounding boxes.
-
-**Option A (recommended)**: **Ego-Hand Segmentation Mask via EgoHOS** — Integrate the [EgoHOS](https://github.com/owenzlz/EgoHOS) egocentric hand-object segmentation model to generate per-frame hand masks. Subtract these masks from the YOLO `person` detections before social presence evaluation. EgoHOS is specifically trained on Ego4D data and runs on PyTorch MPS.
-  - *Pros*: Purpose-built for egocentric hand removal; high precision on Ego4D; published research backing.
-  - *Cons*: Adds ~300MB model weight; increases per-frame inference time by ~50ms; requires integration testing on the M4 Pro memory budget.
-
-**Option B**: **IoU Overlap Suppression** — If a YOLO `person` detection has >40% IoU with the bottom-center "wearer zone" (the lower-third, center-half of the frame), suppress it. This extends the current geometric heuristic without adding a new model.
-  - *Pros*: Zero additional dependencies; trivial to implement; no memory cost.
-  - *Cons*: Still purely geometric; fails when hands are raised or extended into the upper frame; lower precision than learned segmentation.
-
-Your selection: Proceed with Option A.
+*None at this time.*
