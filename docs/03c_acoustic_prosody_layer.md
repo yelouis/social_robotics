@@ -119,32 +119,14 @@ The Acoustic Prosody Layer has been implemented and successfully integrated:
     - **Problem**: The `emotion2vec+` model returns composite labels (e.g., `'生气/angry'`), which mismatched the English-only lookup keys and resulted in `0.0` scores.
     - **Solution**: Updated `_run_ser_model` to split labels and extract the English component, ensuring correct mapping to social heuristics.
 
+11. **Supplementary Audio Event Detection (SenseVoice) (Resolved - May 05)**:
+    - **Problem**: The pipeline exclusively used `emotion2vec+` for 9-class speech emotion recognition, missing critical non-speech social cues like laughter, applause, and crying.
+    - **Solution**: Integrated a sequential `SenseVoiceSmall` inference pass that runs conditionally when `emotion2vec+`'s dominant emotion confidence is below 0.6. Extracted non-speech event labels are now appended as a new `audio_events` array in the output schema.
+
+12. **torchaudio Streaming for Long Clips (Resolved - May 05)**:
+    - **Problem**: The pipeline extracts audio via an `ffmpeg` subprocess to slice and resample into a temporary `.wav` file on disk, which was flagged as potentially inefficient compared to `torchaudio.io.StreamReader` zero-copy streaming.
+    - **Solution**: Deferred and retained the current `ffmpeg` architecture. Since `task_reaction_window_sec` bounding ensures maximum clip sizes of ~6.0s (192KB), temporary file I/O overhead is negligible. This avoids introducing beta PyTorch streaming APIs and preserves system stability.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Supplementary Audio Event Detection (SenseVoice)
-**Status**: ⚠️ Confirmed Unresolved — The current pipeline exclusively uses `emotion2vec+` for 9-class speech emotion recognition. The specification in Section 2 explicitly recommends running **SenseVoice** alongside for detecting non-speech audio events (laughter, applause, crying, coughing). SenseVoice (`SenseVoiceSmall`) is already listed in `ml_dependencies.md` (~500MB, Apache-2.0) but is not loaded or called anywhere in the pipeline code.
-
-**Option A (recommended)**: **Sequential SenseVoice Pass After emotion2vec+** — After the emotion2vec+ inference completes, run the same 16kHz WAV slice through SenseVoice to extract audio event labels. Append the detected events as a new `audio_events` array in the output schema (additive, non-breaking). Only run SenseVoice when emotion2vec+'s dominant emotion confidence is below 0.6, indicating ambiguous speech where non-speech cues may be more informative.
-  - *Pros*: Captures laughter/applause that emotion2vec+ misses entirely; conditional execution minimizes overhead; SenseVoice is already documented and license-cleared.
-  - *Cons*: Adds ~500MB model weight to memory during inference; sequential execution adds ~2-3s per audio slice; requires defining a new `audio_events` schema field.
-
-**Option B**: **Deferred as Non-Critical Enhancement** — Document SenseVoice integration as a "Phase 2" enhancement. The current emotion2vec+ 9-class output already captures the primary speech emotion signal. Non-speech events like laughter are partially captured under the `happy` class, and applause under `other`.
-  - *Pros*: Zero implementation effort; no additional memory or latency cost; keeps the pipeline lean.
-  - *Cons*: Loses distinct non-speech event classification; `happy` ≠ laughter (laughter can be nervous/mocking); misses critical social cues like gasps and crying.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: torchaudio Streaming for Long Clips
-**Status**: ⚠️ Confirmed Unresolved — The current pipeline extracts audio by spawning an `ffmpeg` subprocess to slice and resample the reaction window into a temporary `.wav` file on disk, then loads the entire WAV into memory. For short reaction windows (2-6 seconds), this is efficient. For extremely long clips or wide reaction windows (>30 seconds), the temporary WAV file can consume significant disk I/O and the full memory load may be wasteful.
-
-**Option A (recommended)**: **Deferred — Current Approach Is Adequate** — The reaction windows in this pipeline are bounded by `task_reaction_window_sec`, which typically spans 0.5s to 6.0s. A 6-second mono 16kHz WAV is ~192KB — trivially small for both disk and memory. The `ffmpeg` subprocess approach is robust, well-tested, and handles codec conversion automatically. This issue is only relevant if the pipeline is extended to process full-clip audio (e.g., for ambient analysis outside reaction windows).
-  - *Pros*: No code change; no risk of introducing streaming bugs; current approach is battle-tested across 10 resolved issues.
-  - *Cons*: Does not scale if future requirements demand full-clip audio analysis.
-
-**Option B**: **torchaudio StreamReader** — Replace the `ffmpeg` subprocess + disk WAV with `torchaudio.io.StreamReader`, which can decode, resample, and stream audio directly from the source MP4 without intermediate files.
-  - *Pros*: Eliminates temporary file I/O; zero-copy streaming; native PyTorch integration.
-  - *Cons*: `torchaudio.io.StreamReader` API is still marked as beta; adds `torchaudio` as a hard dependency (currently optional); requires error handling for unsupported codecs; may conflict with MPS memory if PyTorch tensors are allocated during audio decode.
-
-Your selection: Proceed with Option A.
+*None at this time.*

@@ -66,8 +66,10 @@ class AcousticProsodyPipeline:
             logger.info("Initializing emotion2vec+ via FunASR...")
             # disable_update=True prevents downloading updates on every run if already cached
             self.model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+            logger.info("Initializing SenseVoiceSmall via FunASR...")
+            self.sensevoice_model = AutoModel(model="iic/SenseVoiceSmall", disable_update=True)
             self.funasr_available = True
-            logger.info("emotion2vec+ initialized successfully.")
+            logger.info("emotion2vec+ and SenseVoiceSmall initialized successfully.")
         except ImportError:
             raise RuntimeError(
                 "funasr is not installed. Speech Emotion Recognition requires it. "
@@ -216,6 +218,37 @@ class AcousticProsodyPipeline:
             logger.error(f"Error running SER model on {wav_path}: {e}")
             return default_scores
 
+    def _run_sensevoice_model(self, wav_path: str) -> List[str]:
+        """Run SenseVoiceSmall to detect non-speech audio events (laughter, applause, etc.)."""
+        if not self.funasr_available or getattr(self, "sensevoice_model", None) is None:
+            return []
+            
+        try:
+            res = self.sensevoice_model.generate(wav_path, output_dir=None, disable_pbar=True)
+            if not res or len(res) == 0:
+                return []
+                
+            prediction = res[0]
+            text = prediction.get("text", "")
+            text_lower = text.lower()
+            
+            events = []
+            if "laughter" in text_lower or "<|laughter|>" in text_lower:
+                events.append("laughter")
+            if "applause" in text_lower or "<|applause|>" in text_lower:
+                events.append("applause")
+            if "cough" in text_lower or "<|cough|>" in text_lower:
+                events.append("cough")
+            if "crying" in text_lower or "<|crying|>" in text_lower:
+                events.append("crying")
+            if "sneeze" in text_lower or "<|sneeze|>" in text_lower:
+                events.append("sneeze")
+                
+            return events
+        except Exception as e:
+            logger.error(f"Error running SenseVoice model on {wav_path}: {e}")
+            return []
+
     def _classify_acoustic_tone(self, emotion_scores: Dict[str, float], max_amp_dbFS: float, pitch_variance: float) -> Tuple[str, float]:
         """
         Heuristic Mapping:
@@ -282,7 +315,8 @@ class AcousticProsodyPipeline:
                     "pitch_contour_variance": 0.0,
                     "emotion_scores": {k: (1.0 if k=="neutral" else 0.0) for k in ["angry", "happy", "sad", "surprised", "fearful", "neutral", "disgusted", "other", "unknown"]},
                     "dominant_emotion": "neutral",
-                    "dominant_emotion_confidence": 1.0
+                    "dominant_emotion_confidence": 1.0,
+                    "audio_events": []
                 },
                 "classified_acoustic_tone": "Neutral",
                 "prosody_scalar": 0.0
@@ -292,6 +326,11 @@ class AcousticProsodyPipeline:
         emotions = self._run_ser_model(wav_path)
         
         dominant_emotion = max(emotions.items(), key=lambda x: x[1])
+        dominant_confidence = dominant_emotion[1]
+        
+        audio_events = []
+        if dominant_confidence < 0.6:
+            audio_events = self._run_sensevoice_model(wav_path)
         
         tone, scalar = self._classify_acoustic_tone(emotions, max_amp, pitch_var)
         
@@ -306,7 +345,8 @@ class AcousticProsodyPipeline:
                 "pitch_contour_variance": pitch_var,
                 "emotion_scores": emotions,
                 "dominant_emotion": dominant_emotion[0],
-                "dominant_emotion_confidence": dominant_emotion[1]
+                "dominant_emotion_confidence": dominant_confidence,
+                "audio_events": audio_events
             },
             "classified_acoustic_tone": tone,
             "prosody_scalar": scalar
