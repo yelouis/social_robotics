@@ -13,13 +13,31 @@ class DehydratedExporter:
         Also embeds the metadata into a separate JSON since Parquet metadata
         can be tricky to retrieve across different readers.
         """
-        # Validate dehydration rule: Ensure no byte arrays or raw images
+        import re
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
+        base64_img_pattern = r'^data:image/[a-z]+;base64,'
+        path_pattern = r'^/[Vv]olumes/|^/Users/|^/tmp/'
+
+        # Validate dehydration rule: Ensure no byte arrays, numpy arrays, or raw images
         for col in df.columns:
-            # Check for generic object types that might hide bytes
             if df[col].dtype == object:
                 sample = df[col].dropna()
-                if not sample.empty and isinstance(sample.iloc[0], bytes):
-                    raise ValueError(f"Dehydration validation failed: Column {col} contains raw bytes!")
+                if not sample.empty:
+                    if any(isinstance(v, bytes) for v in sample):
+                        raise ValueError(f"Dehydration validation failed: Column {col} contains raw bytes!")
+                    if np is not None and any(isinstance(v, np.ndarray) for v in sample):
+                        raise ValueError(f"Dehydration validation failed: Column {col} contains numpy array!")
+                        
+                    str_sample = sample[sample.apply(lambda x: isinstance(x, str))]
+                    if not str_sample.empty:
+                        if str_sample.str.contains(base64_img_pattern, regex=True).any():
+                            raise ValueError(f"Dehydration validation failed: Column {col} contains base64 image!")
+                        if str_sample.str.contains(path_pattern, regex=True).any():
+                            raise ValueError(f"Dehydration validation failed: Column {col} contains raw file path leak!")
                     
         output_path = self.output_dir / filename
         df.to_parquet(output_path, engine='pyarrow', index=False)

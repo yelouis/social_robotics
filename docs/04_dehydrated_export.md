@@ -79,51 +79,22 @@ To guarantee the export structure adheres to safety standards and schema require
    - **Problem**: Layers 03b (Reasonable Emotion) and 03c (Acoustic Prosody) output their results under a `tasks_analyzed` key, not under `aggregate`/`per_person`. The original aggregator only handled the `aggregate`/`per_person` schema, meaning all 03b and 03c features were silently dropped from the exported Parquet. This is the most critical bug found during the audit — it would render the dataset incomplete for any downstream research.
    - **Solution**: Added explicit Schema B handling in `aggregator.py` that detects the `tasks_analyzed` key, JSON-stringifies the full array into a `*_tasks_analyzed_raw` column, and extracts summary scalars (`avg_task_score` for 03b, `avg_prosody_scalar` for 03c). Added tests `test_schema_b_tasks_analyzed_flattening` and `test_schema_b_prosody_scalar_extraction`.
 
-6. **Deprecated `datetime.utcnow()` Usage (Resolved - May 04)**:
+8. **Deprecated `datetime.utcnow()` Usage (Resolved - May 04)**:
    - **Problem**: `aggregator.py` used `datetime.utcnow()`, which is deprecated in Python 3.12+ because it returns a naive datetime that is ambiguously timezone-unaware.
    - **Solution**: Replaced with `datetime.now(timezone.utc)`, which returns a timezone-aware UTC datetime per modern Python best practices.
 
+7. **Memory Limits with Massive Parquets (Resolved - May 05)**:
+   - **Problem**: The current `aggregator.py` loaded all layer result JSONs into Pandas DataFrames in memory. For massive datasets, this outer join operation risked exceeding the 24GB unified memory limit of the Mac mini M4 Pro, causing an OOM kill.
+   - **Solution**: Implemented a dynamic memory check using `psutil` that estimates input dataset size. If the size exceeds 50% of available RAM, the aggregator automatically falls back to using Dask `dd.merge` for chunked outer-joins, effectively preventing memory overflow while returning a computed pandas dataframe for parquet export.
+
+8. **Hugging Face Authentication Dependency (Resolved - May 05)**:
+   - **Problem**: The `huggingface_upload.py` script required `HF_TOKEN` as an environment variable and would raise an unhandled exception if missing or if authentication failed, halting the entire export pipeline even when local files were successfully generated.
+   - **Solution**: Wrapped the upload logic in a `try/except` block to catch `401 Unauthorized` and other network errors. If the token is missing or invalid, the script logs a clear warning message and gracefully degrades by skipping the upload step, leaving the local `social_metadata.parquet` intact and allowing the pipeline to exit successfully.
+
+9. **Dehydration Validator Scope (Resolved - May 05)**:
+   - **Problem**: The dehydration check in `export.py` only scanned for generic Python `bytes` objects. It failed to detect `numpy.ndarray` pixel buffers, base64-encoded images disguised as strings, or raw local file path references that could break rehydration portability.
+   - **Solution**: Extended the validation loop to explicitly check for `numpy.ndarray` objects, and added vectorized regex scans on string columns for base64 image prefixes (`r'^data:image/[a-z]+;base64,'`) and local path leaks (`r'^/[Vv]olumes/|^/Users/|^/tmp/'`).
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Memory Limits with Massive Parquets
-**Status**: ⚠️ Confirmed Unresolved — The current `aggregator.py` loads all layer result JSONs and the filtered manifest into Pandas DataFrames in memory, then merges them via an outer join. For the current dataset size (hundreds to low thousands of clips), this is fine. However, if the full Ego4D dataset is processed (~10,000+ clips × 7 layers × per-person arrays), the merged DataFrame could exceed the 24GB unified memory limit of the Mac mini M4 Pro, causing an OOM kill.
-
-**Option A (recommended)**: **Deferred — Monitor with Explicit Memory Guard** — Add a memory check at the start of `aggregator.py` that estimates the total input size (sum of all JSON file sizes) and warns if it exceeds 50% of available RAM. If the threshold is breached, print a clear message recommending chunked processing. This defers the full Dask/Polars migration until the dataset actually grows large enough to trigger it.
-  - *Pros*: Zero-cost for current scale; provides early warning before OOM; no dependency changes.
-  - *Cons*: Does not prevent OOM — only warns about it; user must manually switch to chunked processing.
-
-**Option B**: **Polars-Based Aggregation** — Replace Pandas with [Polars](https://pola.rs/) for the aggregation step. Polars uses lazy evaluation and streaming queries that can process datasets larger than RAM without loading everything into memory. It also provides 2-5x faster joins than Pandas.
-  - *Pros*: Handles arbitrarily large datasets; faster than Pandas; Apache Arrow native (direct Parquet I/O).
-  - *Cons*: Adds `polars` as a new dependency; requires rewriting aggregation logic in Polars API (different syntax from Pandas); may introduce subtle behavior differences in null handling and type coercion.
-
-**Option C**: **Dask-Based Chunked Processing** — Wrap the existing Pandas logic in [Dask](https://dask.org/) DataFrames, which partition the data into chunks and process them lazily. The existing Pandas API is largely compatible with Dask, minimizing rewrite effort.
-  - *Pros*: Minimal code changes (swap `pd.DataFrame` with `dd.DataFrame`); distributed processing if needed in the future; familiar Pandas-like API.
-  - *Cons*: Dask adds ~100MB of dependencies; overhead for small datasets; some Pandas operations don't translate cleanly to Dask (e.g., `json.dumps` in apply functions).
-
-Your selection: Option A with Option C as an automatic fallback if the memory check fails should be the solution. Just to check we are not loading the videos clips itself into memory right?
-
----
-
-### Issue 2: Hugging Face Authentication Dependency
-**Status**: ⚠️ Confirmed Unresolved — The `huggingface_upload.py` script requires `HF_TOKEN` as an environment variable. If this token is missing, expired, or rotated (common in CI/CD environments), the upload step fails with an unauthorized error. There is no graceful degradation path — the entire export pipeline halts at the upload step even though the local Parquet file has been successfully generated.
-
-**Option A (recommended)**: **Graceful Degradation to Local-Only Export** — Wrap the Hugging Face upload call in a `try/except` block. If the token is missing or authentication fails, log a clear warning message (including instructions for how to set `HF_TOKEN`) and skip the upload step. The pipeline should still exit successfully with the local `social_metadata.parquet` and `export_metadata.json` intact.
-  - *Pros*: Pipeline never fails due to external authentication; local files are always produced; clear remediation instructions.
-  - *Cons*: Users may not notice that the upload was skipped if they don't read the logs; requires a separate manual upload step afterward.
-
-Your selection: Proceed with option A. 
-
----
-
-### Issue 3: Dehydration Validator Scope
-**Status**: ⚠️ Confirmed Unresolved — The dehydration check in `export.py` only scans for Python `bytes` objects in the merged DataFrame. It does not detect: (1) `numpy.ndarray` pixel buffers that a layer might accidentally inject into a JSON field, (2) base64-encoded image strings (e.g., `data:image/png;base64,...`) that could be stored in string columns, or (3) raw file path references to local video files that would break rehydration portability.
-
-**Option A (recommended)**: **Multi-Layer Dehydration Scan** — Extend the dehydration validator with three additional checks: (1) `isinstance(value, np.ndarray)` for numpy arrays, (2) a regex scan for base64 image prefixes (`r'^data:image/[a-z]+;base64,'`) on all string columns, (3) a path-existence check that flags any string value matching `r'^/[Vv]olumes/|^/Users/|^/tmp/'` as a potential raw data leak.
-  - *Pros*: Comprehensive coverage of all known leak vectors; catches accidental pixel/audio data injection; regex patterns are fast on string columns.
-  - *Cons*: Regex scanning on large DataFrames adds ~1-2s per export; path-pattern matching may produce false positives on legitimate metadata strings that happen to contain path-like substrings.
-
-**Option B**: **Schema-Level Type Enforcement** — Instead of scanning for bad data after the fact, enforce a strict column-type whitelist in the export schema. Only columns with types in `{int, float, str, bool, NoneType}` are allowed. Any column containing complex types (arrays, objects, bytes) is rejected at merge time.
-  - *Pros*: Prevents bad data from ever entering the export; deterministic and fast; catches issues at the source.
-  - *Cons*: May be too restrictive — the `*_tasks_analyzed_raw` JSON-stringified columns are valid string data that contains serialized arrays; requires whitelisting known complex columns.
-
-Your selection: Proceed with option A.
+*None at this time.*

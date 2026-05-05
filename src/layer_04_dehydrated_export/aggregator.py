@@ -53,10 +53,29 @@ class DataAggregator:
                 'fps': item.get('fps')
             })
         
-        df = pd.DataFrame(base_records)
-        
-        # Scan for layer results
+        # Memory Check
+        try:
+            import psutil
+            mem_available = psutil.virtual_memory().available
+        except ImportError:
+            mem_available = 8 * 1024**3 # Fallback estimate: 8GB
+            
         layer_files = sorted(self.data_dir.glob("03*_result.json"))
+        total_size = self.manifest_path.stat().st_size + sum(f.stat().st_size for f in layer_files)
+        
+        use_dask = total_size > mem_available * 0.5
+        
+        if use_dask:
+            logger.warning("Dataset size exceeds 50% of available memory. Falling back to Dask chunked processing.")
+            try:
+                import dask.dataframe as dd
+            except ImportError:
+                logger.warning("Dask is not installed. Proceeding with Pandas, but OOM crash is possible.")
+                use_dask = False
+
+        df = pd.DataFrame(base_records)
+        if use_dask:
+            df = dd.from_pandas(df, npartitions=1)
         
         for layer_file in layer_files:
             layer_name = layer_file.stem.replace("_result", "")
@@ -106,8 +125,15 @@ class DataAggregator:
                 
             layer_df = pd.DataFrame(layer_records)
             if not layer_df.empty:
-                df = df.merge(layer_df, on='video_id', how='outer')
-                
+                if use_dask:
+                    layer_dd = dd.from_pandas(layer_df, npartitions=1)
+                    df = dd.merge(df, layer_dd, on='video_id', how='outer')
+                else:
+                    df = df.merge(layer_df, on='video_id', how='outer')
+                    
+        if use_dask:
+            df = df.compute()
+            
         return df
 
     def add_export_metadata(self, df: pd.DataFrame, active_layers: List[str], git_sha: str = "unknown") -> pd.DataFrame:

@@ -12,7 +12,12 @@ def upload_to_huggingface(output_dir: str, repo_id: str, token: str = None):
     if not token:
         token = os.environ.get("HF_TOKEN")
         if not token:
-            raise ValueError("HF_TOKEN environment variable or token parameter must be set.")
+            logger.warning(
+                "HF_TOKEN environment variable or token parameter is missing. "
+                "Skipping Hugging Face upload. To enable upload, set the HF_TOKEN environment variable. "
+                "Local files will remain intact."
+            )
+            return
             
     output_dir = Path(output_dir)
     parquet_path = output_dir / "social_metadata.parquet"
@@ -27,6 +32,9 @@ def upload_to_huggingface(output_dir: str, repo_id: str, token: str = None):
     try:
         api.create_repo(repo_id=repo_id, repo_type="dataset", token=token, exist_ok=True)
     except Exception as e:
+        if "401" in str(e) or "Unauthorized" in str(e):
+            logger.warning(f"Hugging Face authentication failed: {e}. Skipping upload. Local files remain intact.")
+            return
         logger.warning(f"Could not create repo (might already exist): {e}")
 
     # Generate Dataset Card (README.md)
@@ -58,15 +66,18 @@ It does **NOT** contain any raw video pixels or audio tracks, strictly adhering 
     
     files_to_upload = [parquet_path, metadata_path, readme_path, rehydrate_path]
     
-    for file_path in files_to_upload:
-        if file_path.exists():
-            api.upload_file(
-                path_or_fileobj=str(file_path),
-                path_in_repo=file_path.name,
-                repo_id=repo_id,
-                repo_type="dataset",
-                token=token
-            )
-            logger.info(f"Uploaded {file_path.name}")
-            
-    logger.info("Upload complete.")
+    try:
+        for file_path in files_to_upload:
+            if file_path.exists():
+                api.upload_file(
+                    path_or_fileobj=str(file_path),
+                    path_in_repo=file_path.name,
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    token=token
+                )
+                logger.info(f"Uploaded {file_path.name}")
+                
+        logger.info("Upload complete.")
+    except Exception as e:
+        logger.warning(f"Hugging Face upload failed: {e}. Local files remain intact at {output_dir}.")
