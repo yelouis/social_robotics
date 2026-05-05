@@ -86,73 +86,29 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
    - **Problem**: Unused `import math` remained in `pipeline.py`, increasing module load time and cluttering the codebase.
    - **Solution**: Removed the unused import.
 
-5. **HuggingFace Cache Location Override (Resolved - April 29)**:
    - **Problem**: Setting `os.environ['HF_HOME']` inside the class constructor was too late, as the `transformers` library initializes its cache paths upon module-level import.
    - **Solution**: Moved the `HF_HOME` environment assignment to the absolute top of `pipeline.py`, ensuring it precedes any `transformers` or `torch` imports.
 
+6. **Micro-movement Aliasing via Adaptive Sampling (Resolved - May 05)**:
+   - **Problem**: Randomly seeking up to 5 frames in large reaction windows (>2.0s) led to sparse temporal coverage (>1s gaps), which risked missing rapid approach or retreat events within the window.
+   - **Solution**: Replaced the static 5-frame hardcap with a dynamic frame count proportional to the window duration `max(5, int(window_duration * 3))`, capping at 20 frames, thereby ensuring consistent 3 FPS coverage.
+
+7. **Test Suite Resumability Guard & Side-Effect Leakage (Resolved - May 05)**:
+   - **Problem**: The `test_schema_conformance` test applied a global patch to `pathlib.Path.exists` to mock video presence. This caused a global side-effect leak that bypassed the pipeline's natural resumability checks (`self.output_result_path.exists()`).
+   - **Solution**: Removed the global `@patch` and instead created a legitimate empty dummy file `dummy.mp4` within the `tmp_path` fixture to cleanly satisfy the `.exists()` validation without interfering with other path assertions.
+
+8. **Heuristic Signal Conflict via Optical Flow Noise Rejection (Resolved - May 05)**:
+   - **Problem**: In scenarios with extreme camera panning, bounding box scale expansion (due to perspective distortion) falsely indicated an "approach", contradicting the depth map deltas and corrupting the `proxemic_vector`.
+   - **Solution**: Implemented an `_extract_ego_motion_noise` validation pass utilizing Farneback optical flow. If the 95th percentile magnitude exceeds a noise threshold of `15.0`, the pipeline zeroes the `proxemic_vector` and flags `proxemic_confidence = 0.0` to prevent polluting downstream systems. Additionally, a dynamic `proxemic_confidence` is calculated based on the sign alignment between bounding box and depth delta heuristics.
+
+9. **Missing Dependency Validation (Resolved - May 05)**:
+   - **Problem**: The pipeline threw a generic error when encountering missing `transformers` or `torch` dependencies, lacking actionable instructions for environment resolution.
+   - **Solution**: Replaced the generic `RuntimeError` with a specific installation directive containing the exact required command: `pip install transformers>=4.35.0 huggingface_hub torch`.
+
+10. **Occlusion Glitches via SAM-1 Instance Masking (Resolved - May 05)**:
+    - **Problem**: The pipeline masked the depth map using a rectangular YOLO `person` bounding box. When objects (e.g., hands, tools, furniture) occluded the bystander, their depth values polluted the bounding box median, causing false "approach" spikes.
+    - **Solution**: Integrated the `facebook/sam-vit-base` SAM-1 model natively via the HuggingFace `mask-generation` pipeline. The pipeline now crops the bounding box, generates precise instance masks, selects the largest mask (representing the bystander), and uses this precise mask to filter the depth map, drastically reducing occlusion noise.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Occlusion Glitches (Bounding Box vs. Instance Mask)
-**Status**: ⚠️ Confirmed Unresolved — The pipeline masks the depth map using the rectangular YOLO `person` bounding box. When objects pass between the camera and the bystander (e.g., hands, tools, furniture), the bounding box captures these occluding pixels, skewing the median depth value towards the camera. This causes false "approach" spikes in the `proxemic_vector`.
-
-**Option A (recommended)**: **SAM 2 Instance Segmentation Mask** — Run [SAM 2](https://github.com/facebookresearch/segment-anything-2) (Segment Anything Model 2) on the bystander's bounding box to generate a pixel-precise person mask. Use this mask instead of the rectangular bounding box to filter the depth map. SAM 2 is Apache-2.0 licensed and supports video propagation (mask-once, track-through-clip).
-  - *Pros*: Eliminates occluding object pixels from depth computation; SAM 2's video propagation avoids per-frame segmentation cost; significantly more accurate `proxemic_vector`.
-  - *Cons*: SAM 2 adds ~150-400MB model weight depending on variant; first-frame segmentation takes ~200ms; increases pipeline complexity; must handle cases where SAM fails to segment the person.
-
-**Option B**: **Depth-Based Outlier Rejection** — Instead of masking by pixel identity, reject depth values within the bounding box that deviate >2σ from the median. This statistically removes occluding objects (which are at different depths) without needing instance segmentation.
-  - *Pros*: Zero additional model dependencies; trivial to implement (~5 lines of numpy); no memory cost.
-  - *Cons*: Fails when occluding objects are at similar depth to the bystander; σ threshold requires tuning; less precise than learned segmentation.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Micro-movement Aliasing (Adaptive Sampling)
-**Status**: ⚠️ Confirmed Unresolved — The pipeline samples a maximum of 5 frames per reaction window using `cap.set()` random seeking. For reaction windows of 0.5-2.0s (fast tasks), this yields a frame every 100-400ms, which is sufficient. For 2.0-6.0s windows (slow tasks), the 5-frame limit results in sparse coverage (>1s gaps), potentially missing rapid approach/retreat events within the window.
-
-**Option A (recommended)**: **Dynamic Frame Count Based on Window Length** — Scale the number of sampled frames proportionally to the window duration: `num_frames = max(5, int(window_duration * 3))`, capping at 20 frames. This ensures at least 3 FPS coverage regardless of window length while avoiding excessive frame counts.
-  - *Pros*: Automatically adapts to window duration; no model changes; preserves existing seeking logic.
-  - *Cons*: Longer windows produce more depth inference calls (up to 4x current maximum); may increase per-video processing time from ~2s to ~8s.
-
-**Option B**: **Sequential Frame-Skip Loop** — Replace random seeking with the same sequential `grab()/retrieve()` pattern recommended for 03a Issue 4. Process every Nth frame within the window, where N is computed from the target FPS (3 FPS).
-  - *Pros*: Eliminates seeking overhead; consistent temporal spacing; can be combined with Option A's dynamic count.
-  - *Cons*: Requires reading all frames between start and end of window (even if skipping most); slightly more complex implementation.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Test Suite Resumability Guard
-**Status**: ⚠️ Confirmed Unresolved — The `test_schema_conformance` test globally patches `pathlib.Path.exists` to always return `True`, which interferes with the pipeline's resumability logic (which checks `self.output_result_path.exists()` to skip already-processed videos). If tests are run concurrently or in sequence without cleanup, the global patch can leak into subsequent test methods.
-
-**Option A (recommended)**: **Instance-Level Mock** — Replace the global `@patch("pathlib.Path.exists")` with a targeted `@patch.object` on the specific `Path` instance used by the pipeline's output path. Alternatively, use `tmp_path` fixtures to create actual temporary files that satisfy the `exists()` check without mocking.
-  - *Pros*: Eliminates side-effect leakage; tests are isolated and reproducible; follows pytest best practices.
-  - *Cons*: Requires refactoring the test setup to inject paths; slightly more verbose test code.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 4: Heuristic Signal Conflict
-**Status**: ⚠️ Confirmed Unresolved — The `proxemic_vector` is a weighted combination of bounding box scale delta (40%) and depth delta (60%). In scenarios where the camera and bystander move simultaneously (e.g., camera pans right while bystander walks left), the scale delta may indicate "approach" (bbox growing due to camera pan) while the depth delta indicates "retreat" (bystander moving away). The weighted average produces a near-zero `proxemic_vector` that masks both signals.
-
-**Option A (recommended)**: **Signal Agreement Confidence Score** — Add a `proxemic_confidence` field to the output schema. Compute it as `1.0 - abs(sign(scale_delta) - sign(depth_delta)) / 2`. When both signals agree (same sign), confidence = 1.0. When they disagree (opposite signs), confidence = 0.0. Downstream consumers can filter on this field to exclude ambiguous results.
-  - *Pros*: Non-breaking schema addition; gives downstream layers a quality signal; trivial to compute.
-  - *Cons*: Does not resolve the ambiguity itself — just flags it; consumers must implement their own handling for low-confidence results.
-
-**Option B**: **EgoMotion Compensation** — Compute the camera's own egomotion (using the same optical flow technique as 03f Motor Resonance) and subtract it from the bounding box scale delta before combining with depth. This isolates the bystander's true proxemic movement from camera-induced scale changes.
-  - *Pros*: Resolves the root cause of signal conflict; produces a more accurate `proxemic_vector`; reuses existing optical flow infrastructure.
-  - *Cons*: Adds computational overhead (~30% more per video); requires careful calibration of the egomotion subtraction; may introduce its own errors if optical flow is noisy.
-
-Your selection: Proceed with Option B. Make sure to add validation tests or add a confidence score for optical flow noise. If the noise is too much, do not process that video for proxemic_vector. 
-
----
-
-### Issue 5: Missing Dependency Validation (User-Friendly Startup Check)
-**Status**: ⚠️ Confirmed Unresolved — The pipeline raises a generic `RuntimeError` if `transformers` or `torch` are missing, but the error message does not provide actionable remediation instructions. Users encountering this error must manually research which packages to install and which versions are compatible.
-
-**Option A (recommended)**: **Actionable Error Messages with Install Commands** — Replace the generic `RuntimeError` with a detailed message including the exact `pip install` command and minimum version requirements. Example: `RuntimeError: Missing required dependency 'transformers>=4.35.0'. Install with: pip install transformers>=4.35.0 huggingface_hub`.
-  - *Pros*: Zero-friction for new users; self-documenting; copy-pasteable fix.
-  - *Cons*: Install commands may become stale if version requirements change; does not handle conda environments.
-
-Your selection: Proceed with Option A.
+*None at this time.*

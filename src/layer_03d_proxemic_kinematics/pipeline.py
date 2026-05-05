@@ -26,6 +26,7 @@ class ProxemicKinematicsPipeline:
         self.error_log_path = self.output_result_path.parent / "03d_proxemic_kinematics_errors.json"
         self.force = force
         self.depth_estimator = None
+        self.sam_estimator = None
         self.device = 'cpu'
         
         self.processed_ids = set()
@@ -42,8 +43,8 @@ class ProxemicKinematicsPipeline:
 
     def _init_model(self):
         if not TRANSFORMERS_AVAILABLE:
-            raise RuntimeError("transformers and torch are required for the Proxemic Kinematics layer. "
-                               "Please install them via 'pip install transformers torch torchvision huggingface_hub'.")
+            raise RuntimeError("Missing required dependency 'transformers>=4.35.0'. "
+                               "Install with: pip install transformers>=4.35.0 huggingface_hub torch")
 
         try:
             # Create SSD cache directory if it doesn't exist
@@ -63,6 +64,9 @@ class ProxemicKinematicsPipeline:
                 
             print(f"Initializing Depth Anything V2-Small on {self.device} (Cache: {SSD_HF_CACHE})...")
             self.depth_estimator = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=device_id)
+            
+            print(f"Initializing SAM-1 (mask-generation) on {self.device}...")
+            self.sam_estimator = pipeline(task="mask-generation", model="facebook/sam-vit-base", device=device_id)
             
             # Validate download path
             model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--depth-anything--Depth-Anything-V2-Small-hf"
@@ -155,6 +159,9 @@ class ProxemicKinematicsPipeline:
                 
             start_sec, end_sec = reaction_window
             
+            chaos_score = self._extract_ego_motion_noise(video_path, start_sec, end_sec)
+            noise_threshold = 15.0
+            
             per_person = []
             for bystander in bystanders:
                 person_id = bystander.get('person_id')
@@ -170,6 +177,18 @@ class ProxemicKinematicsPipeline:
                 if bbox_delta is None:
                     continue
                     
+                if chaos_score > noise_threshold:
+                    per_person.append({
+                        "person_id": person_id,
+                        "bbox_scale_delta_pct": round(bbox_delta, 2),
+                        "depth_anything_v2_delta": 0.0,
+                        "proxemic_vector": 0.0,
+                        "classified_action": "Neutral",
+                        "proxemic_confidence": 0.0,
+                        "optical_flow_noise": round(chaos_score, 2)
+                    })
+                    continue
+                    
                 depth_delta = self._calculate_depth_delta(video_path, timestamps_sec, bounding_boxes, start_sec, end_sec)
                 
                 # Check if depth calculation succeeded
@@ -178,12 +197,24 @@ class ProxemicKinematicsPipeline:
                     
                 proxemic_vector, action = self._compute_proxemic_vector(bbox_delta, depth_delta)
                 
+                # Confidence score: if signs disagree, lower confidence
+                # e.g., bbox grows (+) but depth increases (-) -> conflict
+                # bbox_delta: + approach. depth_delta: - approach.
+                # signs agree if (bbox_delta > 0 and depth_delta < 0) or (bbox_delta < 0 and depth_delta > 0)
+                # sign of bbox_delta vs sign of (-depth_delta)
+                bbox_sign = 1 if bbox_delta > 0 else (-1 if bbox_delta < 0 else 0)
+                depth_app_sign = 1 if depth_delta < 0 else (-1 if depth_delta > 0 else 0)
+                
+                confidence = 1.0 - (abs(bbox_sign - depth_app_sign) / 2.0)
+                
                 per_person.append({
                     "person_id": person_id,
                     "bbox_scale_delta_pct": round(bbox_delta, 2),
                     "depth_anything_v2_delta": round(depth_delta, 4),
                     "proxemic_vector": round(proxemic_vector, 2),
-                    "classified_action": action
+                    "classified_action": action,
+                    "proxemic_confidence": round(confidence, 2),
+                    "optical_flow_noise": round(chaos_score, 2)
                 })
                 
             if per_person:
@@ -223,6 +254,52 @@ class ProxemicKinematicsPipeline:
         delta_pct = ((last_area - first_area) / first_area) * 100.0
         return delta_pct
 
+    def _extract_ego_motion_noise(self, video_path, start_sec, end_sec):
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return 0.0
+            
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps == 0:
+            cap.release()
+            return 0.0
+            
+        start_frame = int(start_sec * fps)
+        end_frame = int(end_sec * fps)
+        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        ret, prev_frame = cap.read()
+        if not ret:
+            cap.release()
+            return 0.0
+            
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.resize(prev_gray, (0, 0), fx=0.5, fy=0.5)
+        
+        max_chaos = 0.0
+        current_frame_idx = start_frame + 1
+        
+        while current_frame_idx <= end_frame:
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
+            
+            flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            
+            chaos_score = float(np.percentile(mag, 95))
+            if chaos_score > max_chaos:
+                max_chaos = chaos_score
+                
+            prev_gray = gray
+            current_frame_idx += 1
+            
+        cap.release()
+        return max_chaos
+
     def _calculate_depth_delta(self, video_path, timestamps, bboxes, start_sec, end_sec):
         if self.depth_estimator is None:
             return None
@@ -238,9 +315,12 @@ class ProxemicKinematicsPipeline:
             
         valid_frames.sort(key=lambda x: x[0])
         
-        # Take up to 5 frames spread out to save compute
-        if len(valid_frames) > 5:
-            indices = np.linspace(0, len(valid_frames) - 1, 5, dtype=int)
+        window_duration = end_sec - start_sec
+        num_frames = max(5, int(window_duration * 3))
+        num_frames = min(20, num_frames)
+        
+        if len(valid_frames) > num_frames:
+            indices = np.linspace(0, len(valid_frames) - 1, num_frames, dtype=int)
             valid_frames = [valid_frames[i] for i in indices]
             
         cap = cv2.VideoCapture(str(video_path))
@@ -286,9 +366,35 @@ class ProxemicKinematicsPipeline:
                 dx2 = min(dw, int(x2 * scale_x))
                 dy2 = min(dh, int(y2 * scale_y))
                 
-                # Mask with rescaled bbox
-                mask = np.zeros(depth_arr.shape[:2], dtype=bool)
-                mask[dy1:dy2, dx1:dx2] = True
+                # SAM-1 Instance Mask Generation
+                if self.sam_estimator is not None:
+                    crop = img.crop((x1, y1, x2, y2))
+                    sam_out = self.sam_estimator(crop)
+                    
+                    masks_list = sam_out if isinstance(sam_out, list) else sam_out.get('masks', [])
+                    best_mask = None
+                    max_area = 0
+                    for m_item in masks_list:
+                        m_img = m_item.get('mask') if isinstance(m_item, dict) else m_item
+                        if m_img is not None:
+                            m_arr = np.array(m_img)
+                            area = np.sum(m_arr)
+                            if area > max_area:
+                                max_area = area
+                                best_mask = m_arr
+                                
+                    if best_mask is not None:
+                        # Resize best_mask to match depth map crop region
+                        best_mask_img = Image.fromarray(best_mask).resize((dx2 - dx1, dy2 - dy1), Image.NEAREST)
+                        mask = np.zeros(depth_arr.shape[:2], dtype=bool)
+                        mask[dy1:dy2, dx1:dx2] = np.array(best_mask_img, dtype=bool)
+                    else:
+                        mask = np.zeros(depth_arr.shape[:2], dtype=bool)
+                        mask[dy1:dy2, dx1:dx2] = True
+                else:
+                    # Fallback to rectangular bbox
+                    mask = np.zeros(depth_arr.shape[:2], dtype=bool)
+                    mask[dy1:dy2, dx1:dx2] = True
                 
                 masked_depths = depth_arr[mask]
                 if masked_depths.size > 0:

@@ -20,10 +20,13 @@ def _make_pipeline(manifest="dummy.json", output="dummy_out.json", force=False):
 @pytest.fixture
 def dummy_manifest(tmp_path):
     manifest_path = tmp_path / "filtered_manifest.json"
+    dummy_video = tmp_path / "dummy.mp4"
+    dummy_video.touch()
+    
     data = [
         {
             "video_id": "test_video_1",
-            "video_path": "dummy.mp4",
+            "video_path": str(dummy_video),
             "bystander_detections": [
                 {
                     "person_id": 0,
@@ -108,9 +111,6 @@ def test_schema_conformance(dummy_manifest, tmp_path, monkeypatch):
     out_path = tmp_path / "03d_proxemic_kinematics_result.json"
     pipeline = _make_pipeline(str(dummy_manifest), str(out_path))
     
-    # Mock video exists
-    monkeypatch.setattr("pathlib.Path.exists", lambda x: True)
-    
     # Mock depth delta to simulate Depth Anything V2 returning a valid float
     monkeypatch.setattr(pipeline, "_calculate_depth_delta", lambda v, t, b, s, e: -0.25)
     
@@ -141,3 +141,27 @@ def test_schema_conformance(dummy_manifest, tmp_path, monkeypatch):
     # vector = (1.0 * 0.4) + (0.5 * 0.6) = 0.4 + 0.3 = 0.7 > 0.3 -> Approach
     assert per_person["proxemic_vector"] == 0.7 
     assert per_person["classified_action"] == "Approach_Intervention"
+    assert "proxemic_confidence" in per_person
+    assert "optical_flow_noise" in per_person
+
+def test_optical_flow_noise_rejection(dummy_manifest, tmp_path, monkeypatch):
+    out_path = tmp_path / "03d_proxemic_kinematics_result_noise.json"
+    pipeline = _make_pipeline(str(dummy_manifest), str(out_path))
+    
+    # Mock high noise > 15.0
+    monkeypatch.setattr(pipeline, "_extract_ego_motion_noise", lambda v, s, e: 20.0)
+    
+    pipeline.run()
+    
+    assert out_path.exists()
+    with open(out_path, 'r') as f:
+        results = json.load(f)
+        
+    res = results[0]
+    task_res = res["tasks_analyzed"][0]
+    per_person = task_res["per_person"][0]
+    
+    assert per_person["optical_flow_noise"] == 20.0
+    assert per_person["proxemic_vector"] == 0.0
+    assert per_person["proxemic_confidence"] == 0.0
+    assert per_person["classified_action"] == "Neutral"
