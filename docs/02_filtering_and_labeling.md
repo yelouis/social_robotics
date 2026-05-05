@@ -185,43 +185,18 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
     - **Problem**: The original pipeline interleaved YOLO and VLM calls within a per-video loop, forcing both models to reside in unified memory simultaneously. This caused significant memory pressure and potential OOM kills on the 24GB Mac mini M4 Pro. Additionally, sequential VLM calls per task were inefficient.
     - **Solution**: Refactored the pipeline into a **two-pass architecture**: Pass 1 runs the Social Presence Filter (YOLO) for all videos, followed by explicit model unloading and memory clearing (`torch.mps.empty_cache()`), and Pass 2 runs the Climax Refinement (VLM). Implemented **multi-image VLM batching** to process all climax candidates in a single inference call and added image resizing (max 1024px) to ensure stable VRAM usage.
 
+12. **Optical Flow Density Calibration (Resolved - May 04)**:
+    - **Problem**: The optical flow sampling was fixed at ~5 FPS for all velocity classes, missing the exact peak-action frame for fast actions by up to ±100ms.
+    - **Solution**: Implemented Two-Pass Hierarchical Detection: a coarse ~5 FPS pass identifies the peak window, followed by a native 30 FPS dense pass within ±1s of the coarse peak for full temporal precision.
+
+13. **VLM Context Windowing for Long Clips (Resolved - May 04)**:
+    - **Problem**: For clips with multiple distinct task transitions, the VLM refinement evaluated the entire video duration globally, missing intermediate transitions between tasks.
+    - **Solution**: Implemented Per-Task Bounded VLM Scope by dynamically partitioning the video duration evenly across valid Ego4D scenarios, ensuring the optical flow and VLM pipeline operates strictly within each task's temporal bounds.
+
+14. **Advanced Wearer Removal (Resolved - May 04)**:
+    - **Problem**: The geometric anti-wearer heuristic produced occasional false positives when the wearer's hands were extended into the upper frame.
+    - **Solution**: Unified resolution with Node 01 by utilizing the MediaPipe Hand Overlap Suppression in the shared `src/shared/social_presence.py` module, preventing hand-held objects from being misclassified as bystanders.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Optical Flow Density Calibration
-**Status**: ⚠️ Confirmed Unresolved — The optical flow sampling in `pipeline.py` is fixed at ~5 FPS for all velocity classes. For "Fast" velocity tasks (e.g., slipping, dropping, impact), a critical action can occur within 1-2 frames at 30 FPS. At 5 FPS, the 200ms gap between samples means the exact peak-action frame is likely missed, causing `task_climax_sec` to be inaccurate by up to ±100ms.
-
-**Option A (recommended)**: **Velocity-Adaptive Sampling** — Use the metadata-derived `task_velocity` field to dynamically adjust the optical flow sampling rate: `fast` → 15 FPS, `medium` → 5 FPS (current), `slow` → 2 FPS. This concentrates compute where temporal precision matters most, while reducing overhead for cognitive tasks where ±500ms is acceptable.
-  - *Pros*: Directly addresses the accuracy gap for fast actions; reduces total compute for slow tasks; requires only a conditional FPS parameter change.
-  - *Cons*: 3x more frames to process for fast tasks; may increase memory pressure during optical flow computation on the M4 Pro.
-
-**Option B**: **Two-Pass Hierarchical Detection** — Run a coarse 5 FPS pass first, identify the ±1s window around the peak, then re-run at native FPS (30 FPS) within that narrow window only.
-  - *Pros*: Full temporal precision at the actual climax; total frame count similar to current (coarse pass + ~60 dense frames).
-  - *Cons*: More complex implementation; requires two `VideoCapture` seek passes per task; adds ~30% latency per video.
-
-Your selection: Proceed with Option B.
-
----
-
-### Issue 2: VLM Context Windowing for Long Clips
-**Status**: ⚠️ Confirmed Unresolved — For clips exceeding ~10 minutes, the current implementation samples only 3-5 candidate frames around the optical flow peak for VLM refinement. If the clip contains multiple distinct task transitions (which the metadata does support via `identified_tasks`), intermediate transitions between tasks may be missed because the VLM only sees frames near a single peak.
-
-**Option A (recommended)**: **Per-Task Bounded VLM Scope** — The current system already segments by `identified_tasks` from Ego4D metadata, so each task has defined `task_start_sec`/`task_end_sec` bounds. Ensure the optical flow + VLM refinement pipeline operates strictly within each task's temporal bounds rather than globally. This is likely already partially correct but should be explicitly validated with a >10min multi-task clip.
-  - *Pros*: Minimal code change (validation/enforcement of existing per-task bounds); leverages existing metadata segmentation; no additional model calls.
-  - *Cons*: Still relies on metadata having correct task boundaries; doesn't help if a single task segment is itself very long (>5 min).
-
-**Option B**: **Sliding Window VLM Sampling** — For tasks longer than 60 seconds, implement a sliding window (30s window, 15s stride) that runs VLM sampling within each window. Select the highest-confidence climax across all windows.
-  - *Pros*: Catches climaxes anywhere within long task segments; independent of metadata quality.
-  - *Cons*: Significantly increases VLM inference count (a 5-min task → 20 windows × 3-5 frames = 60-100 VLM calls); may become compute-prohibitive on the M4 Pro.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Advanced Wearer Removal
-**Status**: ⚠️ Confirmed Unresolved — Same root cause as Issue 4 in `01_dataset_acquisition.md`. The geometric anti-wearer heuristic produces occasional false positives when the wearer's hands are extended into the upper frame or when hand-held objects overlap with bystander bounding boxes. This is a shared concern across Node 01 (acquisition filtering) and Node 02 (filtering pipeline).
-
-**Option A (recommended)**: **Unified Resolution with 01_dataset_acquisition.md Issue 4** — Implement the chosen solution from `01_dataset_acquisition.md` Issue 4 (EgoHOS segmentation mask or IoU overlap suppression) in the shared `src/shared/social_presence.py` module. Since both Node 01 and Node 02 consume the same filter logic, a single fix propagates to both.
-  - *Pros*: Single Source of Truth; no duplicated logic; both pipeline stages benefit equally.
-  - *Cons*: Depends on the resolution chosen in 01; increases coupling between acquisition and filtering modules.
-
-Your selection: Proceed with Option A.
+*None at this time.*

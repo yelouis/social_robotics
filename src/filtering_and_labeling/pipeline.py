@@ -235,28 +235,29 @@ class FilteringPipeline:
         if not scenarios:
             return []
 
-        # Map scenarios to identified_tasks
-        # Since we don't have per-interval metadata in ego4d.json (it's video-level),
-        # we treat the entire video as containing these tasks.
-        # Downstream optical flow will find the specific climax.
+        valid_scenarios = []
+        for scenario in scenarios:
+            label = scenario.strip()
+            if label and label.lower() not in ["idling", "no clear task", "ambiguous activity"]:
+                valid_scenarios.append(label)
         
         identified_tasks = []
-        for i, scenario in enumerate(scenarios):
-            # Normalize label
-            label = scenario.strip()
-            if not label or label.lower() in ["idling", "no clear task", "ambiguous activity"]:
-                continue
-
+        num_tasks = len(valid_scenarios)
+        for i, label in enumerate(valid_scenarios):
             # Heuristic velocity mapping
             velocity = self._get_velocity_from_label(label)
+            
+            task_duration = duration_sec / num_tasks if num_tasks > 0 else duration_sec
+            task_start_sec = i * task_duration
+            task_end_sec = (i + 1) * task_duration
             
             task = {
                 "task_id": f"t_{len(identified_tasks)+1:02d}",
                 "task_label": label,
                 "task_confidence": 1.0, # Ground truth metadata
                 "task_velocity": velocity,
-                "task_start_sec": 0.0,
-                "task_end_sec": round(duration_sec, 2),
+                "task_start_sec": round(task_start_sec, 2),
+                "task_end_sec": round(task_end_sec, 2),
                 "task_temporal_metadata": {}
             }
             identified_tasks.append(task)
@@ -302,6 +303,7 @@ class FilteringPipeline:
             climax_frame = start_frame
             flow_data = [] # Store candidate frames for VLM refinement
             
+            # PASS 1: Coarse Pass at ~5 FPS
             for frame_idx in range(start_frame + step, end_frame, step):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
@@ -322,6 +324,42 @@ class FilteringPipeline:
                     climax_frame = frame_idx
                     
                 prev_gray = gray
+                
+            # PASS 2: Dense Pass at Native FPS around Coarse Peak
+            window_frames = int(1.0 * fps)
+            dense_start = max(start_frame, climax_frame - window_frames)
+            dense_end = min(end_frame, climax_frame + window_frames)
+            
+            cap.set(cv2.CAP_PROP_POS_FRAMES, dense_start)
+            ret, prev_dense_frame = cap.read()
+            if ret:
+                prev_dense_gray = cv2.cvtColor(prev_dense_frame, cv2.COLOR_BGR2GRAY)
+                prev_dense_gray = cv2.resize(prev_dense_gray, (0,0), fx=0.5, fy=0.5)
+                
+                dense_max_flow = 0.0
+                dense_climax_frame = dense_start
+                
+                for frame_idx in range(dense_start + 1, dense_end):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    ret, dense_frame = cap.read()
+                    if not ret:
+                        break
+                        
+                    dense_gray = cv2.cvtColor(dense_frame, cv2.COLOR_BGR2GRAY)
+                    dense_gray = cv2.resize(dense_gray, (0,0), fx=0.5, fy=0.5)
+                    
+                    flow = cv2.calcOpticalFlowFarneback(prev_dense_gray, dense_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+                    mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+                    mean_mag = np.mean(mag)
+                    
+                    if mean_mag > dense_max_flow:
+                        dense_max_flow = mean_mag
+                        dense_climax_frame = frame_idx
+                        
+                    prev_dense_gray = dense_gray
+                
+                climax_frame = dense_climax_frame
+                max_flow = dense_max_flow if dense_max_flow > 0 else max_flow
                 
             climax_sec = climax_frame / fps
             extraction_method = "optical_flow_peak"
