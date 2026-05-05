@@ -32,7 +32,7 @@ As layers are implemented, they should be tracked here. Each layer follows the n
 | 03d | Proxemic Kinematics | `03d_proxemic_kinematics_layer.md` | `03d_proxemic_kinematics_result.json` | Implemented |
 | 03e | Affirmation Gesture | `03e_affirmation_gesture_layer.md` | `03e_affirmation_gesture_result.json` | Implemented |
 | 03f | Motor Resonance | `03f_motor_resonance_layer.md` | `03f_motor_resonance_result.json` | Implemented |
-| 03g | Shared Reality | `03g_shared_reality_layer.md` | `03g_shared_reality_result.json` | Planned |
+| 03g | Shared Reality | `03g_shared_reality_layer.md` | `03g_shared_reality_result.json` | Implemented |
 
 ---
 

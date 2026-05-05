@@ -47,3 +47,37 @@ Immediately following the task climax (the start of the `task_reaction_window_se
 ## Verification & Validation Check
 - **Singular Video Test**: Pick an ambiguous Ego4D clip where someone builds something and then looks up to show a friend. Print out the `camera_shift_vector` timeline. Assert that the `bystander_centered_in_fov` triggers true concurrently with the frame visually aligning the bystander's face in the center matrix.
 - **Batch Test**: During large-scale aggregation, ensure that videos flagged with `social_reference_sought: true` legitimately have a shifting bounding-box origin within the array. Memory constraints are minimal here, but loop efficiency across large coordinate arrays should be benchmarked on the **Mac mini M4 Pro**.
+
+---
+
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **Inverted Optical Flow Directionality (Resolved - May 04)**:
+   - **Problem**: When calculating the camera shift vector, the initial implementation treated the background's optical flow movement directly as the camera's movement. If the camera panned right (+X), the background moved left (-X), resulting in an incorrectly inverted `camera_shift_vector` in the output JSON.
+   - **Solution**: Updated the `_extract_camera_shift` method in `pipeline.py` to invert the mean optical flow of the background (`mean_dx = -np.mean(flow[..., 0])`). This accurately estimates the camera's egocentric panning vector based on the static background's relative displacement.
+
+2. **Bystander Centering Logic Scaling (Resolved - May 04)**:
+   - **Problem**: The raw bystander bounding boxes lacked dynamic referencing to the source video's resolution, causing the "middle 30%" centering threshold to fail on non-standard Ego4D clip aspect ratios.
+   - **Solution**: Refactored the `_check_bystander_centering` function to dynamically extract the `width` and `height` from the `cv2.VideoCapture` properties, establishing a dynamic 35% to 65% bounding box threshold that is resolution-agnostic.
+
+3. **Missing `__init__.py` Module File (Resolved - May 04)**:
+   - **Problem**: The `src/layer_03g_shared_reality/` directory was missing an `__init__.py` file, unlike every sibling layer module (e.g., 03f). This caused `ImportError` when attempting to import the pipeline as a Python package rather than via `PYTHONPATH` manipulation.
+   - **Solution**: Created `src/layer_03g_shared_reality/__init__.py` with the standard re-export (`from .pipeline import SharedRealityPipeline`), matching the pattern established by `layer_03f_motor_resonance/__init__.py`.
+
+4. **`social_reference_sought` False Positive — No Camera Shift Requirement (Resolved - May 04)**:
+   - **Problem**: The `social_reference_sought` flag was set solely based on `bystander_centered_in_fov`, ignoring whether the camera actually panned. According to the specification (Section 3 — "The Social Reference Logic"), social referencing occurs when "the camera explicitly pans away from the task centroid AND centers the bystander." A bystander who was already centered *before* the task climax would produce a false positive, as there was no deliberate gaze shift.
+   - **Solution**: Added a `shift_magnitude` check (`np.sqrt(dx² + dy²) > 30.0` pixels) as a conjunction with `bystander_centered_in_fov`. The `social_reference_sought` flag now requires both conditions to be true, matching the documented two-condition social referencing logic.
+
+5. **Missing Bystander Gate in `process_video` (Resolved - May 04)**:
+   - **Problem**: Unlike the sibling 03f layer, which gates on `not bystanders or not tasks`, the 03g layer only gated on `not tasks`. Videos with empty `bystander_detections` arrays would still be processed and produce result entries with `bystander_centered_in_fov: false` and `social_reference_sought: false`, polluting the output JSON with meaningless records.
+   - **Solution**: Added the missing `not bystanders` check alongside `not tasks` in `process_video()`, causing the pipeline to return `None` early for videos without bystander data.
+
+6. **`np.bool_` Type Leak Into JSON Output (Resolved - May 04)**:
+   - **Problem**: The `shift_magnitude > 30.0` comparison returned `np.bool_` (a numpy scalar), not a native Python `bool`. When combined with `bystander_centered` via `and`, the result type was `np.True_` or `np.False_`. This caused `isinstance(value, bool)` checks to fail and would produce non-standard JSON serialization in some environments.
+   - **Solution**: Wrapped the expression with `bool(...)` to guarantee a native Python boolean is stored in the output dictionary: `social_reference_sought = bool(bystander_centered and shift_magnitude > 30.0)`.
+
+## ⚠️ Unresolved Issues & Suggestions
+
+- **Gaze Telemetry Integration**: The current schema references `gaze_x, gaze_y` arrays for snap-to-face detection, but the data is not yet parsed from the `filtered_manifest.json`. Implementing a fallback to use raw Aria glasses telemetry when bounding box centering is ambiguous is suggested.
+- **Optical Flow Downsampling Artifacts**: The Farneback optical flow is currently downsampled by 0.25 for speed on the Mac mini M4 Pro. This aggressive downsampling may miss subtle micro-pans. It is suggested to benchmark 0.5 downsampling to see if the latency impact is acceptable.
+- **Camera Shift Magnitude Threshold Tuning**: The `30.0` pixel threshold for `shift_magnitude` is a heuristic chosen for standard 480p Ego4D clips. On higher-resolution datasets (1080p, 4K), this threshold may be too permissive and trigger false positives. A resolution-normalized threshold (e.g., percentage of frame diagonal) is suggested for future hardening.
