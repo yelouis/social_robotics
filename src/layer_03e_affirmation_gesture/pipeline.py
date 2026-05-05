@@ -193,6 +193,8 @@ class AffirmationGesturePipeline:
                     "person_id": person_id,
                     "pitch_variance_hz": round(pitch_var, 2),
                     "yaw_variance_hz": round(yaw_var, 2),
+                    "pitch_oscillation_hz": round(pitch_var, 2),
+                    "yaw_oscillation_hz": round(yaw_var, 2),
                     "gesture_detected": gesture,
                     "confidence": round(conf, 2)
                 })
@@ -227,6 +229,13 @@ class AffirmationGesturePipeline:
         # If fps is too low to capture 1-3Hz, we can't properly filter.
         # But we can still count zero-crossings on the raw detrended signal.
         signal_detrended = signal - np.mean(signal)
+        
+        # Gaze-to-Head Proxy Filtering (Issue 1 Option B resolution):
+        # Apply a low-pass pre-filter to suppress fast saccadic oscillations.
+        if nyq > 3.0:
+            b_lp, a_lp = butter(2, 3.0 / nyq, btype='low')
+            signal_detrended = filtfilt(b_lp, a_lp, signal_detrended)
+
         
         # Attempt bandpass if nyquist allows a meaningful passband, otherwise
         # fall back to raw detrended signal with peak-finding only.
@@ -270,6 +279,9 @@ class AffirmationGesturePipeline:
         confidence = 0.0
         # If we have at least 2 distinct motions (e.g. peak + trough + peak) in a short window
         if total_extrema >= 2 and 0.5 <= est_hz <= 4.0:
-            confidence = min(1.0, 0.5 + (total_extrema * 0.1))
+            count_confidence = min(1.0, 0.5 + (total_extrema * 0.1))
+            rms = np.sqrt(np.mean(filtered**2))
+            rms_threshold = 0.05
+            confidence = count_confidence * min(1.0, rms / rms_threshold)
             
         return confidence, float(est_hz)

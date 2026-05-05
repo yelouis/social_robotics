@@ -231,7 +231,7 @@ class AttentionLayerPipeline:
             "layer": "03a_attention",
             "processing_meta": {
                 "model_used": "l2cs_net_3d_gaze" if self.gaze_pipeline else "fallback_dummy",
-                "sampling_fps_effective": "adaptive_0.5s_to_0.2s"
+                "sampling_fps_effective": "fixed_8fps"
             },
             "per_person": per_person_results,
             "aggregate": {
@@ -386,11 +386,9 @@ class AttentionLayerPipeline:
                     "yaw_rad": round(yaw_rad, 4)
                 })
                 
-                # Adaptive stride
-                if last_score >= 0 and abs(score - last_score) > 0.3:
-                    current_t += 0.2  # 5 FPS
-                else:
-                    current_t += 0.5  # 2 FPS
+                # Fixed 8 FPS stride (Issue 2 resolution)
+                current_t += 0.125
+
                     
                 last_score = score
                 
