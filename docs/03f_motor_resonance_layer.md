@@ -81,36 +81,14 @@ We must track how the bystander responds physically.
    - **Problem**: `_extract_and_correlate_pose` did not validate `cap.isOpened()` or `fps == 0` before proceeding with frame reads. If a video file was corrupted or the codec was unsupported, `fps` would be `0`, causing `frame_idx = int(t * 0)` to always seek to frame 0 and silently produce incorrect results rather than failing fast.
    - **Solution**: Added explicit `cap.isOpened()` and `fps == 0` checks at the top of the method, returning `None` early with proper `cap.release()` cleanup.
 
+6. **RTMPose / MMPose Native Integration (Resolved - May 05)**:
+   - **Problem**: The pipeline originally specified RTMPose and MMPose, but `mmcv` compilation fails on Apple Silicon (M4 Pro). The documentation (`ml_dependencies.md`) still listed RTMPose as a requirement, creating a discrepancy between the codebase and specifications.
+   - **Solution**: Formally updated `ml_dependencies.md` to designate `ultralytics` YOLOv8-pose (`yolov8n-pose.pt`) as the primary production model and marked RTMPose as Deferred/Optional. This eliminates misleading dependency documentation and standardizes around the functional PyTorch MPS backend.
+
+7. **Mirroring Metric Not Implemented (Resolved - May 05)**:
+   - **Problem**: The original specification called for tracking congruent spine-angle changes between the POV camera and the bystander. The implementation lacked the ability to extract hip keypoints, compute spine angles, and correlate them with vertical EgoMotion flow.
+   - **Solution**: Expanded keypoint extraction in `pipeline.py` to include COCO hip indices (11/12). Added a `_correlate_mirroring` method that calculates the spine angle (`atan2`) and correlates significant inward angle changes (>0.1) with downward EgoMotion spikes (`v_flow < -1.0`) within the reaction window. Output updated to include `mirroring_detected` and `mirroring_scalar`.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: RTMPose / MMPose Native Integration
-**Status**: ⚠️ Confirmed Unresolved — The pipeline uses YOLOv8-pose (`yolov8n-pose.pt`) as a substitute for RTMPose/MMPose because `mmcv` compilation fails on Apple Silicon (M4 Pro). The `ml_dependencies.md` still lists RTMPose (~100MB, Apache-2.0) as a model dependency even though it is not used. YOLOv8-pose provides adequate keypoint detection for the current "Flinch Metric" (wrist/shoulder velocity), but the original specification recommended RTMPose's SimCC architecture for superior keypoint localization precision, particularly for shoulder and wrist landmarks.
-
-**Option A (recommended)**: **Accept YOLOv8-Pose as the Production Solution** — YOLOv8-pose is fully operational on PyTorch MPS, produces accurate wrist/shoulder keypoints for flinch detection, and has been validated through 5 resolved issues. Formally update `ml_dependencies.md` to mark RTMPose as "Deferred/Optional" and document YOLOv8-pose as the production model. This avoids the ongoing friction of trying to compile `mmcv` on Apple Silicon.
-  - *Pros*: Zero additional work; acknowledges reality; eliminates misleading dependency documentation; YOLOv8-pose is actively maintained by Ultralytics.
-  - *Cons*: If future analysis requires sub-pixel keypoint precision (e.g., for the Mirroring Metric in Issue 2), YOLOv8-pose's heatmap-based decoding may be less precise than SimCC.
-
-**Option B**: **Conda-Based MMPose Installation** — Attempt installation via pre-compiled Conda packages (`conda install mmcv -c open-mmlab`). This bypasses C++ source compilation and may succeed on Apple Silicon where `pip install mmcv` fails.
-  - *Pros*: Access to SimCC architecture; potentially superior keypoint precision; aligns with original specification.
-  - *Cons*: Conda environment management adds complexity; pre-compiled Apple Silicon packages may not exist yet; `mmpose` ecosystem is heavier (~1GB total stack); no guarantee of MPS backend support.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Mirroring Metric Not Implemented
-**Status**: ⚠️ Confirmed Unresolved — The specification (Section 3, "Mirroring Metric") describes detecting congruent spine-angle changes between the POV camera and the bystander. Specifically: "If the EgoMotion pans down rapidly (POV person leaning over), and the bystander's spine keypoints (shoulder to hip) angle inward congruently, they are physically mirroring the intention." The current implementation only detects the "Flinch Metric" (rapid wrist/shoulder velocity). The mirroring metric requires tracking hip keypoints (COCO indices 11 and 12), computing spine angle deltas, and correlating them with downward EgoMotion direction — none of which are implemented.
-
-**Option A (recommended)**: **Implement Mirroring Metric as Phase 2 Extension** — Add a `_correlate_mirroring()` method that: (1) extracts hip keypoints (COCO 11/12) alongside the existing wrist/shoulder keypoints, (2) computes the spine angle as `atan2(shoulder_y - hip_y, shoulder_x - hip_x)`, (3) correlates the spine angle delta with the EgoMotion vertical direction (already computed in `_compute_ego_chaos`). Output a new `mirroring_detected: bool` and `mirroring_scalar: float` field alongside the existing flinch metrics.
-  - *Pros*: Completes the specification; reuses existing EgoMotion infrastructure; hip keypoints are already tracked by YOLOv8-pose (they just aren't used); additive schema change.
-  - *Cons*: Hip keypoints have lower confidence than upper-body keypoints in egocentric views (hips are often occluded); requires defining a spine-angle correlation threshold; adds ~20 lines of code and 2-3 new test cases.
-
-**Option B**: **Defer Indefinitely and Remove from Specification** — The Flinch Metric alone captures the primary motor resonance signal (sympathetic flinch). The Mirroring Metric is more subtle and harder to validate empirically. Remove it from the specification to reduce scope and avoid documenting unimplemented features.
-  - *Pros*: Reduces technical debt; simplifies the layer's scope; avoids implementing a feature with uncertain empirical validation.
-  - *Cons*: Loses a psychologically grounded metric; the specification would lose a documented feature that distinguishes this system from simpler flinch detectors.
-
-**Option C**: **Implement with Reduced Scope (Vertical Lean Only)** — Instead of full spine-angle correlation, implement a simplified version: detect only vertical "lean" by checking if the bystander's mean keypoint Y-position shifts downward within 0.5s of a downward EgoMotion spike. This captures the most common mirroring case (both people leaning forward) without spine-angle geometry.
-  - *Pros*: Much simpler implementation (~10 lines); avoids hip keypoint reliability issues; captures the most common mirroring scenario.
-  - *Cons*: Misses lateral mirroring (e.g., both people recoiling sideways); less precise than the full spine-angle approach; may produce false positives from unrelated crouching.
-
-Your selection: Proceed with Option A.
+*None at this time.*

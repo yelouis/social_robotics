@@ -8,6 +8,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | Model Name | Purpose | Approximate Size | Recommended Save Location | License |
 |---|---|---|---|---|
 | **YOLOv8** (`yolov8n` or `yolov8s`) | Social Presence Filter (Bystander Box Detection) | ~6-25 MB | Internal SSD (`~/.cache/ultralytics`) or Local Project | AGPL-3.0 |
+| **YOLOv8-pose** (`yolov8n-pose.pt`) | High-performance pose estimation (Motor Resonance) | ~6.5 MB | Internal SSD or Local Project | AGPL-3.0 |
 | **L2CS-Net** (or CrossGaze) | 3D Gaze / Head Pose Estimation | ~200 MB | Internal SSD or Local Project | MIT |
 | **Qwen2.5-VL** (via Ollama) | Primary VLM for visual classification + Task Climax VLM refinement (Node 02) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **moondream** (via Ollama) | Fast VLM alternative (Lightweight) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
@@ -17,7 +18,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **Depth Anything V2-Small** (`vits`) | Proxemic Kinematics (Relative Depth Delta Mapping) | ~100 MB | Internal SSD | Apache-2.0 |
 | **Depth Anything V1-Large** (`vitl`) | Proxemic Kinematics — fallback if V2-Small quality is insufficient | ~1.3 GB | "Extreme SSD" | Apache-2.0 |
 | **Metric3D v2** | Absolute Metric Depth (Alternative to Depth Anything) | ~1.5 GB | "Extreme SSD" | Apache-2.0 |
-| **RTMPose** (via MMPose) | High-performance pose estimation (Motor Resonance) | ~100 MB (model only) | Internal SSD or Local Project | Apache-2.0 |
+| **RTMPose** (via MMPose) | High-performance pose estimation (Deferred/Optional fallback) | ~100 MB (model only) | Internal SSD or Local Project | Apache-2.0 |
 
 > [!NOTE]
 > **All models in this table are license-clean** (MIT, Apache-2.0, or AGPL-3.0). No CC-BY-NC or non-commercial restrictions remain. The exported `social_metadata.parquet` can be distributed freely.
@@ -43,7 +44,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
 | **SciPy** | Signal processing (Affirmation Gestures) | ~150 MB | Python virtual environment | |
-| **MMPose** (+ mmengine, mmcv) | Framework for RTMPose and other pose estimators | ~500 MB - 1 GB (total stack) | Python virtual environment | Requires source install; MMCV compilation may need flags on Apple Silicon |
+| **MMPose** (+ mmengine, mmcv) | Framework for RTMPose (Deferred/Optional) | ~500 MB - 1 GB (total stack) | Python virtual environment | Requires source install; MMCV compilation fails on Apple Silicon (M4 Pro) |
 
 ## 3. System Tools
 

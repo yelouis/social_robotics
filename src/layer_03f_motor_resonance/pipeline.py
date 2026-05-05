@@ -170,7 +170,9 @@ class MotorResonancePipeline:
                         "bystander_pose_velocity_peak": pose_analysis['velocity_peak'],
                         "resonance_delay_sec": pose_analysis['delay_sec'],
                         "motor_resonance_detected": pose_analysis['resonance_detected'],
-                        "empathy_scalar": pose_analysis['empathy_scalar']
+                        "empathy_scalar": pose_analysis['empathy_scalar'],
+                        "mirroring_detected": pose_analysis.get('mirroring_detected', False),
+                        "mirroring_scalar": pose_analysis.get('mirroring_scalar', 0.0)
                     })
                 
             if per_person:
@@ -225,11 +227,12 @@ class MotorResonancePipeline:
             
             flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            mean_v = np.mean(flow[..., 1]) # Negative if camera pans down (background moves up)
             
             # The "chaos" score can be the standard deviation or high percentile of the magnitude
             chaos_score = np.percentile(mag, 95)
             timestamp = current_frame_idx / fps
-            chaos_scores.append((timestamp, chaos_score))
+            chaos_scores.append((timestamp, chaos_score, mean_v))
             
             prev_gray = gray
             current_frame_idx += 1
@@ -240,7 +243,7 @@ class MotorResonancePipeline:
             return [], 0.0
             
         # Find spikes in chaos score
-        max_chaos_score = max([score for _, score in chaos_scores])
+        max_chaos_score = max([score for _, score, _ in chaos_scores])
         
         # Normalize max chaos score (assume 20 pixels/frame is very high optical flow)
         norm_max_chaos = min(1.0, max_chaos_score / 20.0)
@@ -251,7 +254,7 @@ class MotorResonancePipeline:
             return [], float(norm_max_chaos)
         
         # A spike is anything > 70% of the max chaos score in this window
-        spikes = [ts for ts, score in chaos_scores if score > max_chaos_score * 0.7]
+        spikes = [{'time': ts, 'v_flow': v} for ts, score, v in chaos_scores if score > max_chaos_score * 0.7]
         
         return spikes, float(norm_max_chaos)
 
@@ -274,6 +277,7 @@ class MotorResonancePipeline:
         valid_frames.sort(key=lambda x: x[0])
         
         pose_velocities = []
+        pose_spine_angles = []
         # Use a dict keyed by keypoint index to guarantee cross-frame alignment.
         # Previously, only high-confidence keypoints were appended to a flat list,
         # so index 0 could be "left shoulder" in one frame and "right wrist" in the
@@ -314,10 +318,10 @@ class MotorResonancePipeline:
                 continue
                 
             # Get keypoints (shape: N, 17, 3 -> x, y, conf)
-            # YOLOv8 pose keypoints: 5=L shoulder, 6=R shoulder, 9=L wrist, 10=R wrist
+            # YOLOv8 pose keypoints: 5=L shoulder, 6=R shoulder, 9=L wrist, 10=R wrist, 11=L hip, 12=R hip
             kpts = results[0].keypoints.data[0].cpu().numpy() # take first person in crop
             
-            relevant_kpts = [5, 6, 9, 10]
+            relevant_kpts = [5, 6, 9, 10, 11, 12]
             current_kpts_by_idx = {}
             for k in relevant_kpts:
                 if k < len(kpts):
@@ -325,6 +329,18 @@ class MotorResonancePipeline:
                     if conf > 0.5:
                         # Normalize by crop diagonal so velocity is scale-invariant
                         current_kpts_by_idx[k] = (x / crop_diag, y / crop_diag)
+                        
+            if current_kpts_by_idx:
+                shoulders_x = [current_kpts_by_idx[k][0] for k in [5, 6] if k in current_kpts_by_idx]
+                shoulders_y = [current_kpts_by_idx[k][1] for k in [5, 6] if k in current_kpts_by_idx]
+                hips_x = [current_kpts_by_idx[k][0] for k in [11, 12] if k in current_kpts_by_idx]
+                hips_y = [current_kpts_by_idx[k][1] for k in [11, 12] if k in current_kpts_by_idx]
+                
+                if shoulders_x and hips_x:
+                    sx, sy = np.mean(shoulders_x), np.mean(shoulders_y)
+                    hx, hy = np.mean(hips_x), np.mean(hips_y)
+                    angle = np.arctan2(sy - hy, sx - hx)
+                    pose_spine_angles.append((t, angle))
             
             if current_kpts_by_idx and prev_kpts_by_idx is not None and prev_t is not None:
                 # Calculate average velocity only for keypoints present in BOTH frames
@@ -369,7 +385,8 @@ class MotorResonancePipeline:
         min_delay = float('inf')
         
         if peak_t is not None:
-            for spike_t in ego_spikes:
+            for spike in ego_spikes:
+                spike_t = spike['time'] if isinstance(spike, dict) else spike
                 delay = peak_t - spike_t
                 if 0 < delay <= 0.5: # 0.5s reaction window
                     resonance_detected = True
@@ -383,9 +400,42 @@ class MotorResonancePipeline:
         if resonance_detected:
             empathy_scalar = float(min(1.0, norm_peak_vel / 5.0))
             
+        mirroring_detected, mirroring_scalar = self._correlate_mirroring(ego_spikes, pose_spine_angles)
+            
         return {
             'velocity_peak': round(norm_peak_vel, 2),
             'delay_sec': round(min_delay, 2),
             'resonance_detected': resonance_detected,
-            'empathy_scalar': round(empathy_scalar, 2)
+            'empathy_scalar': round(empathy_scalar, 2),
+            'mirroring_detected': mirroring_detected,
+            'mirroring_scalar': round(mirroring_scalar, 2)
         }
+
+    def _correlate_mirroring(self, ego_spikes, pose_spine_angles):
+        mirroring_detected = False
+        mirroring_scalar = 0.0
+        
+        for spike in ego_spikes:
+            if not isinstance(spike, dict):
+                continue
+            
+            t_spike = spike['time']
+            v_flow = spike['v_flow']
+            
+            # Downward EgoMotion: camera pans down -> background moves up -> v_flow < -1.0
+            if v_flow < -1.0:
+                angles_before = [a for t, a in pose_spine_angles if t_spike - 0.5 <= t <= t_spike]
+                angles_after = [a for t, a in pose_spine_angles if t_spike < t <= t_spike + 0.5]
+                
+                if angles_before and angles_after:
+                    mean_before = np.mean(angles_before)
+                    mean_after = np.mean(angles_after)
+                    delta = abs(mean_after - mean_before)
+                    
+                    if delta > 0.1: # Threshold for significant lean change
+                        mirroring_detected = True
+                        mirroring_scalar = float(min(1.0, delta / 0.5))
+                        break
+                        
+        return mirroring_detected, mirroring_scalar
+
