@@ -139,6 +139,113 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*None at this time.*
+### Issue 1: Dead Code — Unused `tempfile` Import and `TemporaryDirectory` Context
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 3, 253-254): `import tempfile` is present and `with tempfile.TemporaryDirectory() as temp_dir: temp_path = Path(temp_dir)` wraps the entire `_track_and_score` loop body, but `temp_path` is never referenced inside. This is a leftover from a prior implementation where cropped frames were saved to disk for VLM spot-checks. The orphaned context manager creates and destroys a system temp directory on every bystander invocation with zero benefit.
 
+**Option A (recommended)**: **Remove Dead Code** — Delete the `import tempfile` line, remove the `with tempfile.TemporaryDirectory()` wrapper, and un-indent the loop body.
+  - *Pros*: Eliminates unnecessary filesystem I/O and reduces indentation complexity; no behavioral change.
+  - *Cons*: None. Pure cleanup.
+
+Your selection: _____
+
+---
+
+### Issue 2: Dead Code — Unused `last_score` Variable
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 247, 393): `last_score` is initialized to `-1.0` and assigned to `score` at the end of each loop iteration, but is never read by any logic. This is a remnant of the removed adaptive sampling boost (the original design called for 5 FPS bursts when `|score - last_score| > 0.3`), which was replaced by a fixed 8 FPS stride. The variable now serves no purpose.
+
+**Option A (recommended)**: **Remove Dead Variable** — Delete the initialization on line 247 and the assignment on line 393.
+  - *Pros*: Eliminates confusing dead state; no behavioral change.
+  - *Cons*: None. Pure cleanup.
+
+Your selection: _____
+
+---
+
+### Issue 3: Documentation-Implementation Mismatch — Sampling Strategy
+**Status**: ⚠️ Confirmed Unresolved — The documentation (Section 2: "Frame Sampling Strategy") describes a tiered approach with a 2 FPS default stride and an adaptive boost to 5 FPS on attention-score deltas > 0.3. The output schema example in the documentation also shows `"sampling_fps_effective": 2.0`. However, the actual implementation in `pipeline.py` (line 390) uses a fixed `0.125s` stride (8 FPS) and the output metadata (line 234) reports `"fixed_8fps"` as a string instead of a numeric value. This discrepancy was introduced when the sampling rate was raised to 8 FPS to provide Nyquist headroom for downstream Layer 03e (Affirmation Gesture) which requires ≥4 Hz head-nod detection.
+
+**Option A (recommended)**: **Update Documentation to Match Implementation** — Rewrite Section 2 to document the fixed 8 FPS stride, explain the Nyquist rationale from the 03e dependency, and update the output schema example to show `"sampling_fps_effective": 8.0` as a numeric value. Also update the code to emit `8.0` (numeric) instead of the string `"fixed_8fps"`.
+  - *Pros*: Aligns documentation with the validated implementation; corrects schema type from string to numeric for downstream parsability.
+  - *Cons*: Removes the adaptive sampling design from the documentation; if adaptive behavior is desired later, it would need to be re-documented.
+
+**Option B**: **Re-implement Adaptive Sampling** — Restore the adaptive boost logic using the `last_score` variable with a baseline of 8 FPS and a burst rate of 16 FPS, then update the documentation accordingly.
+  - *Pros*: Preserves the original design intent; reduces computation on static scenes.
+  - *Cons*: Increases code complexity; the 8 FPS fixed rate has been validated as sufficient for all downstream layers including 03e Nyquist requirements; adaptive logic may introduce trace timestamp irregularities that complicate downstream temporal correlation.
+
+Your selection: _____
+
+---
+
+### Issue 4: Hardcoded `gaze_target_classification` Field
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (line 215): `gaze_target_classification` is hardcoded to `"Camera_or_Task"` for all bystanders regardless of the actual gaze intersection results. The output schema example in the documentation shows a dynamic value of `"POV_Actor_Hands"`, implying the field should reflect which target (camera centroid vs. hand centroid) produced the highest dot-product score. The geometric logic in `_track_and_score` (lines 341-374) does compute separate dot products for the camera and each hand, but the winning target identity is discarded — only the max score is propagated.
+
+**Option A (recommended)**: **Track Winning Target Per Sample** — Modify `_track_and_score` to return a `target` label alongside each trace point (e.g., `"Camera"`, `"POV_Actor_Hands"`, or `"Unknown"`) based on which dot-product was highest. Aggregate the majority target for the per-person `gaze_target_classification` field.
+  - *Pros*: Fulfills the documented schema contract; enables downstream layers to distinguish attention to face vs. task; minimal code change.
+  - *Cons*: Slightly increases trace payload size with an additional field per sample.
+
+**Option B**: **Remove the Field from Schema** — Accept the geometric heuristic cannot reliably distinguish face vs. hands at low resolution and remove `gaze_target_classification` from both the code and documentation.
+  - *Pros*: Honest about the limitation; reduces schema complexity.
+  - *Cons*: Loses a potentially valuable signal for downstream analysis; diverges from the original specification.
+
+Your selection: _____
+
+---
+
+### Issue 5: Unsafe `cap.retrieve()` Without Prior `cap.grab()` on First Iteration
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 250-271): The method resets the capture to frame 0 with `cap.set(cv2.CAP_PROP_POS_FRAMES, 0)` and sets `current_frame_idx = 0`. On the first iteration, `target_frame_idx` is also 0 (since `current_t = 0.0`), so the `while current_frame_idx < target_frame_idx` loop at line 260 never executes. This means `cap.retrieve()` at line 271 is called without a preceding `cap.grab()` or `cap.read()`. The behavior of `cap.retrieve()` without a prior grab is undefined in OpenCV — it may return a stale frame, a black frame, or fail silently depending on the backend and codec.
+
+**Option A (recommended)**: **Read First Frame Explicitly** — Before entering the `while current_t <= duration_sec` loop, call `cap.read()` (or `cap.grab()`) once to prime the capture position to frame 0. This ensures `cap.retrieve()` always has a valid buffer.
+  - *Pros*: Eliminates undefined behavior on the first iteration; minimal change (add 2-3 lines before the loop).
+  - *Cons*: None.
+
+**Option B**: **Replace `grab()`/`retrieve()` Pattern with `read()`** — Rewrite the loop to use `cap.read()` for all target frames and `cap.grab()` only for skipped frames, ensuring every retrieve has a corresponding grab.
+  - *Pros*: Simpler control flow; avoids the grab/retrieve split entirely.
+  - *Cons*: `cap.read()` is functionally equivalent to `cap.grab() + cap.retrieve()` so performance is identical, but the refactor touches more lines.
+
+Your selection: _____
+
+---
+
+### Issue 6: Bare `except:` Clauses Swallow Critical Exceptions
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 86, 124): Two bare `except:` blocks catch all exceptions (including `KeyboardInterrupt`, `SystemExit`, and `MemoryError`) when loading existing results and error logs. In a long-running batch pipeline on the Mac mini M4 Pro, this makes it impossible to cleanly interrupt processing with `Ctrl+C` during the file I/O phase and silently masks OOM conditions.
+
+**Option A (recommended)**: **Narrow Exception Scope** — Replace `except:` with `except (json.JSONDecodeError, IOError, ValueError):` on both lines to catch only expected I/O and parsing failures.
+  - *Pros*: Preserves `KeyboardInterrupt` and `SystemExit` propagation; surfaces unexpected errors for debugging.
+  - *Cons*: May need to extend the exception tuple if new failure modes arise.
+
+Your selection: _____
+
+---
+
+### Issue 7: No L2CS Model / MPS Memory Unloading
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py`: The `AttentionLayerPipeline` class loads the L2CS-Net ResNet50 model into MPS memory on initialization (lines 52-65) but provides no `unload()` method or `__del__` cleanup. Unlike `SocialPresenceDetector` (which implements explicit `unload()` with `gc.collect()` and `torch.mps.empty_cache()`), the attention pipeline holds the model tensor graph in GPU memory indefinitely. In the E2E pipeline where Layer 03a runs before Layers 03b-03g, this leaves ~200MB of MPS memory occupied by an unused model during subsequent layer execution.
+
+**Option A (recommended)**: **Add `unload()` Method** — Implement `unload()` on `AttentionLayerPipeline` to delete `self.gaze_pipeline`, call `gc.collect()`, and invoke `torch.mps.empty_cache()`. Call it at the end of `run()`.
+  - *Pros*: Frees MPS memory for downstream layers; consistent with the pattern established in `SocialPresenceDetector`.
+  - *Cons*: If the pipeline is re-used (e.g., called twice), the model would need to be re-loaded; mitigated by lazy-loading pattern.
+
+**Option B**: **Use Context Manager Protocol** — Implement `__enter__` / `__exit__` on the pipeline so it can be used with `with AttentionLayerPipeline(...) as pipeline:` and auto-cleanup on scope exit.
+  - *Pros*: Pythonic; guarantees cleanup even on exceptions.
+  - *Cons*: Requires refactoring all call sites to use `with` syntax.
+
+Your selection: _____
+
+---
+
+### Issue 8: ByteTrack State Contamination Across Videos
+**Status**: ⚠️ Confirmed Unresolved — Verified in `social_presence.py` (line 107): `self.model.track()` is called with `persist=True`, which tells Ultralytics to retain the ByteTrack Kalman filter state between calls. Since `SocialPresenceDetector` is instantiated once in `FilteringPipeline.__init__()` (line 27) and reused for every video in the batch loop (line 98), the tracker's internal state (track IDs, Kalman predictions, IoU association history) from Video N bleeds into Video N+1. This can cause: (1) person IDs in the second video starting from a high number instead of 0, (2) false associations if a bystander in the new video appears at coordinates similar to where a bystander in the previous video was last seen, and (3) inflated track ages causing the tracker to retain ghost tracks longer than intended.
+
+**Option A (recommended)**: **Reset Tracker Between Videos** — Call `self.model.predictor.trackers[0].reset()` (or re-instantiate the tracker) at the start of each `detect()` call to ensure a clean state per video.
+  - *Pros*: Guarantees independent tracking per video; minimal code change (1-2 lines at the top of `detect()`).
+  - *Cons*: Requires verifying the internal Ultralytics API for tracker reset; may differ across Ultralytics versions.
+
+**Option B**: **Disable `persist`** — Set `persist=False` in the `model.track()` call. This forces Ultralytics to re-initialize the tracker on every batch call.
+  - *Pros*: Simpler; no reliance on internal API.
+  - *Cons*: `persist=False` re-initializes the tracker on every *batch* within the same video, fragmenting tracks across batches within a single video. This defeats the purpose of temporal tracking entirely.
+
+**Option C**: **Instantiate a Fresh Detector Per Video** — Create a new `SocialPresenceDetector` for each video in the `FilteringPipeline` loop instead of reusing one.
+  - *Pros*: Guarantees zero state leakage; trivial to implement.
+  - *Cons*: Re-loads the YOLO model from disk for every video, adding ~2-3s overhead per clip; wasteful if the model weights are identical.
+
+Your selection: _____
 
