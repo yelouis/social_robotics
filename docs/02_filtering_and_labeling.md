@@ -149,9 +149,9 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
    - **Problem**: Long batch runs were fragile; a single error in one video would crash the entire process, and progress was not saved incrementally.
    - **Solution**: Implemented incremental state saving (write-after-each-video) and isolated per-video errors to `02_filter_errors.json`.
 
-3. **Robust Task Labeling & Merging (Resolved - April 22)**:
+3. **Robust Task Labeling & Merging (Resolved - April 22, Updated - May 05)**:
    - **Problem**: Exact string matching on raw VLM outputs caused identical tasks to be treated as distinct due to minor formatting differences, leading to "task fragmentation."
-   - **Solution**: Implemented label normalization (lowercasing, punctuation stripping) and switched to dynamic confidence scoring based on temporal consistency.
+   - **Solution**: The original VLM-based labeling approach was fully replaced by Ego4D Metadata Extraction (see Resolved Issue #9). Since metadata labels are pre-normalized by the Ego4D consortium, the original punctuation-stripping requirement is now obsolete. The current implementation applies `.strip()` whitespace normalization on scenario strings (`pipeline.py` line 229) and uses lowercased comparison for the drop-rule filter (line 230). Task confidence is set to `1.0` as a ground-truth marker for metadata-sourced labels.
 
 4. **Stage 2 VLM Climax Refinement (Resolved - April 22)**:
    - **Problem**: Optical flow analysis alone was insufficient for identifying action climaxes in slow or cognitive tasks (e.g., reading, solving puzzles).
@@ -199,4 +199,52 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*None at this time.*
+### Issue 1: ByteTrack Tracker State Bleeds Across Videos
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/shared/social_presence.py` (line 107): `self.model.track()` is called with `persist=True` to enable ByteTrack temporal ID consistency within a single video. However, there is no tracker reset between successive `detect()` calls. When the `FilteringPipeline` processes multiple videos in Pass 1 (lines 88-104 in `pipeline.py`), the tracker's internal state (track IDs, Kalman filter predictions) carries over from the previous video, causing `person_id` values to continue incrementing and stale tracks from video A to potentially match detections in video B.
+
+**Option A (recommended)**: **Explicit Tracker Reset** — Call `self.model.predictor.trackers[0].reset()` (or re-instantiate the tracker) at the start of each `detect()` call to ensure a clean tracking state per video.
+  - *Pros*: Minimal code change (~2 lines); guarantees `person_id` restarts from 0 per video; eliminates cross-video contamination.
+  - *Cons*: Relies on Ultralytics internal API (`predictor.trackers`), which may change across library versions.
+
+**Option B**: **Model Re-instantiation** — Reload the YOLO model via `self._model = YOLO(self.model_path)` before each `detect()` call.
+  - *Pros*: Completely clean state; no dependency on internal APIs.
+  - *Cons*: Significant overhead (~1-2s per video for model reloading); wasteful of MPS memory bandwidth on the M4 Pro.
+
+Your selection: _____
+
+---
+
+### Issue 2: Reaction Window Exceeds Video Duration
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 416-423): the `task_reaction_window_sec` is computed as `climax_sec + offset` but is never clamped to the video's `duration_sec`. For a 45-second video with a climax at 43.5s and a `medium` velocity window of `[+1.0s, +3.0s]`, the output would be `[44.5, 46.5]`—1.5 seconds past the end of the video. Downstream layers (03a Attention, 03b Emotion) that seek frames within this window will either crash or silently produce empty data.
+
+**Option A (recommended)**: **Clamp to Duration** — Pass `duration_sec` into `temporal_climax_identification()` and `min()` both window bounds against it: `window = [min(start, duration_sec), min(end, duration_sec)]`.
+  - *Pros*: One-line fix; guarantees all downstream layers receive valid temporal bounds; no schema changes required.
+  - *Cons*: Truncated windows near the end of a video will yield shorter observation periods, potentially reducing statistical power for those tasks.
+
+**Option B**: **Annotate Truncation** — In addition to clamping, add a `"window_truncated": true` flag to `task_temporal_metadata` so downstream layers can weight or discard edge-case windows.
+  - *Pros*: Full transparency for downstream consumers; allows weighted analysis.
+  - *Cons*: Requires a minor schema addition (additive-only, so safe); slightly more implementation effort.
+
+Your selection: _____
+
+---
+
+### Issue 3: Undocumented `hand_detections` Schema Field
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (line 159): the final manifest output includes a `hand_detections` field containing per-frame MediaPipe hand bounding boxes. This field is actively consumed by Layer 03a Attention (`src/layer_03a_attention/pipeline.py`, lines 144-351) for occlusion suppression. However, it is **not documented** in the `filtered_manifest.json` Schema Definition section of this document, violating the stated contract: "Any additions to this schema must be additive only."
+
+**Option A (recommended)**: **Document the Field** — Add the `hand_detections` key to the schema definition in this document with its structure (`timestamp_sec`, `hand_boxes` array of `[x1, y1, x2, y2]` tuples).
+  - *Pros*: Brings documentation in line with reality; no code changes needed; preserves additive-only policy.
+  - *Cons*: None significant.
+
+Your selection: _____
+
+---
+
+### Issue 4: Dead Imports in `pipeline.py`
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 7-8): `import os` and `import shutil` are imported at the top of the file but are never referenced anywhere in the module. These are remnants of earlier refactoring passes.
+
+**Option A (recommended)**: **Remove Dead Imports** — Delete the `import os` and `import shutil` lines.
+  - *Pros*: Cleaner code; removes confusion about dependencies; marginally faster module load.
+  - *Cons*: None.
+
+Your selection: _____
