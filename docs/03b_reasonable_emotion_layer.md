@@ -192,4 +192,87 @@ The initial implementation of the Reasonable Emotion Layer is complete:
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*None at this time.*
+### Issue 1: Unused `re` Import in `pipeline.py`
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03b_reasonable_emotion/pipeline.py` line 5: `import re` is present but the `re` module is never referenced anywhere in the module body. This is the same class of dead-import issue previously resolved as Issue #4 (April 26), reintroduced during a later edit (likely the LLM-JSON-defense work in Issue #7, since regex-based JSON salvage is a common pattern that may have been considered then dropped).
+
+**Option A (recommended)**: **Drop the import outright** — Remove the `import re` line.
+  - *Pros*: Zero behavioral risk; restores the post-April-26 cleanliness; static analyzers (`ruff`, `pyflakes`) stop flagging the file.
+  - *Cons*: None.
+
+**Option B**: **Use `re` to harden raw LLM JSON parsing** — Pre-strip Markdown code fences (` ```json ... ``` `) from `response.message.content` before `json.loads`, since `format="json"` does not always prevent fence wrapping on every Ollama backend.
+  - *Pros*: Adds a fourth layer of defense to Issue #7's JSON-fragility fix; fences are a real failure mode for some Gemma builds.
+  - *Cons*: Extends scope beyond a cleanup; needs its own test; if pydantic + `format="json"` is already covering the observed cases, this is gold-plating.
+
+Your selection: _____
+
+---
+
+### Issue 2: `KNOWN_EMOTIONS` is Dead Code with Misleading Docstring
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03b_reasonable_emotion/pipeline.py` lines 28-35. The comment above the constant states: *"every LLM response is validated against this set. Anything outside it is silently normalized to 'neutral'."* Neither validation nor normalization is implemented anywhere in the file. `ExpectationSchema` (lines 37-48) only enforces field structure (list typing, key presence) — it does not constrain vocabulary. `_sample_emotions` consults `PYFEAT_EMOTION_COLUMNS` (line 56), not `KNOWN_EMOTIONS`. The set is referenced exactly once, in a generator comprehension at line 557, where it is used to lowercase-filter PyFeat columns — a use that is functionally redundant with `PYFEAT_EMOTION_COLUMNS` itself.
+
+This is hazardous because future contributors reading the docstring will assume LLM-emitted emotions like `"jubilation"` or `"shock"` get normalized, when in reality they flow through into `transition_pair` and `_rule_based_classify` unchanged (and silently land in the `neutral` bucket via fallthrough, but for the wrong reason).
+
+**Option A (recommended)**: **Implement the normalization the comment promises** — Add a `_normalize_emotion(label: str) -> str` helper that returns the input if it is in `KNOWN_EMOTIONS`, else `"neutral"`. Apply it inside `_sample_emotions` (after PyFeat or mock label assignment) and inside `_llm_evaluate_transition` (to the `emotion_start`/`emotion_end` arguments before they enter the prompt).
+  - *Pros*: Aligns code with the existing comment, which was clearly the original intent; protects downstream rule-based fallback from out-of-vocabulary labels; keeps `KNOWN_EMOTIONS` as the single source of truth.
+  - *Cons*: Requires a test asserting that an OOV label maps to `neutral`; minor risk of masking genuine PyFeat columns if they ever expand beyond `KNOWN_EMOTIONS`.
+
+**Option B**: **Delete `KNOWN_EMOTIONS` and the misleading comment** — Drop lines 28-35 and rely on `PYFEAT_EMOTION_COLUMNS` plus pydantic structural validation alone.
+  - *Pros*: Smallest diff; no new behavior to test.
+  - *Cons*: Leaves the LLM path with no vocabulary guard at all; an LLM emitting `"shock"` (not in any expectation list) silently classifies as `neutral` via fallthrough.
+
+Your selection: _____
+
+---
+
+### Issue 3: Per-Sample Temp-PNG Round-Trip in PyFeat Path
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03b_reasonable_emotion/pipeline.py` lines 542-563. For each emotion sample (~3 FPS × reaction window × bystander count), the code writes the BGR face crop to a `tempfile.NamedTemporaryFile(suffix=".png")` via `cv2.imwrite`, passes the path string to `self.feat_detector.detect_image(tmp_path)`, then `unlink`s the file. On the Mac mini M4 Pro target, PyFeat's CPU inference (per Issue #6) is already the dominant cost, but each sample now also pays for: (a) PNG encode in OpenCV, (b) two filesystem syscalls per sample (write + unlink), and (c) PIL/imageio decode inside PyFeat. For a manifest of N tasks × M bystanders, the cost scales linearly and is pure overhead.
+
+PyFeat's `Detector` exposes lower-level entry points (`detect_emotions(frame_array, faces)` and `_predict_emotions(face_aligned)`) that accept numpy arrays directly, bypassing the disk round-trip entirely.
+
+**Option A (recommended)**: **Switch to in-memory PyFeat API** — Replace `cv2.imwrite` + `detect_image(path)` with a direct call passing the BGR (or RGB-converted) ndarray to `detect_emotions` / `_predict_emotions`. Drop the `tempfile` import block entirely.
+  - *Pros*: Eliminates per-sample disk IO and the unlink-on-error cleanup mess (lines 564-570); reduces wall-clock time per video meaningfully on long manifests; removes a TOCTOU-style failure surface.
+  - *Cons*: PyFeat's lower-level API is less stable across versions than `detect_image`; would need a version-pin assertion or a fallback path; requires verifying that the face has already been detected (the bbox is supplied by Node 02, so the detector currently runs face-detection redundantly inside `detect_image`).
+
+**Option B**: **Keep `detect_image` but reuse a single temp path** — Allocate one persistent temp file at `__init__` time and overwrite it per sample. Skip `unlink` until pipeline shutdown.
+  - *Pros*: Trivial diff; preserves the existing PyFeat call shape.
+  - *Cons*: Still pays for PNG encode + decode every sample; only saves the unlink syscall; doesn't address the redundant face-detection-inside-`detect_image` issue.
+
+**Option C**: **Batch crops into a single `detect_image` call per task** — Collect every sample's crop into a list and submit them in one PyFeat batch at the end of `_sample_emotions`.
+  - *Pros*: Amortizes PyFeat model warm-up / batch tensor overhead; potentially largest speedup.
+  - *Cons*: Most invasive refactor; loses the early-exit on per-sample failure; PyFeat's batch API expects either a directory of images or a video path, neither of which fits the current crop-array shape cleanly.
+
+Your selection: _____
+
+---
+
+### Issue 4: `VideoCapture` Not Released When `cap.isOpened()` Returns False
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03b_reasonable_emotion/pipeline.py` lines 318-321. After `cap = cv2.VideoCapture(str(video_path))`, the `if not cap.isOpened()` branch returns `None` without calling `cap.release()`. The very next branch at lines 325-327 (the `fps == 0 or total_frames == 0` case) does correctly call `cap.release()` before returning, so the omission is an inconsistency, not a uniform pattern. While `cv2.VideoCapture` is generally tolerant of being garbage-collected un-released, on long batch runs over manifests with corrupted files this can leak file descriptors and (on some FFmpeg backends) hold a transient memory mapping until GC.
+
+**Option A (recommended)**: **Add the `cap.release()` call** — One-line fix mirroring the sibling branch.
+  - *Pros*: Trivial; makes the two early-exit branches symmetric; defends against backend-specific FD leaks.
+  - *Cons*: None.
+
+**Option B**: **Wrap the whole `process_video` body in a `try / finally: cap.release()`** — Guarantees release on any exit path, including the bystander/task early-returns at lines 308-316 (which currently never opened a cap, so don't need release, but a uniform pattern is more defensible).
+  - *Pros*: Eliminates this entire class of bug; resilient to future early-return additions.
+  - *Cons*: Slightly larger diff; the lines-308-316 exits would call `release()` on an undefined `cap` unless the variable is initialized to `None` first.
+
+Your selection: _____
+
+---
+
+### Issue 5: Global `random.seed()` Mutation in `_sample_emotions`
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03b_reasonable_emotion/pipeline.py` line 507: `random.seed(int(sum(sum(b) for b in b_bboxes)))`. This is called on every invocation of `_sample_emotions` and mutates the **global** `random` module state. After fix #6 (April 27) wired in real PyFeat inference, the mock-emotion fallback (lines 572-583, the only consumer of `random` in this method) is now a degraded code path — but the `random.seed()` call still runs unconditionally **before** the PyFeat branch, so even successful PyFeat runs reseed the global RNG. Any other module in the same Python process that relies on `random` (e.g., test fixtures, augmentation libraries, ID generators) will inherit the bbox-derived seed.
+
+**Option A (recommended)**: **Use a local `random.Random(seed)` instance** — Replace `random.seed(...)` + `random.uniform(...)` + `random.choice(...)` with `rng = random.Random(seed)` and `rng.uniform(...)` / `rng.choice(...)`. Confine the determinism to this method.
+  - *Pros*: Eliminates global state leakage entirely; preserves the deterministic-mock property; trivial diff.
+  - *Cons*: None.
+
+**Option B**: **Move the seed call inside the `if not detected:` mock branch** — At least skip the global mutation when PyFeat is the actual emotion source.
+  - *Pros*: Smallest diff; PyFeat-success path no longer pollutes global RNG.
+  - *Cons*: Still leaks state every time PyFeat fails or is absent; doesn't fix the underlying anti-pattern.
+
+**Option C**: **Delete the mock fallback entirely** — Now that PyFeat is wired in (Issue #6), make `feat_detector is None` a hard failure rather than a silent degradation to random emotions.
+  - *Pros*: Removes a confusing legacy code path; surfaces missing-PyFeat misconfigurations loudly; eliminates the seed call as a side effect.
+  - *Cons*: Breaks integration tests that rely on the mock for video-less determinism; Pytest fixtures in `tests/test_layer_03b.py` would need monkeypatching of `_sample_emotions` (which they already do for the math/surprise tests, but not for `test_schema_conformance`).
+
+Your selection: _____
