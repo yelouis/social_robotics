@@ -5,7 +5,7 @@ from pathlib import Path
 # Add src to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from dataset_acquisition.downloader import Ego4DDownloader, EpicKitchensDownloader, EgoProceLDownloader
+from dataset_acquisition.downloader import Ego4DDownloader
 
 from tqdm import tqdm
 import time

@@ -119,11 +119,28 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       ],
       "detection_confidence": [0.94, 0.91, 0.93, 0.90]
     }
+  ],
+  "hand_detections": [
+    {
+      "timestamp_sec": 0.0,
+      "hand_boxes": [
+        [410, 520, 560, 670],
+        [610, 540, 760, 690]
+      ]
+    },
+    {
+      "timestamp_sec": 0.5,
+      "hand_boxes": [
+        [415, 522, 565, 672]
+      ]
+    }
   ]
 }
 ```
 
 > **Co-indexing rule**: Within each `bystander_detections` entry, `timestamps_sec[i]`, `bounding_boxes[i]`, and `detection_confidence[i]` are strictly co-indexed. The i-th element of each array describes the same sampled frame.
+
+> **`hand_detections` contract**: One entry per sampled frame that contained MediaPipe-detected wearer hands. `timestamp_sec` matches a sampled frame timestamp from `bystander_detections`, and `hand_boxes` is a list of `[x1, y1, x2, y2]` integer pixel coordinates. Frames with no detected hands are simply omitted. Layer 03a (Attention) consumes this field for occlusion suppression — never remove or rename it.
 
 ## Verification & Validation Check
 To ensure the filtering mechanisms are robust and correct:
@@ -197,54 +214,22 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
     - **Problem**: The geometric anti-wearer heuristic produced occasional false positives when the wearer's hands were extended into the upper frame.
     - **Solution**: Unified resolution with Node 01 by utilizing the MediaPipe Hand Overlap Suppression in the shared `src/shared/social_presence.py` module, preventing hand-held objects from being misclassified as bystanders.
 
+15. **ByteTrack Tracker State Bleeds Across Videos in Filtering Pipeline (Resolved - May 07)**:
+    - **Problem**: `FilteringPipeline.social_presence_filter` reuses a single `SocialPresenceDetector` across every video in Pass 1, and the underlying `model.track(..., persist=True)` call retained ByteTrack's track IDs and Kalman predictions between videos. This caused `person_id` values to monotonically increment across the dataset and risked stale tracks from video A bleeding into video B's `bystander_detections`.
+    - **Solution**: Resolved upstream in `src/shared/social_presence.py:detect()` (see Node 01 Resolved Issue #14): the detector now walks `self.model.predictor.trackers` and calls `.reset()` on each tracker at the top of every `detect()` invocation, guarded by try/except for Ultralytics API drift. Because `FilteringPipeline.social_presence_filter` calls into the same shared `detect()` method, no per-pipeline change was required — the cross-video contamination is now eliminated for both the acquisition and filtering pipelines via one shared fix.
+
+16. **Reaction Window Exceeded Video Duration (Resolved - May 07)**:
+    - **Problem**: `temporal_climax_identification` in `pipeline.py` computed `task_reaction_window_sec` as `climax_sec + offset` without bounding the result by the clip's `duration_sec`. For a 45 s video with a climax at 43.5 s and a `medium`-velocity offset of `[+1.0 s, +3.0 s]`, the manifest emitted `[44.5, 46.5]` — 1.5 s past the end of the file. Downstream layers (03a Attention, 03b Emotion) that seek frames within the reaction window would either crash on `cap.set` failures or silently produce empty observation data.
+    - **Solution**: Threaded `duration_sec` from `process_video_vlm_pass` into `temporal_climax_identification` and added a final clamp `window = [min(window[0], duration_rounded), min(window[1], duration_rounded)]` immediately after the velocity-based offset is applied. The schema is unchanged; truncated windows simply collapse to a valid in-bounds interval (occasionally a zero-length point at EOF for climaxes at the very last frame), which downstream layers can detect via `start == end`.
+
+17. **Undocumented `hand_detections` Schema Field (Resolved - May 07)**:
+    - **Problem**: The Pass 1 social filter began emitting `hand_detections` into `filtered_manifest.json` (set in `pipeline.py` `process_video_vlm_pass`) and Layer 03a Attention actively consumes the field for MediaPipe-based occlusion suppression. The schema definition section of this document never documented the field, silently violating the "additive-only schema" contract this doc claims to uphold.
+    - **Solution**: Added `hand_detections` to the JSON schema example under `## Output`, including a representative two-frame entry, and added an explicit contract paragraph immediately after the existing co-indexing rule. The new contract spells out: one entry per sampled frame that contained hands, `timestamp_sec` aligns with the same sampling grid as `bystander_detections`, `hand_boxes` is a list of integer `[x1, y1, x2, y2]` pixel coords, hand-less frames are omitted, and the field is consumed by Layer 03a so it must not be removed or renamed.
+
+18. **Dead Imports & Escaped-Quote Docstring in `pipeline.py` (Resolved - May 07)**:
+    - **Problem**: `pipeline.py` carried `import os` and `import shutil` at the top of the module that were never referenced anywhere — leftovers from an earlier refactor that produced lint noise and pulled `shutil` for no functional reason. While editing this file, an additional latent defect was discovered: line 186 contained `\"\"\" Sample frames at sample_rate_fps and detect all persons. \"\"\"` — i.e. backslash-escaped quote characters instead of a Python triple-quoted docstring — which made the entire module fail to compile (`SyntaxError: unexpected character after line continuation character`) and meant the filtering pipeline could not have been importable in its prior state.
+    - **Solution**: Removed both unused imports from the import block. Replaced the malformed docstring on `social_presence_filter` with a proper `""" Sample frames at sample_rate_fps and detect all persons. """`. `python -m py_compile src/filtering_and_labeling/pipeline.py` now passes cleanly.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: ByteTrack Tracker State Bleeds Across Videos
-**Status**: ⚠️ Confirmed Unresolved — Verified in `src/shared/social_presence.py` (line 107): `self.model.track()` is called with `persist=True` to enable ByteTrack temporal ID consistency within a single video. However, there is no tracker reset between successive `detect()` calls. When the `FilteringPipeline` processes multiple videos in Pass 1 (lines 88-104 in `pipeline.py`), the tracker's internal state (track IDs, Kalman filter predictions) carries over from the previous video, causing `person_id` values to continue incrementing and stale tracks from video A to potentially match detections in video B.
-
-**Option A (recommended)**: **Explicit Tracker Reset** — Call `self.model.predictor.trackers[0].reset()` (or re-instantiate the tracker) at the start of each `detect()` call to ensure a clean tracking state per video.
-  - *Pros*: Minimal code change (~2 lines); guarantees `person_id` restarts from 0 per video; eliminates cross-video contamination.
-  - *Cons*: Relies on Ultralytics internal API (`predictor.trackers`), which may change across library versions.
-
-**Option B**: **Model Re-instantiation** — Reload the YOLO model via `self._model = YOLO(self.model_path)` before each `detect()` call.
-  - *Pros*: Completely clean state; no dependency on internal APIs.
-  - *Cons*: Significant overhead (~1-2s per video for model reloading); wasteful of MPS memory bandwidth on the M4 Pro.
-
-Your selection: Proceed with Option A
-
----
-
-### Issue 2: Reaction Window Exceeds Video Duration
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 416-423): the `task_reaction_window_sec` is computed as `climax_sec + offset` but is never clamped to the video's `duration_sec`. For a 45-second video with a climax at 43.5s and a `medium` velocity window of `[+1.0s, +3.0s]`, the output would be `[44.5, 46.5]`—1.5 seconds past the end of the video. Downstream layers (03a Attention, 03b Emotion) that seek frames within this window will either crash or silently produce empty data.
-
-**Option A (recommended)**: **Clamp to Duration** — Pass `duration_sec` into `temporal_climax_identification()` and `min()` both window bounds against it: `window = [min(start, duration_sec), min(end, duration_sec)]`.
-  - *Pros*: One-line fix; guarantees all downstream layers receive valid temporal bounds; no schema changes required.
-  - *Cons*: Truncated windows near the end of a video will yield shorter observation periods, potentially reducing statistical power for those tasks.
-
-**Option B**: **Annotate Truncation** — In addition to clamping, add a `"window_truncated": true` flag to `task_temporal_metadata` so downstream layers can weight or discard edge-case windows.
-  - *Pros*: Full transparency for downstream consumers; allows weighted analysis.
-  - *Cons*: Requires a minor schema addition (additive-only, so safe); slightly more implementation effort.
-
-Your selection: Proceed with Option A
-
----
-
-### Issue 3: Undocumented `hand_detections` Schema Field
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (line 159): the final manifest output includes a `hand_detections` field containing per-frame MediaPipe hand bounding boxes. This field is actively consumed by Layer 03a Attention (`src/layer_03a_attention/pipeline.py`, lines 144-351) for occlusion suppression. However, it is **not documented** in the `filtered_manifest.json` Schema Definition section of this document, violating the stated contract: "Any additions to this schema must be additive only."
-
-**Option A (recommended)**: **Document the Field** — Add the `hand_detections` key to the schema definition in this document with its structure (`timestamp_sec`, `hand_boxes` array of `[x1, y1, x2, y2]` tuples).
-  - *Pros*: Brings documentation in line with reality; no code changes needed; preserves additive-only policy.
-  - *Cons*: None significant.
-
-Your selection: Proceed with Option A
-
----
-
-### Issue 4: Dead Imports in `pipeline.py`
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py` (lines 7-8): `import os` and `import shutil` are imported at the top of the file but are never referenced anywhere in the module. These are remnants of earlier refactoring passes.
-
-**Option A (recommended)**: **Remove Dead Imports** — Delete the `import os` and `import shutil` lines.
-  - *Pros*: Cleaner code; removes confusion about dependencies; marginally faster module load.
-  - *Cons*: None.
-
-Your selection: Proceed with Option A
+_No unresolved issues at this time._

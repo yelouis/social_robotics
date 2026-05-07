@@ -268,10 +268,16 @@ class Ego4DDownloader(DatasetDownloader):
                     print(f"[Debug] Filtering video: {video.name}")
                     self.filter_and_purge(video)
                     print(f"[Debug] Finished filtering video: {video.name}")
-                
+
                 # Mark as processed regardless of whether they were kept or purged
                 if video_uids:
                     self.mark_as_processed(video_uids)
+
+                # Free YOLO + MediaPipe memory between batches to prevent MPS
+                # pressure on the M4 Pro's 24GB unified memory across long runs.
+                # The lazy-loading property pattern reloads on the next batch.
+                if self.filterer is not None:
+                    self.filterer.detector.unload()
                     
         except subprocess.CalledProcessError as e:
             print(f"Error during Ego4D download: {e}")

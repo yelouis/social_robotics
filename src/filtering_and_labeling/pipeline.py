@@ -4,8 +4,6 @@ import gc
 import torch
 import numpy as np
 import tempfile
-import os
-import shutil
 import traceback
 import re
 from pathlib import Path
@@ -144,7 +142,7 @@ class FilteringPipeline:
             return None
             
         # 3. Temporal Task Climax Identification (Batched VLM)
-        self.temporal_climax_identification(cap, fps, total_frames, identified_tasks)
+        self.temporal_climax_identification(cap, fps, total_frames, identified_tasks, duration_sec)
         
         cap.release()
         
@@ -183,7 +181,7 @@ class FilteringPipeline:
     # def process_video(self, entry): ...
 
     def social_presence_filter(self, video_path, sample_rate_fps=1):
-        \"\"\" Sample frames at sample_rate_fps and detect all persons. \"\"\"
+        """ Sample frames at sample_rate_fps and detect all persons. """
         detections_by_frame, hands_by_frame = self.detector.detect(video_path, sample_rate_fps=sample_rate_fps, fast_mode=False, return_hands=True)
         
         if not detections_by_frame:
@@ -266,7 +264,7 @@ class FilteringPipeline:
         return 'medium'
 
 
-    def temporal_climax_identification(self, cap, fps, total_frames, identified_tasks):
+    def temporal_climax_identification(self, cap, fps, total_frames, identified_tasks, duration_sec):
         """ Compute optical flow to find task climax, with VLM refinement for slow tasks """
         for task in identified_tasks:
             start_sec = task['task_start_sec']
@@ -421,6 +419,10 @@ class FilteringPipeline:
                 window = [round(climax_sec + 1.0, 2), round(climax_sec + 3.0, 2)]
             else: # slow
                 window = [round(climax_sec + 2.0, 2), round(climax_sec + 6.0, 2)]
+
+            # Clamp to video duration so downstream layers never seek past EOF.
+            duration_rounded = round(duration_sec, 2)
+            window = [min(window[0], duration_rounded), min(window[1], duration_rounded)]
                 
             task['task_temporal_metadata'] = {
                 "task_climax_sec": round(climax_sec, 2),

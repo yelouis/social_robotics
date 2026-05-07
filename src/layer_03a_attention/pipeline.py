@@ -1,6 +1,6 @@
 import json
 import cv2
-import tempfile
+import gc
 import traceback
 import math
 import sys
@@ -74,6 +74,25 @@ class AttentionLayerPipeline:
             except Exception as e:
                 print(f"Error loading existing results: {e}. Starting fresh.")
 
+    def unload(self):
+        """ Free the L2CS-Net model from MPS / GPU memory for downstream layers. """
+        if getattr(self, 'gaze_pipeline', None) is not None:
+            print("[AttentionLayerPipeline] Unloading L2CS-Net...")
+            del self.gaze_pipeline
+            self.gaze_pipeline = None
+        gc.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        elif torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.unload()
+        return False
+
     def run(self):
         with open(self.input_manifest_path, 'r') as f:
             registry = json.load(f)
@@ -83,7 +102,7 @@ class AttentionLayerPipeline:
             try:
                 with open(self.output_result_path, 'r') as f:
                     results = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError, ValueError):
                 pass
 
         for entry in registry:
@@ -121,7 +140,7 @@ class AttentionLayerPipeline:
             try:
                 with open(self.error_log_path, 'r') as f:
                     errors = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError, ValueError):
                 pass
         
         errors.append(error_entry)
@@ -205,6 +224,17 @@ class AttentionLayerPipeline:
             sustained_sec = max(sustained_windows) if sustained_windows else 0
             is_engaged = avg_score >= 0.5 or sustained_sec > 2.0
             
+            # Aggregate the dominant gaze target across the trace.
+            target_counts = {}
+            for item in trace:
+                tgt = item.get('target')
+                if tgt and tgt != "Unknown":
+                    target_counts[tgt] = target_counts.get(tgt, 0) + 1
+            if target_counts:
+                gaze_target = max(target_counts.items(), key=lambda kv: kv[1])[0]
+            else:
+                gaze_target = "Unknown"
+
             per_person_results.append({
                 "person_id": person_id,
                 "average_attention_score": round(avg_score, 2),
@@ -212,7 +242,7 @@ class AttentionLayerPipeline:
                 "attention_variance": round(variance, 4),
                 "sustained_engagement_sec": round(sustained_sec, 2),
                 "is_engaged": is_engaged,
-                "gaze_target_classification": "Camera_or_Task", # Derived geometrically
+                "gaze_target_classification": gaze_target,
                 "attention_trace": trace
             })
             
@@ -231,7 +261,9 @@ class AttentionLayerPipeline:
             "layer": "03a_attention",
             "processing_meta": {
                 "model_used": "l2cs_net_3d_gaze" if self.gaze_pipeline else "fallback_dummy",
-                "sampling_fps_effective": "fixed_8fps"
+                "sampling_fps_effective": 8.0,
+                "sampling_fps_burst": 16.0,
+                "sampling_strategy": "adaptive_8_to_16_fps"
             },
             "per_person": per_person_results,
             "aggregate": {
@@ -241,155 +273,161 @@ class AttentionLayerPipeline:
             }
         }
 
+    BASELINE_STRIDE_SEC = 0.125   # 8 FPS — preserves Layer 03e Nyquist floor (4 Hz)
+    BURST_STRIDE_SEC = 0.0625     # 16 FPS — engaged when |Δscore| > 0.3
+    BURST_DURATION_SEC = 2.0
+    BURST_DELTA_THRESHOLD = 0.3
+
     def _track_and_score(self, cap, fps, duration_sec, b_timestamps, b_bboxes, intrinsics=None, hand_detections=None):
         trace = []
         current_t = 0.0
         last_score = -1.0
-        
-        # Reset video to start
+        burst_until_t = -1.0  # adaptive sampling boost timer
+
+        # Prime the capture so the first cap.retrieve() has a valid buffer (Issue 5).
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        current_frame_idx = 0
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            while current_t <= duration_sec:
-                target_frame_idx = int(current_t * fps)
-                
-                # Sequential skip with grab()
-                while current_frame_idx < target_frame_idx:
-                    ret = cap.grab()
-                    if not ret:
-                        break
-                    current_frame_idx += 1
-                
-                if current_frame_idx > target_frame_idx:
-                    # Over-seeked or stream ended early
-                    pass
-                
-                # Retrieve the target frame
-                ret, frame = cap.retrieve()
-                current_frame_idx += 1
-                
+        ret = cap.grab()
+        if not ret:
+            return trace
+        current_frame_idx = 1
+
+        while current_t <= duration_sec:
+            target_frame_idx = int(current_t * fps)
+
+            # Sequential skip with grab() to reach the target frame without random seeking.
+            while current_frame_idx < target_frame_idx:
+                ret = cap.grab()
                 if not ret:
                     break
-                    
-                # Find closest bbox
-                diffs = [abs(t - current_t) for t in b_timestamps]
-                closest_idx = diffs.index(min(diffs))
-                
-                # If the closest bbox is too far away (e.g. > 2 seconds), skip
-                if diffs[closest_idx] > 2.0:
-                    current_t += 0.5
-                    continue
-                    
-                bbox = b_bboxes[closest_idx]
-                x1, y1, x2, y2 = bbox
-                    
-                # Crop bounding box with some padding
-                h, w = frame.shape[:2]
-                px1 = max(0, int(x1) - 20)
-                py1 = max(0, int(y1) - 20)
-                px2 = min(w, int(x2) + 20)
-                py2 = min(h, int(y2) + 20)
-                
-                crop = frame[py1:py2, px1:px2]
-                if crop.size == 0:
-                    current_t += 0.5
-                    continue
-                    
-                score = 0.0
-                pitch_rad = 0.0
-                yaw_rad = 0.0
-                
-                if self.gaze_pipeline:
-                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    try:
-                        results = self.gaze_pipeline.step(crop_rgb)
-                        # Results container structure from l2cs
-                        pitch_rad = float(results.pitch[0]) if results.pitch.size > 0 else 0.0
-                        yaw_rad = float(results.yaw[0]) if results.yaw.size > 0 else 0.0
-                        
-                        # Geometric Heuristic for attention_score
-                        # Using L2CS gazeto3d convention for correct coordinate system
-                        v_look_x = -math.cos(yaw_rad) * math.sin(pitch_rad)
-                        v_look_y = -math.sin(yaw_rad)
-                        v_look_z = -math.cos(yaw_rad) * math.cos(pitch_rad)
-                        
-                        cx = (x1 + x2) / 2.0
-                        cy = (y1 + y2) / 2.0
-                        
-                        if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
-                            # Use calibrated intrinsics
-                            fx, fy = intrinsics['focal_length'] if isinstance(intrinsics['focal_length'], (list, tuple)) else (intrinsics['focal_length'], intrinsics['focal_length'])
-                            px, py = intrinsics['principal_point']
-                            v_cam_x = px - cx
-                            v_cam_y = py - cy
-                            v_cam_z = -float(fx)
-                        else:
-                            # Fallback heuristic
-                            v_cam_x = (w / 2.0) - cx
-                            v_cam_y = (h / 2.0) - cy
-                            v_cam_z = -float(w) # Negative Z = into screen in L2CS coordinate frame
-                        
-                        norm_cam = math.sqrt(v_cam_x**2 + v_cam_y**2 + v_cam_z**2)
-                        if norm_cam > 0:
-                            v_cam_x /= norm_cam
-                            v_cam_y /= norm_cam
-                            v_cam_z /= norm_cam
-                        
-                        dot_prod_cam = (v_look_x * v_cam_x) + (v_look_y * v_cam_y) + (v_look_z * v_cam_z)
-                        
-                        max_dot_prod = dot_prod_cam
-                        
-                        # Also check intersection against hands
-                        if hand_detections:
-                            h_diffs = [abs(t['timestamp_sec'] - current_t) for t in hand_detections]
-                            if h_diffs:
-                                closest_h_idx = h_diffs.index(min(h_diffs))
-                                if h_diffs[closest_h_idx] <= 2.0:
-                                    hands = hand_detections[closest_h_idx].get('hand_boxes', [])
-                                    for h_box in hands:
-                                        hx1, hy1, hx2, hy2 = h_box
-                                        hcx = (hx1 + hx2) / 2.0
-                                        hcy = (hy1 + hy2) / 2.0
-                                        
-                                        if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
-                                            v_hand_x = px - hcx
-                                            v_hand_y = py - hcy
-                                            v_hand_z = -float(fx)
-                                        else:
-                                            v_hand_x = (w / 2.0) - hcx
-                                            v_hand_y = (h / 2.0) - hcy
-                                            v_hand_z = -float(w)
-                                            
-                                        norm_hand = math.sqrt(v_hand_x**2 + v_hand_y**2 + v_hand_z**2)
-                                        if norm_hand > 0:
-                                            v_hand_x /= norm_hand
-                                            v_hand_y /= norm_hand
-                                            v_hand_z /= norm_hand
-                                            
-                                        dot_prod_hand = (v_look_x * v_hand_x) + (v_look_y * v_hand_y) + (v_look_z * v_hand_z)
-                                        if dot_prod_hand > max_dot_prod:
-                                            max_dot_prod = dot_prod_hand
-                        
-                        # Map dot_prod from [0.5, 1.0] -> [0.0, 1.0] to make it more realistic
-                        mapped_score = max(0.0, (max_dot_prod - 0.5) * 2.0)
-                        score = round(min(1.0, mapped_score), 2)
-                    except Exception as e:
-                        print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")
-                
-                trace.append({
-                    "t": round(current_t, 2),
-                    "score": score,
-                    "pitch_rad": round(pitch_rad, 4),
-                    "yaw_rad": round(yaw_rad, 4)
-                })
-                
-                # Fixed 8 FPS stride (Issue 2 resolution)
-                current_t += 0.125
+                current_frame_idx += 1
 
-                    
-                last_score = score
-                
+            if current_frame_idx < target_frame_idx:
+                # Stream ended before we could reach the target; stop cleanly.
+                break
+
+            ret, frame = cap.retrieve()
+            current_frame_idx += 1
+
+            if not ret:
+                break
+
+            # Find closest bbox
+            diffs = [abs(t - current_t) for t in b_timestamps]
+            closest_idx = diffs.index(min(diffs))
+
+            # If the closest bbox is too far away (e.g. > 2 seconds), skip
+            if diffs[closest_idx] > 2.0:
+                current_t += self.BASELINE_STRIDE_SEC
+                continue
+
+            bbox = b_bboxes[closest_idx]
+            x1, y1, x2, y2 = bbox
+
+            # Crop bounding box with some padding
+            h, w = frame.shape[:2]
+            px1 = max(0, int(x1) - 20)
+            py1 = max(0, int(y1) - 20)
+            px2 = min(w, int(x2) + 20)
+            py2 = min(h, int(y2) + 20)
+
+            crop = frame[py1:py2, px1:px2]
+            if crop.size == 0:
+                current_t += self.BASELINE_STRIDE_SEC
+                continue
+
+            score = 0.0
+            pitch_rad = 0.0
+            yaw_rad = 0.0
+            target_label = "Unknown"
+
+            if self.gaze_pipeline:
+                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                try:
+                    results = self.gaze_pipeline.step(crop_rgb)
+                    pitch_rad = float(results.pitch[0]) if results.pitch.size > 0 else 0.0
+                    yaw_rad = float(results.yaw[0]) if results.yaw.size > 0 else 0.0
+
+                    # L2CS gazeto3d convention
+                    v_look_x = -math.cos(yaw_rad) * math.sin(pitch_rad)
+                    v_look_y = -math.sin(yaw_rad)
+                    v_look_z = -math.cos(yaw_rad) * math.cos(pitch_rad)
+
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+
+                    if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
+                        fx, fy = intrinsics['focal_length'] if isinstance(intrinsics['focal_length'], (list, tuple)) else (intrinsics['focal_length'], intrinsics['focal_length'])
+                        px, py = intrinsics['principal_point']
+                        v_cam_x = px - cx
+                        v_cam_y = py - cy
+                        v_cam_z = -float(fx)
+                    else:
+                        v_cam_x = (w / 2.0) - cx
+                        v_cam_y = (h / 2.0) - cy
+                        v_cam_z = -float(w)
+
+                    norm_cam = math.sqrt(v_cam_x**2 + v_cam_y**2 + v_cam_z**2)
+                    if norm_cam > 0:
+                        v_cam_x /= norm_cam
+                        v_cam_y /= norm_cam
+                        v_cam_z /= norm_cam
+
+                    dot_prod_cam = (v_look_x * v_cam_x) + (v_look_y * v_cam_y) + (v_look_z * v_cam_z)
+                    max_dot_prod = dot_prod_cam
+                    target_label = "Camera"
+
+                    # Hand intersection check
+                    if hand_detections:
+                        h_diffs = [abs(t['timestamp_sec'] - current_t) for t in hand_detections]
+                        if h_diffs:
+                            closest_h_idx = h_diffs.index(min(h_diffs))
+                            if h_diffs[closest_h_idx] <= 2.0:
+                                hands = hand_detections[closest_h_idx].get('hand_boxes', [])
+                                for h_box in hands:
+                                    hx1, hy1, hx2, hy2 = h_box
+                                    hcx = (hx1 + hx2) / 2.0
+                                    hcy = (hy1 + hy2) / 2.0
+
+                                    if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
+                                        v_hand_x = px - hcx
+                                        v_hand_y = py - hcy
+                                        v_hand_z = -float(fx)
+                                    else:
+                                        v_hand_x = (w / 2.0) - hcx
+                                        v_hand_y = (h / 2.0) - hcy
+                                        v_hand_z = -float(w)
+
+                                    norm_hand = math.sqrt(v_hand_x**2 + v_hand_y**2 + v_hand_z**2)
+                                    if norm_hand > 0:
+                                        v_hand_x /= norm_hand
+                                        v_hand_y /= norm_hand
+                                        v_hand_z /= norm_hand
+
+                                    dot_prod_hand = (v_look_x * v_hand_x) + (v_look_y * v_hand_y) + (v_look_z * v_hand_z)
+                                    if dot_prod_hand > max_dot_prod:
+                                        max_dot_prod = dot_prod_hand
+                                        target_label = "POV_Actor_Hands"
+
+                    mapped_score = max(0.0, (max_dot_prod - 0.5) * 2.0)
+                    score = round(min(1.0, mapped_score), 2)
+                except Exception as e:
+                    print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")
+
+            trace.append({
+                "t": round(current_t, 2),
+                "score": score,
+                "pitch_rad": round(pitch_rad, 4),
+                "yaw_rad": round(yaw_rad, 4),
+                "target": target_label
+            })
+
+            # Adaptive stride: trigger a 16 FPS burst when score changes sharply,
+            # then decay back to the 8 FPS baseline after BURST_DURATION_SEC.
+            if last_score >= 0.0 and abs(score - last_score) > self.BURST_DELTA_THRESHOLD:
+                burst_until_t = current_t + self.BURST_DURATION_SEC
+
+            stride = self.BURST_STRIDE_SEC if current_t < burst_until_t else self.BASELINE_STRIDE_SEC
+            current_t += stride
+            last_score = score
+
         return trace

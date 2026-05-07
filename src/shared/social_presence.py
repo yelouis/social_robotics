@@ -66,6 +66,18 @@ class SocialPresenceDetector:
         if not video_path.exists():
             return False if fast_mode else []
 
+        # Reset ByteTrack state to prevent ID/trajectory bleeding across videos.
+        # The model uses persist=True for within-video temporal consistency, so
+        # we must explicitly clear trackers between videos.
+        try:
+            predictor = getattr(self.model, "predictor", None)
+            trackers = getattr(predictor, "trackers", None) if predictor is not None else None
+            if trackers:
+                for tracker in trackers:
+                    tracker.reset()
+        except Exception as e:
+            print(f"[SocialPresenceDetector] Warning: Could not reset tracker state: {e}")
+
         cap = cv2.VideoCapture(str(video_path))
         try:
             if not cap.isOpened():
