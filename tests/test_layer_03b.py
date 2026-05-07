@@ -139,23 +139,31 @@ def test_rule_based_classify():
 # ------------------------------------------------------------------
 
 def test_late_stage_weighted_math():
-    """Verify the Late-Stage Weighted Average formula against hand-calculated values.
+    """Verify the Late-Stage Weighted Average formula against hand-calculated values
+    under the State-Change Filter (Resolved Issue #10): consecutive same-emotion
+    samples are merged into the previous slice, with the slice's terminal_magnitude
+    and slice_success_scalar overwritten by the latest same-emotion sample.
 
     Setup (climax = 6.2):
-      Mock timeseries: neutral(6.2) -> anger(6.7) -> anger(7.7) -> joy(8.2)
+      Mock timeseries: neutral(6.2,1.0) -> anger(6.7,1.0) -> anger(7.7,0.0) -> joy(8.2,1.0)
 
-      Slice 1: neutral -> anger  | window [6.2, 6.7] | negative  | scalar=-1.0
-        D_1 = 0.5, W_1 = max(0.1, 6.2-6.2) = 0.1
-      Slice 2: anger -> anger    | window [6.7, 7.7] | negative  | scalar=0 (magnitude=0)
-        D_2 = 1.0, W_2 = max(0.1, 6.7-6.2) = 0.5
-      Slice 3: anger -> joy      | window [7.7, 8.2] | positive  | scalar=+1.0
-        D_3 = 0.5, W_3 = max(0.1, 7.7-6.2) = 1.5
+      i=0: neutral -> anger   | new slice (negative, magnitude 1.0, scalar -1.0,
+                                window [6.2, 6.7])
+      i=1: anger   -> anger   | SAME emotion -> State-Change Filter extends slice 1:
+                                window becomes [6.2, 7.7], terminal_magnitude=0.0,
+                                scalar = -0.0 (negative * 0.0 magnitude)
+      i=2: anger   -> joy     | new slice (positive, magnitude 1.0, scalar +1.0,
+                                window [7.7, 8.2])
 
-      Numerator = (-1.0*0.5*0.1) + (0.0*1.0*0.5) + (1.0*0.5*1.5)
-               = -0.05 + 0.0 + 0.75 = 0.70
-      Denominator = (0.5*0.1) + (1.0*0.5) + (0.5*1.5)
-                  = 0.05 + 0.50 + 0.75 = 1.30
-      Score = 0.70 / 1.30 ≈ 0.5385 -> rounded to 0.54
+      Final slices (2):
+        Slice 1: window [6.2, 7.7] | negative | scalar = -0.0
+          D_1 = 1.5, W_1 = max(0.1, 6.2-6.2) = 0.1
+        Slice 2: window [7.7, 8.2] | positive | scalar = +1.0
+          D_2 = 0.5, W_2 = max(0.1, 7.7-6.2) = 1.5
+
+      Numerator   = (-0.0 * 1.5 * 0.1) + (1.0 * 0.5 * 1.5) = 0.0 + 0.75 = 0.75
+      Denominator = (1.5 * 0.1)        + (0.5 * 1.5)       = 0.15 + 0.75 = 0.90
+      Score = 0.75 / 0.90 ≈ 0.8333 -> rounded to 0.83
     """
     pipeline = ReasonableEmotionPipeline("dummy.json", "dummy_out.json")
     pipeline.ollama_available = False  # Use rule-based fallback for determinism
@@ -189,19 +197,26 @@ def test_late_stage_weighted_math():
     assert result is not None
 
     slices = result['per_person'][0]['temporal_slices']
-    assert len(slices) == 3
+    # State-Change Filter merges the anger->anger pair into slice 1, leaving 2 slices.
+    assert len(slices) == 2
 
-    # Verify slice classifications
+    # Slice 1: extended window from the same-emotion merge.
+    assert slices[0]['window_sec'] == [6.2, 7.7]
+    assert slices[0]['transition_pair'] == ["neutral", "anger"]
     assert slices[0]['classified_direction'] == "negative"
-    assert slices[0]['slice_success_scalar'] == -1.0
-    assert slices[1]['classified_direction'] == "negative"
-    assert slices[1]['slice_success_scalar'] == 0.0  # magnitude is 0
-    assert slices[2]['classified_direction'] == "positive"
-    assert slices[2]['slice_success_scalar'] == 1.0
+    assert slices[0]['terminal_magnitude'] == 0.0
+    # negative * 0.0 magnitude = -0.0; equality holds against 0.0 in Python.
+    assert slices[0]['slice_success_scalar'] == 0.0
 
-    # Verify the final weighted average math
+    # Slice 2: independent transition past the merge boundary.
+    assert slices[1]['window_sec'] == [7.7, 8.2]
+    assert slices[1]['transition_pair'] == ["anger", "joy"]
+    assert slices[1]['classified_direction'] == "positive"
+    assert slices[1]['slice_success_scalar'] == 1.0
+
+    # Verify the final weighted average math under the merged-slice geometry.
     person_score = result['per_person'][0]['late_stage_weighted_success_score']
-    expected = round(0.70 / 1.30, 2)  # 0.54
+    expected = round(0.75 / 0.90, 2)  # 0.83
     assert person_score == expected, f"Expected {expected}, got {person_score}"
 
     assert result['task_aggregate_score'] == expected
