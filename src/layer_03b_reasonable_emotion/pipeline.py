@@ -2,8 +2,6 @@ import json
 import cv2
 import traceback
 import random
-import re
-import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError, field_validator
@@ -24,15 +22,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 #  Pydantic schemas for LLM output validation (Limitation #2 fix)
 # ---------------------------------------------------------------------------
-
-# The canonical emotion vocabulary — every LLM response is validated against
-# this set.  Anything outside it is silently normalized to "neutral".
-KNOWN_EMOTIONS = {
-    "joy", "amusement", "relief", "surprise",
-    "anger", "disgust", "fear", "sadness",
-    "neutral", "bored", "distracted", "contempt",
-    "excitement", "anxiety", "confusion",
-}
 
 class ExpectationSchema(BaseModel):
     """Step 1 output: expected emotions per outcome polarity."""
@@ -318,6 +307,7 @@ class ReasonableEmotionPipeline:
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             print(f"Failed to open video: {video_path}")
+            cap.release()
             return None
 
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -487,13 +477,15 @@ class ReasonableEmotionPipeline:
     def _sample_emotions(self, cap, fps, start_sec, end_sec, bystander):
         """Sample bystander emotions at ~3 FPS within the reaction window.
 
-        When PyFeat is available, crops are written to a temp file and passed
-        to Detector.detect_image().  The dominant emotion column from the
-        returned DataFrame becomes the label; its probability becomes the
-        magnitude.
+        When PyFeat is available, the BGR crop is converted to RGB and passed
+        as a numpy ndarray directly to Detector.detect_image() — no disk
+        round-trip. The dominant emotion column from the returned DataFrame
+        becomes the label; its probability becomes the magnitude.
 
         When PyFeat is unavailable (or fails), a deterministic mock
-        distribution is used for integration testing.
+        distribution is used for integration testing. The mock uses a
+        method-local random.Random instance so the global RNG is never
+        mutated by Layer 03b.
         """
         current_t = start_sec
         timeseries = []
@@ -503,8 +495,8 @@ class ReasonableEmotionPipeline:
         if not b_timestamps or not b_bboxes:
             return timeseries
 
-        # Fix random seed for deterministic mocking based on bounding boxes
-        random.seed(int(sum(sum(b) for b in b_bboxes)))
+        # Local RNG — deterministic per-bystander, no global state mutation.
+        rng = random.Random(int(sum(sum(b) for b in b_bboxes)))
 
         while current_t <= end_sec:
             # Find closest bbox
@@ -541,18 +533,15 @@ class ReasonableEmotionPipeline:
 
             if self.feat_detector:
                 try:
-                    # PyFeat's detect_image expects a file path.  Write the
-                    # crop to a temporary PNG, run detection, then clean up.
-                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                        tmp_path = tmp.name
-                        cv2.imwrite(tmp_path, crop)
-
-                    det_result = self.feat_detector.detect_image(tmp_path)
-                    Path(tmp_path).unlink(missing_ok=True)
+                    # In-memory PyFeat call — pass the RGB ndarray directly
+                    # to detect_image(). Modern py-feat (>=0.6) accepts both
+                    # paths and ndarrays. If a stricter version is installed
+                    # and rejects the ndarray, the exception is caught below
+                    # and we fall through to the mock generator.
+                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                    det_result = self.feat_detector.detect_image(crop_rgb)
 
                     if det_result is not None and len(det_result) > 0:
-                        # Extract emotion columns — PyFeat returns them as
-                        # DataFrame columns in a fixed order.
                         emotion_cols = [c for c in det_result.columns
                                         if c.lower() in {e.lower() for e in PYFEAT_EMOTION_COLUMNS}]
                         if emotion_cols:
@@ -563,24 +552,19 @@ class ReasonableEmotionPipeline:
                             detected = True
                 except Exception as e:
                     print(f"[03b] PyFeat inference failed at t={current_t:.2f}s: {e}")
-                    # Clean up temp file on failure
-                    try:
-                        Path(tmp_path).unlink(missing_ok=True)
-                    except NameError:
-                        pass
 
             if not detected:
                 # Fallback: deterministic mock distribution for integration testing
                 progress = (current_t - start_sec) / (max(0.1, end_sec - start_sec))
                 if progress < 0.3:
                     emotion_label = "neutral"
-                    magnitude = random.uniform(0.5, 0.8)
+                    magnitude = rng.uniform(0.5, 0.8)
                 elif progress < 0.6:
-                    emotion_label = random.choice(["surprise", "neutral", "fear"])
-                    magnitude = random.uniform(0.7, 0.9)
+                    emotion_label = rng.choice(["surprise", "neutral", "fear"])
+                    magnitude = rng.uniform(0.7, 0.9)
                 else:
-                    emotion_label = random.choice(["joy", "anger", "surprise"])
-                    magnitude = random.uniform(0.8, 1.0)
+                    emotion_label = rng.choice(["joy", "anger", "surprise"])
+                    magnitude = rng.uniform(0.8, 1.0)
 
             timeseries.append({
                 "t": round(current_t, 2),
