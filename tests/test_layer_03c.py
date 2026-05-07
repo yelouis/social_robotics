@@ -4,7 +4,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.layer_03c_acoustic_prosody.pipeline import AcousticProsodyPipeline
+from src.layer_03c_acoustic_prosody.pipeline import (
+    AcousticProsodyPipeline,
+    SENSEVOICE_EVENT_TOKENS,
+)
+from src.layer_03c_acoustic_prosody.config import Layer03cConfig
 
 # ------------------------------------------------------------------
 #  Fixtures
@@ -83,6 +87,20 @@ def test_init_raises_without_funasr():
     with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
          patch("builtins.__import__", side_effect=mock_import):
         with pytest.raises(RuntimeError, match="funasr is not installed"):
+            AcousticProsodyPipeline("dummy.json", "dummy_out.json")
+
+def test_init_raises_when_automodel_load_fails():
+    """Issue #1: non-ImportError AutoModel failures (corrupt weights, OOM,
+    ModelScope outage, etc.) must hard-fail rather than silently degrade to
+    all-Neutral output. The original except clause merely logged these,
+    re-introducing the symptom Issue #6 was supposed to eliminate.
+    """
+    fake_funasr = MagicMock()
+    fake_funasr.AutoModel = MagicMock(side_effect=OSError("corrupt model weights"))
+
+    with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+         patch.dict("sys.modules", {"funasr": fake_funasr}):
+        with pytest.raises(RuntimeError, match="Failed to load funasr SER model"):
             AcousticProsodyPipeline("dummy.json", "dummy_out.json")
 
 # ------------------------------------------------------------------
@@ -249,6 +267,119 @@ def test_error_logging(tmp_path):
     assert len(errors) == 1
     assert errors[0]["video_id"] == "video_abc"
     assert "test error for logging" in errors[0]["error"]
+
+# ------------------------------------------------------------------
+#  SenseVoice event detection (bracketed-only, lazy load)
+# ------------------------------------------------------------------
+
+def test_sensevoice_only_matches_bracketed_tokens():
+    """Issue #3: bare-word substring matching produced false positives on
+    transcribed speech. Only bracketed event tokens should now register.
+    """
+    pipeline = _make_pipeline()
+    pipeline.funasr_available = True
+    pipeline.sensevoice_model = MagicMock()
+    # Transcribed speech containing the substring "laughter" inside other
+    # words ("slaughter") and the bare word; neither should match.
+    pipeline.sensevoice_model.generate.return_value = [
+        {"text": "the slaughter scene was harrowing and laughter died down"}
+    ]
+
+    events = pipeline._run_sensevoice_model("dummy.wav")
+    assert events == []
+
+def test_sensevoice_matches_bracketed_token_emission():
+    """Bracketed tokens emitted by SenseVoice are detected correctly."""
+    pipeline = _make_pipeline()
+    pipeline.funasr_available = True
+    pipeline.sensevoice_model = MagicMock()
+    pipeline.sensevoice_model.generate.return_value = [
+        {"text": "<|laughter|> some speech <|applause|>"}
+    ]
+
+    events = pipeline._run_sensevoice_model("dummy.wav")
+    assert sorted(events) == ["applause", "laughter"]
+
+def test_sensevoice_lazy_loaded_on_first_low_confidence():
+    """Issue #4: SenseVoice is constructed only on first invocation, not at init."""
+    pipeline = _make_pipeline()
+    pipeline.funasr_available = True
+    pipeline.sensevoice_model = None  # baseline: not yet loaded
+    fake_loaded_model = MagicMock()
+    fake_loaded_model.generate.return_value = [{"text": "<|cough|>"}]
+    pipeline._AutoModel = MagicMock(return_value=fake_loaded_model)
+
+    events = pipeline._run_sensevoice_model("dummy.wav")
+
+    pipeline._AutoModel.assert_called_once_with(
+        model="iic/SenseVoiceSmall", disable_update=True
+    )
+    assert pipeline.sensevoice_model is fake_loaded_model
+    assert events == ["cough"]
+
+    # Second call must reuse the loaded model (no re-construction).
+    pipeline._run_sensevoice_model("dummy.wav")
+    pipeline._AutoModel.assert_called_once()
+
+# ------------------------------------------------------------------
+#  Tunable config (Layer03cConfig)
+# ------------------------------------------------------------------
+
+def test_config_thresholds_override_classification():
+    """Issue #5: overriding Layer03cConfig changes heuristic behavior without
+    editing source. Here a stricter min_dominant_tone_score forces what would
+    have been Alarming back down to Neutral.
+    """
+    cfg = Layer03cConfig(min_dominant_tone_score=2.0)
+    pipeline = _make_pipeline()
+    pipeline.config = cfg
+
+    emotions = {"angry": 0.6, "fearful": 0.3, "neutral": 0.1}
+    tone, scalar = pipeline._classify_acoustic_tone(emotions, max_amp_dbFS=-10.0, pitch_variance=0.0)
+    assert tone == "Neutral"
+    assert scalar == 0.0
+
+def test_config_volume_cutoff_override_changes_alarming_bonus():
+    """Lifting the high_volume_dbfs cutoff above the input dBFS removes the bonus."""
+    pipeline = _make_pipeline()
+    # With default cfg, -25 dBFS is below the -20 cutoff and gets no bonus.
+    # Push the cutoff to -30 so -25 now exceeds it and earns the bonus.
+    pipeline.config = Layer03cConfig(high_volume_dbfs=-30.0)
+    emotions = {"angry": 0.4, "fearful": 0.2, "neutral": 0.4}
+    tone, _ = pipeline._classify_acoustic_tone(emotions, max_amp_dbFS=-25.0, pitch_variance=0.0)
+    assert tone == "Alarming"
+
+# ------------------------------------------------------------------
+#  Temp file lifecycle (Issue #2)
+# ------------------------------------------------------------------
+
+def test_wav_cleaned_up_on_processing_exception(tmp_path):
+    """Issue #2: when librosa/funasr raise mid-pipeline, the temp wav file
+    must still be removed via the try/finally cleanup. Otherwise the OS temp
+    directory accumulates orphaned files on every failed video.
+    """
+    pipeline = _make_pipeline()
+    fake_wav = "/tmp/prosody_unit_test.wav"
+    cleanup_calls = []
+
+    def fake_remove(path):
+        cleanup_calls.append(path)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated librosa OOM")
+
+    pipeline._extract_audio_chunk = lambda v, s, e: fake_wav
+    pipeline._extract_librosa_features = boom
+    # _safe_remove is a staticmethod; patch on the class so the bound call
+    # routes through our recorder.
+    with patch.object(AcousticProsodyPipeline, "_safe_remove", staticmethod(fake_remove)):
+        with pytest.raises(RuntimeError, match="simulated librosa OOM"):
+            pipeline._process_task("dummy.mp4", {
+                "task_id": "t_x",
+                "task_temporal_metadata": {"task_reaction_window_sec": [0.0, 1.0]},
+            })
+
+    assert fake_wav in cleanup_calls, "Temp wav must be cleaned up even when processing raises"
 
 # ------------------------------------------------------------------
 #  End-to-end schema conformance

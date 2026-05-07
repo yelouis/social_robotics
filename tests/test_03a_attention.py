@@ -54,11 +54,14 @@ class TestAttentionLayerPipeline(unittest.TestCase):
         mock_cap.isOpened.return_value = True
         mock_cap.get.side_effect = lambda prop: 2.0 if prop == 5 else 3.0 # fps=2.0, total_frames=3.0 -> duration 1.5s
         
-        # Mock cap.read() returning True and a dummy frame
+        # The pipeline uses cap.grab() + cap.retrieve() for sequential frame seeking
+        # rather than cap.read(); mock both so unpacking succeeds.
         import numpy as np
         dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
         mock_cap.read.return_value = (True, dummy_frame)
-        
+        mock_cap.grab.return_value = True
+        mock_cap.retrieve.return_value = (True, dummy_frame)
+
         mock_videocapture.return_value = mock_cap
         
         # Mock L2CS Pipeline
