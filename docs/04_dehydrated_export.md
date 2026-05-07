@@ -97,4 +97,114 @@ To guarantee the export structure adheres to safety standards and schema require
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*None at this time.*
+### Issue 1: Schema-B Summary Scalars Only Cover 03b and 03c — 03d/03e/03f/03g Are Effectively JSON-Locked
+**Status**: ⚠️ Confirmed Unresolved — Verified by cross-referencing actual layer outputs against `aggregator.py:102-115`. The aggregator docstring at `aggregator.py:26-30` claims that "03a, 03d, 03e, 03f, 03g use `aggregate`/`per_person` keys" and "03b, 03c use `tasks_analyzed`". Auditing the actual `pipeline.py` of each layer shows: only 03a returns `{"per_person": ..., "aggregate": ...}` (verified in `src/layer_03a_attention/pipeline.py:229-242`); 03b, 03c, 03d, 03e, 03f, AND 03g all return `{"tasks_analyzed": [...]}`. The aggregator's Schema-B summary-scalar extraction only knows `task_aggregate_score` (03b) at line 109 and `prosody_scalar` (03c) at line 113. For 03d (`proxemic_vector`/`classified_action`), 03e (`gesture_detected`/`confidence`), 03f (`empathy_scalar`/`motor_resonance_detected`/`mirroring_scalar`), and 03g (`social_reference_sought`/`bystander_centered_in_fov`/`post_climax_camera_shift_vector`), only the JSON-stringified `*_tasks_analyzed_raw` column is produced. Researchers loading `social_metadata.parquet` cannot filter or aggregate on these signals without parsing the embedded JSON per row — defeating the entire point of a columnar Parquet export for 4 of the 7 social-feature layers.
+
+**Option A (recommended)**: **Per-Layer Summary Extractors** — Add a registry mapping `layer_name → list of (per-task scalar key, aggregation function)`, e.g., `"03d_proxemic_kinematics": [("proxemic_vector", "mean", "max"), ("classified_action", "mode")]`, `"03f_motor_resonance": [("empathy_scalar", "max"), ("mirroring_scalar", "max"), ("motor_resonance_detected", "any")]`, etc. Iterate the registry in `aggregator.aggregate()` to produce per-layer summary columns alongside the raw JSON.
+  - *Pros*: Restores Parquet-queryable scalars for all layers; explicit and auditable; low risk; aligns with the documented per-person flattening rationale.
+  - *Cons*: Requires per-layer maintenance when output schemas change; column count grows; needs tests for each layer's summaries.
+
+**Option B**: **Generic `tasks_analyzed` Flattener** — Auto-extract every numeric/boolean leaf field from each task in `tasks_analyzed`, producing `<layer>_<field>_mean`, `<layer>_<field>_max`, `<layer>_<field>_any` columns automatically.
+  - *Pros*: Zero per-layer maintenance; new fields automatically surface as columns.
+  - *Cons*: Column count explosion (10-20+ scalar columns per layer); unclear which aggregation is semantically meaningful (mean of `bystander_centered_in_fov` is nonsensical); risk of leaking inappropriate summaries.
+
+**Option C**: **Update Layers to Emit Their Own `aggregate` Block** — Refactor 03d/03e/03f/03g to compute and emit an `aggregate` dict alongside `tasks_analyzed`, mirroring 03a's pattern. Aggregator's existing Schema-A handler then picks them up automatically.
+  - *Pros*: Centralizes layer-specific aggregation logic in the layers themselves (where domain knowledge lives); aggregator stays simple.
+  - *Cons*: Cross-layer refactor (4 layers + their tests); breaks existing JSON consumers who don't expect the new key; needs schema-version coordination.
+
+Your selection: _____
+
+---
+
+### Issue 2: 03a's `processing_meta` Dict Silently Dropped From Aggregation
+**Status**: ⚠️ Confirmed Unresolved — Verified at `aggregator.py:118-122`. After flattening Schema-A (`aggregate`) and Schema-B (`tasks_analyzed`) blocks, the residual top-level scalar handler iterates `item.items()` and includes any value that is *not* a `dict` or `list`. 03a's output (verified at `src/layer_03a_attention/pipeline.py:229-242`) includes a top-level `"processing_meta": {"model_used": "l2cs_net_3d_gaze" | "fallback_dummy", "sampling_fps_effective": "fixed_8fps"}` dict that documents critical model provenance. Because `isinstance({...}, (dict, list))` is `True`, this entire block is silently skipped — the exported Parquet has no record of *which* gaze model produced the attention data, breaking dataset reproducibility and conflicting with the documented `pipeline_git_sha` provenance philosophy.
+
+**Option A (recommended)**: **Recursively Flatten Top-Level Dicts** — Before the top-level scalar pass, detect any non-special dict (excluding `aggregate`, `per_person`, `tasks_analyzed`) and flatten it as `<layer>_<dict_key>_<sub_key>` (e.g., `03a_attention_processing_meta_model_used`).
+  - *Pros*: Preserves provenance fields automatically; matches the existing `aggregate` flattening pattern; one-shot fix.
+  - *Cons*: Could surface unexpected dicts from future layers as columns; needs to handle nested dicts past 1 level (or document the depth limit).
+
+**Option B**: **Whitelist `processing_meta`** — Add an explicit handler for `processing_meta` that flattens its sub-keys into `<layer>_processing_<sub_key>`.
+  - *Pros*: Targeted and auditable; no behavior change for unrelated dicts.
+  - *Cons*: Doesn't generalize; future provenance dicts under a different name need a new handler.
+
+**Option C**: **JSON-Stringify Unhandled Dicts** — Mirror the `*_per_person_raw` pattern: any unhandled top-level dict becomes `<layer>_<dict_key>_raw` as a JSON string.
+  - *Pros*: Lossless; simple; no need to predict downstream consumer interest.
+  - *Cons*: Adds yet another stringified column researchers must parse; reinforces Issue 1's pattern.
+
+Your selection: _____
+
+---
+
+### Issue 3: Dask Fallback Uses `npartitions=1`, Defeating Chunked Processing
+**Status**: ⚠️ Confirmed Unresolved — Verified at `aggregator.py:78` (`df = dd.from_pandas(df, npartitions=1)`) and `aggregator.py:129` (`layer_dd = dd.from_pandas(layer_df, npartitions=1)`). Resolved Issue 7 introduced the Dask fallback with the rationale "fall back to using Dask `dd.merge` for chunked outer-joins, effectively preventing memory overflow." However, both Dask conversions are constructed with a single partition. A 1-partition Dask DataFrame is functionally a Pandas DataFrame with Dask scheduling overhead — there is no chunking, no memory-bounded shuffle, no benefit. Worse, line 135's `df.compute()` materializes the entire merged result back into Pandas before return, so even hypothetical memory savings during `dd.merge` are erased before the function returns. The OOM scenario the fix was meant to prevent remains unaddressed.
+
+**Option A (recommended)**: **Compute Partition Count From Available Memory** — Set `npartitions = max(2, int(total_size / (mem_available * 0.1)))`. Each partition fits in ~10% of available memory; the merge shuffles partition-by-partition. Replace the final `df.compute()` with a streaming `df.to_parquet()` call that writes incrementally without full materialization.
+  - *Pros*: Actually delivers the documented memory bound; allows merging datasets larger than RAM; uses Dask's native parquet streaming.
+  - *Cons*: `to_parquet` produces a directory of partition files instead of a single file (HuggingFace upload path needs adjustment); Dask + PyArrow streaming has subtle dtype coercion gotchas; requires reworking the export step.
+
+**Option B**: **Drop the Dask Path Entirely** — Remove the Dask fallback; replace with an explicit memory check that raises a clear error when the dataset exceeds available memory, instructing the user to enable manual chunking via a config flag.
+  - *Pros*: Honest about the actual constraint; no false sense of "OOM-proof"; simpler code.
+  - *Cons*: Removes a documented feature; users on huge batches must manually shard; deletes Resolved Issue 7's "solution".
+
+**Option C**: **Iterative Layer-by-Layer Pandas Merge With Disk Spill** — Keep Pandas, but after each layer merge, write the running DataFrame to a temporary Parquet on disk and reload it. Each iteration only holds the running DataFrame + one new layer in memory.
+  - *Pros*: No Dask dependency; explicit and predictable; bounds memory at ~2x the largest layer's footprint.
+  - *Cons*: Heavy disk I/O; slow; doesn't help if a single layer's JSON is itself larger than RAM.
+
+Your selection: _____
+
+---
+
+### Issue 4: Memory Check Compares Raw JSON Bytes Against RAM, Underestimating Pandas Footprint
+**Status**: ⚠️ Confirmed Unresolved — Verified at `aggregator.py:63-66`. The memory check sums `self.manifest_path.stat().st_size + sum(f.stat().st_size for f in layer_files)` and compares against `mem_available * 0.5`. JSON files measured this way represent on-disk text bytes; once parsed into Python dicts and then materialized into Pandas DataFrames, the in-memory footprint is typically 5-10x larger due to Python object overhead, string interning, and column dtype promotion. A 4 GB JSON suite on a 24 GB Mac mini passes the `4 GB > 12 GB` check (False, no Dask), but materializes into 20-40 GB of Pandas state — guaranteed OOM. The rationale of Resolved Issue 7 ("dynamic memory check using `psutil` that estimates input dataset size") is technically present, but the *estimate* is off by an order of magnitude.
+
+**Option A (recommended)**: **Multiply JSON Size by Empirical Inflation Factor** — Compute `effective_size = total_size * INFLATION_FACTOR` where `INFLATION_FACTOR = 8` (a measured midpoint of the 5-10x range), and compare against `mem_available * 0.5`. Document the constant and its derivation in a comment.
+  - *Pros*: One-line fix; brings the threshold in line with real-world Pandas memory behavior; preserves the existing structure.
+  - *Cons*: Magic number; actual inflation varies with column dtype distribution; could over-trigger Dask for skinny-string-heavy datasets.
+
+**Option B**: **Sample-Based Empirical Estimation** — Read the first 1000 records of one layer file, materialize into Pandas, measure `.memory_usage(deep=True).sum()`, divide by 1000, multiply by total record count across all files. Use this as the memory estimate.
+  - *Pros*: Empirically grounded; adapts to actual column dtype mix; honest estimate.
+  - *Cons*: Adds a sampling pre-pass that touches every layer file; complex; sample size selection is itself a knob.
+
+**Option C**: **Streaming Build With No Memory Check** — Skip the memory check; always use a streaming JSON-line reader + per-layer-merge + temp-Parquet pattern (similar to Issue 3 Option C).
+  - *Pros*: No estimation needed; bounded memory by construction; simplest semantics.
+  - *Cons*: Slower for small datasets; heavy refactor; loses Pandas-native joins.
+
+Your selection: _____
+
+---
+
+### Issue 5: `schema_version` Hardcoded to `"1.0.0"`, Bypassing Documented Additive-Versioning Protocol
+**Status**: ⚠️ Confirmed Unresolved — Verified at `aggregator.py:144`: `df.attrs['schema_version'] = "1.0.0"`. The doc Aggregation Logic block (`docs/04_dehydrated_export.md` line 35) specifies the SemVer protocol: "Bump the **minor** version when adding new columns; bump the **major** version if columns are removed or renamed." But the code unconditionally writes `"1.0.0"` regardless of which layers are active, what columns exist, or whether any change occurred since a previous export. Downstream consumers reading `export_metadata.json` cannot detect schema drift between two exports — both will claim 1.0.0 even if the second has 30 new columns. The protocol exists in documentation only.
+
+**Option A (recommended)**: **Schema Hash Versioning** — Compute a hash of the sorted `df.columns` list and emit `schema_version` as `"1.0.0+<short_hash>"` (e.g., `"1.0.0+a3f9c2"`). Any column add/remove changes the hash; consumers can detect schema drift by comparing hashes; the prefix preserves SemVer for human-readable changes.
+  - *Pros*: Automatic; robust; cheap; no manual bookkeeping; downstream consumers can diff schemas mechanically.
+  - *Cons*: Hash suffix isn't strictly SemVer (consumers using strict parsers may reject); column reordering with no real change still bumps the hash unless sorted.
+
+**Option B**: **Persist a Column Manifest + Manual Bumping** — Write `schema_columns.json` listing every column on each export; on each subsequent export, diff against the previous manifest and bump minor (added columns) or major (removed/renamed) automatically; persist the new version.
+  - *Pros*: True SemVer compliance; auditable column-by-column diff between releases.
+  - *Cons*: Stateful (requires reading prior manifest); complex; needs to live somewhere (committed file? separate JSON?); risks getting out of sync.
+
+**Option C**: **Active-Layers-Driven Versioning** — Set `schema_version` from `len(active_layers)` (e.g., `"1.{n}.0"` where `n` is the number of active layers), so `active_layers=["03a", "03b", "03c"]` produces `"1.3.0"`.
+  - *Pros*: Trivial; layer-count is a coarse proxy for column change.
+  - *Cons*: Adding a column within a layer doesn't bump version; misuses SemVer minor digit; can collide (`1.3.0` could mean different things at different times).
+
+Your selection: _____
+
+---
+
+### Issue 6: `item['video_id']` KeyError Crashes Whole Aggregation on a Single Malformed Record
+**Status**: ⚠️ Confirmed Unresolved — Verified at `aggregator.py:91`: `record = {'video_id': item['video_id']}`. If any single record in any `03*_result.json` is missing the `video_id` key (e.g., a partial write from a crashed pipeline run, a corrupted record, or a layer that emitted an early-failure stub), `item['video_id']` raises `KeyError`. This propagates out of the per-record loop, exits `for item in layer_data`, exits `for layer_file in layer_files`, and aborts the entire aggregation — losing all subsequent layer integrations. The base records (manifest) and any prior fully-processed layers are also lost since the function never returns. Compare with line 36 (`item.get('video_id')` for manifest records) and line 49 (`item.get('video_id')` for base records) — the manifest path uses `.get()`, but the layer path doesn't.
+
+**Option A (recommended)**: **Use `.get()` and Skip Records Without `video_id`** — Replace `item['video_id']` with `vid = item.get('video_id')` followed by `if not vid: logger.warning(...); continue`.
+  - *Pros*: One-line fix; consistent with the manifest-path pattern; aborts gracefully on bad records; logs the skip for forensics.
+  - *Cons*: Silent data loss if many records are malformed; user may not notice the warnings.
+
+**Option B**: **Wrap the Per-Record Loop in `try/except`** — Wrap each record's processing in `try/except KeyError as e: logger.error(...)` so individual record failures don't kill the layer iteration.
+  - *Pros*: Catches all key errors uniformly, not just `video_id`; defensive against any future schema mismatch.
+  - *Cons*: Coarse; may mask genuine logic bugs; harder to attribute specific failures.
+
+**Option C**: **Validate Layer Files Up-Front** — Before iterating, run a schema validation pass over every layer file and reject malformed files with a clear error before any aggregation work.
+  - *Pros*: Fail-fast with clear diagnostics; no silent data loss.
+  - *Cons*: Heaviest implementation; may reject usable files due to one bad record; needs a validator stack.
+
+Your selection: _____
