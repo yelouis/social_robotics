@@ -9,19 +9,36 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from src.layer_03c_acoustic_prosody.config import Layer03cConfig
+
 logger = logging.getLogger(__name__)
+
+# Bracketed event tokens emitted by SenseVoice for non-speech audio events.
+# Bare-word matching (e.g. "laughter" in transcribed text) was removed because
+# transcribed speech routinely contains words like "slaughter", "laughtered",
+# "applauded", "coughed", "crying", etc., which would falsely trigger events.
+SENSEVOICE_EVENT_TOKENS = {
+    "<|laughter|>": "laughter",
+    "<|applause|>": "applause",
+    "<|cough|>": "cough",
+    "<|crying|>": "crying",
+    "<|sneeze|>": "sneeze",
+}
+
 
 class AcousticProsodyPipeline:
     def __init__(
         self,
         input_manifest_path: str,
         output_result_path: str,
-        force: bool = False
+        force: bool = False,
+        config: Layer03cConfig = Layer03cConfig(),
     ):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_result_path = Path(output_result_path)
         self.error_log_path = self.output_result_path.parent / "03c_acoustic_prosody_errors.json"
         self.force = force
+        self.config = config
         self.processed_ids = set()
 
         self._load_processed_ids()
@@ -61,22 +78,29 @@ class AcousticProsodyPipeline:
             )
 
         # --- FunASR + emotion2vec+ validation ---
+        # SenseVoice is lazy-loaded on the first low-confidence sample to avoid
+        # paying its ~150-200MB resident-memory cost on manifests where
+        # emotion2vec+ produces consistently high-confidence outputs.
+        self.sensevoice_model = None
         try:
             from funasr import AutoModel
+            self._AutoModel = AutoModel
             logger.info("Initializing emotion2vec+ via FunASR...")
             # disable_update=True prevents downloading updates on every run if already cached
             self.model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
-            logger.info("Initializing SenseVoiceSmall via FunASR...")
-            self.sensevoice_model = AutoModel(model="iic/SenseVoiceSmall", disable_update=True)
             self.funasr_available = True
-            logger.info("emotion2vec+ and SenseVoiceSmall initialized successfully.")
+            logger.info("emotion2vec+ initialized successfully (SenseVoice deferred until first low-confidence sample).")
         except ImportError:
             raise RuntimeError(
                 "funasr is not installed. Speech Emotion Recognition requires it. "
                 "Install with: venv/bin/pip install funasr torchaudio"
             )
         except Exception as e:
-            logger.error(f"Failed to load funasr model: {e}")
+            raise RuntimeError(
+                f"Failed to load funasr SER model: {e}. "
+                "Verify the ModelScope cache at ~/.cache/modelscope or re-run with "
+                "disable_update=False to force re-download."
+            ) from e
 
     def _load_processed_ids(self):
         if self.output_result_path.exists() and not self.force:
@@ -162,7 +186,9 @@ class AcousticProsodyPipeline:
             if len(valid_f0) > 1:
                 pitch_variance = float(np.var(valid_f0))
                 # Normalize variance to [0, 1] range for heuristic consumption
-                pitch_contour_variance = min(1.0, pitch_variance / 10000.0) 
+                pitch_contour_variance = min(
+                    1.0, pitch_variance / self.config.pitch_variance_normalization
+                )
             else:
                 pitch_contour_variance = 0.0
                 
@@ -219,32 +245,39 @@ class AcousticProsodyPipeline:
             return default_scores
 
     def _run_sensevoice_model(self, wav_path: str) -> List[str]:
-        """Run SenseVoiceSmall to detect non-speech audio events (laughter, applause, etc.)."""
-        if not self.funasr_available or getattr(self, "sensevoice_model", None) is None:
+        """Run SenseVoiceSmall to detect non-speech audio events (laughter, applause, etc.).
+
+        Lazy-loads the SenseVoice model on first invocation. Matches only the
+        bracketed event tokens emitted by SenseVoice's special-symbol grammar
+        (e.g. ``<|laughter|>``); bare-word matching was retired because it
+        false-positived on transcribed speech (``slaughter``, ``coughed``,
+        ``the laughter died down``, etc.).
+        """
+        if not self.funasr_available:
             return []
-            
+
+        if self.sensevoice_model is None:
+            try:
+                logger.info("Lazy-loading SenseVoiceSmall on first low-confidence sample...")
+                self.sensevoice_model = self._AutoModel(
+                    model="iic/SenseVoiceSmall", disable_update=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to lazy-load SenseVoiceSmall: {e}")
+                return []
+
         try:
             res = self.sensevoice_model.generate(wav_path, output_dir=None, disable_pbar=True)
             if not res or len(res) == 0:
                 return []
-                
+
             prediction = res[0]
-            text = prediction.get("text", "")
-            text_lower = text.lower()
-            
-            events = []
-            if "laughter" in text_lower or "<|laughter|>" in text_lower:
-                events.append("laughter")
-            if "applause" in text_lower or "<|applause|>" in text_lower:
-                events.append("applause")
-            if "cough" in text_lower or "<|cough|>" in text_lower:
-                events.append("cough")
-            if "crying" in text_lower or "<|crying|>" in text_lower:
-                events.append("crying")
-            if "sneeze" in text_lower or "<|sneeze|>" in text_lower:
-                events.append("sneeze")
-                
-            return events
+            text_lower = prediction.get("text", "").lower()
+
+            return [
+                label for token, label in SENSEVOICE_EVENT_TOKENS.items()
+                if token in text_lower
+            ]
         except Exception as e:
             logger.error(f"Error running SenseVoice model on {wav_path}: {e}")
             return []
@@ -262,13 +295,14 @@ class AcousticProsodyPipeline:
         surprised = emotion_scores.get("surprised", 0.0)
         sad = emotion_scores.get("sad", 0.0)
         
-        # Volume heuristic (arbitrary threshold for "high" vs "low" volume if baseline is unknown, say -20 dBFS)
-        is_high_volume = max_amp_dbFS > -20.0
-        is_low_volume = max_amp_dbFS < -35.0
-        
-        alarming_score = angry + fearful + (0.3 if is_high_volume else 0.0)
-        soothing_score = happy + surprised + (pitch_variance * 0.5)
-        negative_score = sad + (0.3 if is_low_volume else 0.0)
+        cfg = self.config
+        # Volume heuristic — cutoffs for "high" vs "low" volume relative to dBFS.
+        is_high_volume = max_amp_dbFS > cfg.high_volume_dbfs
+        is_low_volume = max_amp_dbFS < cfg.low_volume_dbfs
+
+        alarming_score = angry + fearful + (cfg.high_volume_bonus if is_high_volume else 0.0)
+        soothing_score = happy + surprised + (pitch_variance * cfg.pitch_variance_soothing_weight)
+        negative_score = sad + (cfg.low_volume_bonus if is_low_volume else 0.0)
         
         scores = {
             "Alarming": alarming_score,
@@ -289,7 +323,7 @@ class AcousticProsodyPipeline:
         
         tone_class = dominant_tone[0]
         # If confidence is very low, default to Neutral
-        if dominant_tone[1] < 0.3 and tone_class != "Neutral":
+        if dominant_tone[1] < cfg.min_dominant_tone_score and tone_class != "Neutral":
             tone_class = "Neutral"
             
         return tone_class, scalars[tone_class]
@@ -298,59 +332,65 @@ class AcousticProsodyPipeline:
         task_id = task.get("task_id")
         temporal = task.get("task_temporal_metadata", {})
         window = temporal.get("task_reaction_window_sec")
-        
+
         if not window or len(window) != 2:
             return None
-            
+
         start_sec, end_sec = window
-        
-        wav_path = self._extract_audio_chunk(video_path, start_sec, end_sec)
-        if not wav_path:
-            # If no audio or extraction failed, return a neutral stub
+
+        # wav_path is initialized to None so the finally cleanup is always safe
+        # to call regardless of which branch raised.
+        wav_path = None
+        try:
+            wav_path = self._extract_audio_chunk(video_path, start_sec, end_sec)
+            if not wav_path:
+                # If no audio or extraction failed, return a neutral stub
+                return {
+                    "task_id": task_id,
+                    "task_reaction_window_sec": window,
+                    "prosody_metrics": {
+                        "max_amplitude_dbFS": -100.0,
+                        "pitch_contour_variance": 0.0,
+                        "emotion_scores": {k: (1.0 if k=="neutral" else 0.0) for k in ["angry", "happy", "sad", "surprised", "fearful", "neutral", "disgusted", "other", "unknown"]},
+                        "dominant_emotion": "neutral",
+                        "dominant_emotion_confidence": 1.0,
+                        "audio_events": []
+                    },
+                    "classified_acoustic_tone": "Neutral",
+                    "prosody_scalar": 0.0
+                }
+
+            max_amp, pitch_var = self._extract_librosa_features(wav_path)
+            emotions = self._run_ser_model(wav_path)
+
+            dominant_emotion = max(emotions.items(), key=lambda x: x[1])
+            dominant_confidence = dominant_emotion[1]
+
+            audio_events = []
+            if dominant_confidence < self.config.sensevoice_confidence_threshold:
+                audio_events = self._run_sensevoice_model(wav_path)
+
+            tone, scalar = self._classify_acoustic_tone(emotions, max_amp, pitch_var)
+
             return {
                 "task_id": task_id,
                 "task_reaction_window_sec": window,
                 "prosody_metrics": {
-                    "max_amplitude_dbFS": -100.0,
-                    "pitch_contour_variance": 0.0,
-                    "emotion_scores": {k: (1.0 if k=="neutral" else 0.0) for k in ["angry", "happy", "sad", "surprised", "fearful", "neutral", "disgusted", "other", "unknown"]},
-                    "dominant_emotion": "neutral",
-                    "dominant_emotion_confidence": 1.0,
-                    "audio_events": []
+                    "max_amplitude_dbFS": max_amp,
+                    "pitch_contour_variance": pitch_var,
+                    "emotion_scores": emotions,
+                    "dominant_emotion": dominant_emotion[0],
+                    "dominant_emotion_confidence": dominant_confidence,
+                    "audio_events": audio_events
                 },
-                "classified_acoustic_tone": "Neutral",
-                "prosody_scalar": 0.0
+                "classified_acoustic_tone": tone,
+                "prosody_scalar": scalar
             }
-
-        max_amp, pitch_var = self._extract_librosa_features(wav_path)
-        emotions = self._run_ser_model(wav_path)
-        
-        dominant_emotion = max(emotions.items(), key=lambda x: x[1])
-        dominant_confidence = dominant_emotion[1]
-        
-        audio_events = []
-        if dominant_confidence < 0.6:
-            audio_events = self._run_sensevoice_model(wav_path)
-        
-        tone, scalar = self._classify_acoustic_tone(emotions, max_amp, pitch_var)
-        
-        # Clean up temp file
-        self._safe_remove(wav_path)
-            
-        return {
-            "task_id": task_id,
-            "task_reaction_window_sec": window,
-            "prosody_metrics": {
-                "max_amplitude_dbFS": max_amp,
-                "pitch_contour_variance": pitch_var,
-                "emotion_scores": emotions,
-                "dominant_emotion": dominant_emotion[0],
-                "dominant_emotion_confidence": dominant_confidence,
-                "audio_events": audio_events
-            },
-            "classified_acoustic_tone": tone,
-            "prosody_scalar": scalar
-        }
+        finally:
+            # Always clean up the extracted wav file, even on librosa/funasr/SenseVoice
+            # failures that propagate up to run()'s outer try/except.
+            if wav_path is not None:
+                self._safe_remove(wav_path)
 
     def run(self):
         if not self.input_manifest_path.exists():
