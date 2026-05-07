@@ -146,7 +146,7 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
   - *Pros*: Eliminates unnecessary filesystem I/O and reduces indentation complexity; no behavioral change.
   - *Cons*: None. Pure cleanup.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -157,7 +157,7 @@ Your selection: _____
   - *Pros*: Eliminates confusing dead state; no behavioral change.
   - *Cons*: None. Pure cleanup.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -172,7 +172,7 @@ Your selection: _____
   - *Pros*: Preserves the original design intent; reduces computation on static scenes.
   - *Cons*: Increases code complexity; the 8 FPS fixed rate has been validated as sufficient for all downstream layers including 03e Nyquist requirements; adaptive logic may introduce trace timestamp irregularities that complicate downstream temporal correlation.
 
-Your selection: _____
+Your selection: Proceed with Option B. Document this issue and suggestions in the appropriate downstream documents.
 
 ---
 
@@ -187,7 +187,7 @@ Your selection: _____
   - *Pros*: Honest about the limitation; reduces schema complexity.
   - *Cons*: Loses a potentially valuable signal for downstream analysis; diverges from the original specification.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -202,7 +202,7 @@ Your selection: _____
   - *Pros*: Simpler control flow; avoids the grab/retrieve split entirely.
   - *Cons*: `cap.read()` is functionally equivalent to `cap.grab() + cap.retrieve()` so performance is identical, but the refactor touches more lines.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -213,7 +213,7 @@ Your selection: _____
   - *Pros*: Preserves `KeyboardInterrupt` and `SystemExit` propagation; surfaces unexpected errors for debugging.
   - *Cons*: May need to extend the exception tuple if new failure modes arise.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -228,7 +228,7 @@ Your selection: _____
   - *Pros*: Pythonic; guarantees cleanup even on exceptions.
   - *Cons*: Requires refactoring all call sites to use `with` syntax.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -247,5 +247,5 @@ Your selection: _____
   - *Pros*: Guarantees zero state leakage; trivial to implement.
   - *Cons*: Re-loads the YOLO model from disk for every video, adding ~2-3s overhead per clip; wasteful if the model weights are identical.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 

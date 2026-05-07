@@ -116,7 +116,7 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
   - *Pros*: Architecturally correct; no filter tricks needed; aligns with the original algorithmic intent ("3D head pose arrays").
   - *Cons*: Heavy refactor of 03a; new model dependency; loses the "Data Reuse Pipeline" benefit that motivates this layer.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -135,7 +135,7 @@ Your selection: _____
   - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?"; minimal JSON inflation.
   - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -154,7 +154,7 @@ Your selection: _____
   - *Pros*: Less artifactual ramping; smoother frequency response.
   - *Cons*: Risks oscillating splines for long gaps; does not address the root issue (no signal in the gap); only papers over the symptom.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -173,7 +173,7 @@ Your selection: _____
   - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
   - *Cons*: Constructor-signature explosion (7+ new args); orchestration code must thread parameters through.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -192,7 +192,7 @@ Your selection: _____
   - *Pros*: Output JSON is clean; legacy consumers still work via the loader.
   - *Cons*: Requires consumers to adopt the loader; couples write-path and read-path; adds a maintenance burden.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ### 🧪 Test Suite Results (6/6 Passed)
 

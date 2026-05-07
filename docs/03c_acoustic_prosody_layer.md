@@ -140,7 +140,7 @@ The Acoustic Prosody Layer has been implemented and successfully integrated:
   - *Pros*: Preserves liveness on partial-stack hosts; downstream layers (03b emotion fusion, 03g shared reality) can detect and weight-down degraded records.
   - *Cons*: Doubles output schema surface area; downstream consumers need new branches; conflicts with the architectural posture established by Issue #6.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -159,7 +159,7 @@ Your selection: _____
   - *Pros*: Self-healing across runs; cleans up debt from prior crashes too.
   - *Cons*: Treats the symptom, not the cause; introduces a startup glob over `/tmp` that other processes' files share; potential race with concurrent pipeline instances.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -174,7 +174,7 @@ Your selection: _____
   - *Pros*: Catches the bare-word events while excluding "slaughter", "laughtered", etc.
   - *Cons*: Still false-positives on legitimate transcriptions like "the laughter died down"; doesn't address the root issue that bare words ≠ event annotations.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -193,7 +193,7 @@ Your selection: _____
   - *Pros*: Maximum memory savings; smaller code surface; makes 03c a pure prosody/SER layer with single responsibility.
   - *Cons*: Reverses the previously-resolved Issue #11 (May 5); loses an integration that may be load-bearing for downstream social-cue fusion.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -212,4 +212,4 @@ Your selection: _____
   - *Pros*: Zero diff; preserves whatever empirical tuning produced these values.
   - *Cons*: First request to tune for a new dataset re-opens this issue; the implicit "they're empirically tuned" claim is currently uncited in code comments.
 
-Your selection: _____
+Your selection: Proceed with Option A.

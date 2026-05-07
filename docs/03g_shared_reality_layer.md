@@ -108,7 +108,7 @@ The current pipeline relies exclusively on optical flow and bounding box centeri
   - *Pros*: Strongest semantic match with "the camera panned toward the bystander"; handles bystanders not exactly in the central rectangle.
   - *Cons*: Larger refactor; needs to handle multi-bystander tiebreaking; affected by the foreground-pollution issue (Issue 4 below).
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -127,7 +127,7 @@ Your selection: _____
   - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?".
   - *Cons*: Adds a third state file; loses the rationale for *why* a video was skipped.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -146,7 +146,7 @@ Your selection: _____
   - *Pros*: Fastest for repeated access patterns; transparent to call sites.
   - *Cons*: Capture objects hold OS file descriptors; cache eviction needs explicit `release()` to avoid FD exhaustion; over-engineering for the current 3-open pattern.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -165,7 +165,7 @@ Your selection: _____
   - *Pros*: No bbox plumbing; deterministic background sampling.
   - *Cons*: POV close-quarters scenes (kitchen, table) often have no clear "edge background"; may falsely zero the signal.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -184,7 +184,7 @@ Your selection: _____
   - *Pros*: Constant cost regardless of window length; explicit net displacement (matches the "panned away" semantic).
   - *Cons*: Sensitive to lighting changes between endpoints; misses non-monotonic pans; new dependency on feature matching.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -203,4 +203,4 @@ Your selection: _____
   - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
   - *Cons*: Constructor-signature growth; orchestration code must thread parameters through.
 
-Your selection: _____
+Your selection: Proceed with Option A.

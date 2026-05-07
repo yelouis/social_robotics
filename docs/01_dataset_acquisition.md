@@ -133,7 +133,7 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
   - *Pros*: Guarantees complete isolation between videos; no reliance on internal APIs.
   - *Cons*: Reloads the YOLO model (~500ms) and MediaPipe Hands model for every single video, adding significant latency to batch acquisition of thousands of videos.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -144,7 +144,7 @@ Your selection: _____
   - *Pros*: Clean lint; reduces import-time side effects; trivial change.
   - *Cons*: None meaningful; easily reversible.
 
-Your selection: _____
+Your selection:Proceed with Option A
 
 ---
 
@@ -159,4 +159,4 @@ Your selection: _____
   - *Pros*: Avoids unnecessary reload overhead when memory is abundant.
   - *Cons*: Adds a dependency on memory introspection; more complex; threshold tuning is hardware-specific.
 
-Your selection: _____
+Your selection: Proceed with Option A

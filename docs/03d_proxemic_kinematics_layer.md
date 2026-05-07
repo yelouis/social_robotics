@@ -126,7 +126,7 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
   - *Pros*: Eliminates SAM cost on resume/re-runs; useful for ablation experiments.
   - *Cons*: Disk I/O overhead and cache management; does not help the first run; cache invalidation complexity if bbox detector upstream is retuned.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -145,7 +145,7 @@ Your selection: _____
   - *Pros*: Minimal logic change; smooths endpoint noise.
   - *Cons*: Fixed window-size assumption; sensitive to systematic drift in the first/last samples.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -164,7 +164,7 @@ Your selection: _____
   - *Pros*: Simplest write logic; cleanly decouples "did we attempt this?" from "did it produce output?"
   - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -183,7 +183,7 @@ Your selection: _____
   - *Pros*: Minimal change; catches the failure mode after model download attempts.
   - *Cons*: Models may have already filled the internal drive by the time the error fires; reactive rather than preventive.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -202,7 +202,7 @@ Your selection: _____
   - *Pros*: Strongest memory containment.
   - *Cons*: Pays full model-load cost (seconds for SAM, sub-second for Depth Anything) per video; severely degrades batch throughput.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -221,4 +221,4 @@ Your selection: _____
   - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
   - *Cons*: Constructor signature explosion (7+ new args); callers must thread through orchestration code.
 
-Your selection: _____
+Your selection: Proceed with Option A.

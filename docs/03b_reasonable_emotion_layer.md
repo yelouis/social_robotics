@@ -203,7 +203,7 @@ The initial implementation of the Reasonable Emotion Layer is complete:
   - *Pros*: Adds a fourth layer of defense to Issue #7's JSON-fragility fix; fences are a real failure mode for some Gemma builds.
   - *Cons*: Extends scope beyond a cleanup; needs its own test; if pydantic + `format="json"` is already covering the observed cases, this is gold-plating.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -220,7 +220,7 @@ This is hazardous because future contributors reading the docstring will assume 
   - *Pros*: Smallest diff; no new behavior to test.
   - *Cons*: Leaves the LLM path with no vocabulary guard at all; an LLM emitting `"shock"` (not in any expectation list) silently classifies as `neutral` via fallthrough.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -241,7 +241,7 @@ PyFeat's `Detector` exposes lower-level entry points (`detect_emotions(frame_arr
   - *Pros*: Amortizes PyFeat model warm-up / batch tensor overhead; potentially largest speedup.
   - *Cons*: Most invasive refactor; loses the early-exit on per-sample failure; PyFeat's batch API expects either a directory of images or a video path, neither of which fits the current crop-array shape cleanly.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -256,7 +256,7 @@ Your selection: _____
   - *Pros*: Eliminates this entire class of bug; resilient to future early-return additions.
   - *Cons*: Slightly larger diff; the lines-308-316 exits would call `release()` on an undefined `cap` unless the variable is initialized to `None` first.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -275,4 +275,4 @@ Your selection: _____
   - *Pros*: Removes a confusing legacy code path; surfaces missing-PyFeat misconfigurations loudly; eliminates the seed call as a side effect.
   - *Cons*: Breaks integration tests that rely on the mock for video-less determinism; Pytest fixtures in `tests/test_layer_03b.py` would need monkeypatching of `_sample_emotions` (which they already do for the math/surprise tests, but not for `test_schema_conformance`).
 
-Your selection: _____
+Your selection: Proceed with Option A.

@@ -210,7 +210,7 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
   - *Pros*: Completely clean state; no dependency on internal APIs.
   - *Cons*: Significant overhead (~1-2s per video for model reloading); wasteful of MPS memory bandwidth on the M4 Pro.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -225,7 +225,7 @@ Your selection: _____
   - *Pros*: Full transparency for downstream consumers; allows weighted analysis.
   - *Cons*: Requires a minor schema addition (additive-only, so safe); slightly more implementation effort.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -236,7 +236,7 @@ Your selection: _____
   - *Pros*: Brings documentation in line with reality; no code changes needed; preserves additive-only policy.
   - *Cons*: None significant.
 
-Your selection: _____
+Your selection: Proceed with Option A
 
 ---
 
@@ -247,4 +247,4 @@ Your selection: _____
   - *Pros*: Cleaner code; removes confusion about dependencies; marginally faster module load.
   - *Cons*: None.
 
-Your selection: _____
+Your selection: Proceed with Option A

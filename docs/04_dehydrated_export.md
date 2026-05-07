@@ -112,7 +112,7 @@ To guarantee the export structure adheres to safety standards and schema require
   - *Pros*: Centralizes layer-specific aggregation logic in the layers themselves (where domain knowledge lives); aggregator stays simple.
   - *Cons*: Cross-layer refactor (4 layers + their tests); breaks existing JSON consumers who don't expect the new key; needs schema-version coordination.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -131,7 +131,7 @@ Your selection: _____
   - *Pros*: Lossless; simple; no need to predict downstream consumer interest.
   - *Cons*: Adds yet another stringified column researchers must parse; reinforces Issue 1's pattern.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -150,7 +150,7 @@ Your selection: _____
   - *Pros*: No Dask dependency; explicit and predictable; bounds memory at ~2x the largest layer's footprint.
   - *Cons*: Heavy disk I/O; slow; doesn't help if a single layer's JSON is itself larger than RAM.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -169,7 +169,7 @@ Your selection: _____
   - *Pros*: No estimation needed; bounded memory by construction; simplest semantics.
   - *Cons*: Slower for small datasets; heavy refactor; loses Pandas-native joins.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -188,7 +188,7 @@ Your selection: _____
   - *Pros*: Trivial; layer-count is a coarse proxy for column change.
   - *Cons*: Adding a column within a layer doesn't bump version; misuses SemVer minor digit; can collide (`1.3.0` could mean different things at different times).
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -207,4 +207,4 @@ Your selection: _____
   - *Pros*: Fail-fast with clear diagnostics; no silent data loss.
   - *Cons*: Heaviest implementation; may reject usable files due to one bad record; needs a validator stack.
 
-Your selection: _____
+Your selection: Proceed with Option A.

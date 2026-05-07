@@ -106,7 +106,7 @@ We must track how the bystander responds physically.
   - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?"; minimal JSON inflation.
   - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -125,7 +125,7 @@ Your selection: _____
   - *Pros*: Eliminates seek overhead which can be ~ms-per-frame on long-GOP codecs.
   - *Cons*: More complex control flow; the current code already streams via sequential `cap.read()` after a single seek, so gain is small.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -144,7 +144,7 @@ Your selection: _____
   - *Pros*: No bbox plumbing; deterministic background sampling.
   - *Cons*: POV videos often have no clear "edge background" (head-mounted camera filling frame); falsely zeroes the signal in close-quarters scenes.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -163,7 +163,7 @@ Your selection: _____
   - *Pros*: Reusable across 03a, 03d, 03e, 03f; clean call sites.
   - *Cons*: Touches multiple layers (out of scope for 03f-only audit); adds a shared utility module.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -182,7 +182,7 @@ Your selection: _____
   - *Pros*: Cross-frame person identity is maintained by the tracker; eliminates the "first detection" ambiguity entirely.
   - *Cons*: Larger refactor; tracker state must be reset per video; full-frame inference is slower than crop inference.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -201,4 +201,57 @@ Your selection: _____
   - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
   - *Cons*: Constructor-signature explosion (12+ new args); orchestration code must thread parameters through.
 
-Your selection: _____
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 7: Mirroring Detection Inherits the Chaos-Floor False-Negative
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:253` and `pipeline.py:414-440`. Resolved Issue 3 added an absolute chaos floor (`max_chaos_score < 3.0`) that returns `[], norm_max_chaos` from `_extract_ego_motion`, suppressing every ego spike. Downstream, `_correlate_mirroring` iterates `ego_spikes` to gate detection (line 418). When the spike list is empty, mirroring is never evaluated. However, the documented intent of mirroring — "If the EgoMotion pans down rapidly (POV person leaning over), and the bystander's spine keypoints angle inward congruently" — does not require *chaotic* camera motion. A calm, deliberate downward camera tilt while the parent leans toward a fallen child is exactly the scenario the layer should catch, yet it produces no chaos spike, no ego_spike, and therefore no mirroring detection. The chaos-floor fix correctly suppresses flinch false-positives but inadvertently suppresses legitimate mirroring true-positives.
+
+**Option A (recommended)**: **Decouple Mirroring Gating From Chaos-Floor Spikes** — Have `_extract_ego_motion` return two parallel signals: `chaos_spikes` (subject to the 3.0 floor for flinch correlation) and a separate `vertical_flow_timeline` (full timeseries of `mean_v` per frame, unfiltered). `_correlate_mirroring` consumes the unfiltered vertical-flow timeline directly, scanning for sustained `v_flow < -1.0` regions independent of the chaos floor.
+  - *Pros*: Aligns with the documented semantic — mirroring can occur with calm motion; preserves the flinch false-positive suppression; minimal schema change (only an additional return value).
+  - *Cons*: Slightly more memory per video (full timeline vs. spike list); two thresholds (chaos floor and vertical-flow threshold) now live independently and must be tuned separately.
+
+**Option B**: **Lower-Floor for Vertical-Flow Spikes Only** — Apply a separate, looser floor (e.g., `abs(mean_v) > 0.5`) when constructing the spike list, so vertical-flow events can pass even when chaos magnitude is below 3.0. Tag each spike with `is_chaos_spike` vs `is_vertical_only_spike`; flinch correlation uses chaos spikes, mirroring correlation uses both.
+  - *Pros*: Single shared spike pipeline; explicit tagging makes downstream gating obvious.
+  - *Cons*: Spike-record schema grows; correlation methods must read the new tag; two thresholds in the same path is harder to reason about than two separate signals.
+
+**Option C**: **Always Emit Spikes, Tag With Confidence** — Remove the chaos-floor early-return entirely; always return spikes but tag them with a confidence scalar (`norm_max_chaos`). Downstream methods decide whether to act based on confidence.
+  - *Pros*: Maximum information preserved; no premature filtering.
+  - *Cons*: Reverts the false-positive fix from Resolved Issue 3 unless every downstream consumer correctly checks the confidence tag; risks regressing flinch detection.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 8: YOLO No-Detection Guard Checks the Wrong Tensor Dimension
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:317`. The guard is `if not results or not results[0].keypoints or results[0].keypoints.data.shape[1] == 0: continue`. YOLOv8-pose returns `keypoints.data` with shape `(N, K, 3)` where `N` is the number of detected persons, `K=17` is the COCO keypoint count, and `3` is `(x, y, conf)`. The check `shape[1] == 0` inspects the keypoint-count dimension (always 17 for a successful pose model), not the person-count dimension. When YOLO returns *zero* person detections inside the bystander crop (very small/occluded crop, motion blur, or pose-confidence below internal threshold), `data` has shape `(0, 17, 3)` — `shape[1]` is still 17, so the guard evaluates False, control falls through to line 322 `kpts = results[0].keypoints.data[0].cpu().numpy()`, which raises `IndexError: index 0 is out of bounds for axis 0 with size 0`. The exception is caught by the outer `try/except` in `run()` at line 116, which logs the error and aborts the *entire* video — even though only a single frame in the reaction window had no detection.
+
+**Option A (recommended)**: **Fix the Dimension Index** — Change the guard to `results[0].keypoints.data.shape[0] == 0` (or equivalently `len(results[0].keypoints.data) == 0`). Optionally, also defend against tensors with fewer than 17 keypoints by adding a second clause `or results[0].keypoints.data.shape[1] < 17`.
+  - *Pros*: One-character/line fix; restores the intended behavior of skipping no-detection frames; preserves all other frames' contribution to velocity computation.
+  - *Cons*: None of substance; this is a pure bug fix.
+
+**Option B**: **Wrap Per-Frame Pose Inference in `try/except`** — Surround the `self.model(crop, ...)` call and subsequent indexing in a `try/except (IndexError, AttributeError):` that `continue`s on failure. Treat the original guard as a fast-path optimization.
+  - *Pros*: Defensive against any unexpected ultralytics API changes; resilient to other unanticipated indexing failures.
+  - *Cons*: Hides legitimate errors behind a broad except; one extra except per frame is overhead; treats a bug as a tolerable runtime exception rather than fixing it.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 9: `prev_kpts_by_idx` Reset Breaks Velocity Chain on Sparse Detection Failures
+**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:325-362`. The pose extraction loop assigns `prev_kpts_by_idx = current_kpts_by_idx` unconditionally at line 362, even when `current_kpts_by_idx` is empty (i.e., every relevant keypoint fell below the 0.5 confidence threshold for that frame). On the next iteration, `prev_kpts_by_idx` is `{}`, and the `common_keys` intersection at line 350 with the new `current_kpts_by_idx` is empty — no velocity is recorded for that frame either. Velocity computation only resumes after two *consecutive* frames with high-confidence keypoints. For bystander reaction windows where motion blur, partial occlusion (e.g., a hand passing in front of the face during a flinch), or YOLO confidence dips intermittently drop frames, the velocity chain repeatedly resets, and the peak velocity from the actual flinch can be missed entirely. The behavior contradicts Resolved Issue 2's intent, which assumed pairwise comparison would be available across confidence thresholds — the bug shifts the failure mode from cross-body keypoint comparison to *no* comparison at all.
+
+**Option A (recommended)**: **Carry Forward the Last Non-Empty `prev_kpts_by_idx`** — Only update `prev_kpts_by_idx` (and `prev_t`) when `current_kpts_by_idx` is non-empty. A failed-detection frame leaves `prev_kpts_by_idx` unchanged, so the next successful frame still has a reference point for velocity. Cap the carry-forward window (e.g., max 0.5s) to prevent stale comparisons across long occlusions.
+  - *Pros*: Recovers velocity computation across single-frame dropouts; cap prevents pathological stale comparisons; aligns with the spirit of Resolved Issue 2 (compare what's comparable, skip what isn't).
+  - *Cons*: Velocity computed across a gap uses the actual elapsed `dt`, so larger gaps yield lower velocities — slight signal attenuation; cap parameter is one more magic number (relevant to Issue 6).
+
+**Option B**: **Interpolate Missing Frames** — When a frame produces no keypoints, linearly interpolate from the last known `prev_kpts_by_idx` to the next successful frame and record an interpolated velocity at the missing timestamp.
+  - *Pros*: Produces a denser velocity timeseries; smooths over noise.
+  - *Cons*: Fabricates data the model didn't actually see; risk of producing artificially smooth peaks; interpolation between distant frames is unreliable.
+
+**Option C**: **Lower the Keypoint Confidence Threshold to Reduce Dropouts** — Reduce `KPT_CONFIDENCE_THRESHOLD` from 0.5 to 0.3 to ensure most frames produce at least some keypoints.
+  - *Pros*: Fewer empty frames mechanically; one-line change.
+  - *Cons*: Increases noise in keypoint coordinates; doesn't address the root cause (unconditional `prev` assignment); regresses the precision improvement that 0.5 was tuned to provide.
+
+Your selection: Proceed with Option A.
