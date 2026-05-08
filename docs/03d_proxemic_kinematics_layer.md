@@ -109,116 +109,36 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
     - **Problem**: The pipeline masked the depth map using a rectangular YOLO `person` bounding box. When objects (e.g., hands, tools, furniture) occluded the bystander, their depth values polluted the bounding box median, causing false "approach" spikes.
     - **Solution**: Integrated the `facebook/sam-vit-base` SAM-1 model natively via the HuggingFace `mask-generation` pipeline. The pipeline now crops the bounding box, generates precise instance masks, selects the largest mask (representing the bystander), and uses this precise mask to filter the depth map, drastically reducing occlusion noise.
 
+11. **SAM-1 Automatic Mask Generation Latency (Resolved - May 07)**:
+    - **Problem**: SAM was wired through `transformers.pipeline(task="mask-generation", ...)`, which runs the auto mask generator (32×32 = 1024 candidate point prompts) over the cropped bystander region for *every* sampled frame. With 5-20 frames per task per bystander, SAM dominated the M4 Pro MPS wall-clock cost despite the documented intent ("crops the bounding box, generates precise instance masks, selects the largest mask") only requiring a single bbox-seeded mask.
+    - **Solution**: Replaced the `mask-generation` pipeline with `SamModel.from_pretrained("facebook/sam-vit-base")` + `SamProcessor.from_pretrained(...)` and a new `_segment_with_sam(img, x1, y1, x2, y2)` helper. The bystander bbox is passed as `input_boxes=[[[x1, y1, x2, y2]]]`; one forward pass per frame instead of 1024. The best mask is selected by SAM's IoU score head (`outputs.iou_scores`) rather than by a largest-area heuristic that previously gambled on background masks. Output masks are at original-frame resolution and resized to the depth-map resolution via PIL nearest-neighbor.
+    - **Model Instructions/Context**: When integrating SAM family models elsewhere in the codebase, prefer the lower-level `SamModel`/`SamProcessor` API with prompt-based inputs (`input_boxes` or `input_points`) over the high-level `mask-generation` pipeline whenever the prompt geometry is already known. The IoU-score head is the canonical mask selector — never rely on "largest mask" heuristics in scenes with complex backgrounds.
+
+12. **Two-Endpoint Depth Delta Discards Intermediate Samples (Resolved - May 07)**:
+    - **Problem**: `_calculate_depth_delta` only consumed `depths[0][1]` and `depths[-1][1]`, so any noise, occlusion glitch, or SAM mask error on the first or last frame propagated directly into the `proxemic_vector` while the 3-18 intermediate samples collected at significant compute cost were discarded. This partially undermined the rationale for the adaptive 3 FPS sampling (Resolved Issue #6, May 5).
+    - **Solution**: Introduced a static `_slope_span_delta(depths)` helper that fits a least-squares line through `(t, median_depth)` pairs via `np.polyfit(ts, ds, 1)` and returns `slope * window_duration` — a unit-consistent "predicted span" that uses all collected samples. The scale matches the previous endpoint-delta convention for linear data, so the existing `-depth_delta * 2.0` calibration is preserved. Added `test_slope_span_robust_to_endpoint_outlier` (asserts -0.4 vs -0.5 endpoint delta on outlier-dominated input) and `test_slope_span_matches_endpoint_for_linear_data` (asserts equality on noiseless input).
+    - **Model Instructions/Context**: Time-series deltas in this codebase should prefer slope-span over endpoint subtraction whenever multiple intermediate samples are available. The `slope * window_duration` formulation preserves dimensional consistency with the original endpoint scale and recalibrating downstream constants is rarely required.
+
+13. **Failed/Empty Videos Reprocessed on Every Resume (Resolved - May 07)**:
+    - **Problem**: When `process_video` returned `None` (missing file, no bystanders, no tasks, or all tasks filtered), the `if result:` guard skipped `processed_ids.add(...)`. Every resume re-iterated these videos, re-invoking `_extract_ego_motion_noise` (full optical-flow scan) and `_calculate_depth_delta` (Depth Anything + SAM per frame), and discarded the result again.
+    - **Solution**: The `run()` loop now appends a sentinel record `{"video_id": ..., "layer": "03d_proxemic_kinematics", "tasks_analyzed": [], "skipped_reason": "no_output_produced"}` whenever `process_video` returns `None`, and adds the video_id to `processed_ids`. Resume cost on these videos drops to O(JSON-load). Errors caught by the outer `except` are intentionally still un-marked so transient failures (network, OOM, GPU resets) get retried on the next run. Added `test_sentinel_record_for_missing_video` to lock in the persistence contract.
+    - **Model Instructions/Context**: Downstream consumers of `03d_proxemic_kinematics_result.json` must filter records by `len(tasks_analyzed) > 0` or by `skipped_reason in entry`. Sentinel records are a deliberate part of the schema, not a bug. Apply this skip-record pattern to any future resumable layer that performs expensive per-video work.
+
+14. **Hardcoded SSD Cache Path with No Mount Validation (Resolved - May 07)**:
+    - **Problem**: `SSD_HF_CACHE = "/Volumes/Extreme SSD/huggingface_cache"` was set before transformers import, but `os.makedirs(...)` succeeded silently when the SSD was not mounted — macOS does not block writes under `/Volumes/<name>` when nothing is actually mounted there. Result: ~500MB of model weights spilled onto the boot disk, the exact failure mode the SSD cache was introduced to prevent. The previous post-init check only emitted a print warning.
+    - **Solution**: Added `if not os.path.ismount(ssd_root): raise RuntimeError(...)` at the very top of `_init_model`, before `os.makedirs` and any model construction. The error message is actionable: it states which volume is missing, what the layer needs the cache for, and how to override `SSD_HF_CACHE` for hosts without the SSD. Added `test_init_raises_when_ssd_not_mounted` to enforce the fail-fast contract.
+    - **Model Instructions/Context**: For any future layer that pins a cache or output path under `/Volumes/<name>`, always gate construction on `os.path.ismount(...)` rather than trusting `os.path.exists(...)` or `os.makedirs(..., exist_ok=True)`. A phantom directory on the boot volume is silent disk-pressure waiting to happen.
+
+15. **GPU/MPS Memory Not Released Across Long Batch Runs (Resolved - May 07)**:
+    - **Problem**: Both Depth Anything V2-Small and SAM ViT-Base were instantiated once and held for the pipeline lifetime. Neither `torch.mps.empty_cache()` (M4 Pro) nor `torch.cuda.empty_cache()` was called between videos, so MPS unified-memory pressure accumulated from cached intermediate activations across batches with 10-20 frame samples × multiple bystanders × dozens of videos — risking allocation failures or thermal throttling on the 24GB shared budget.
+    - **Solution**: Added `_release_accelerator_cache()` and call it from a `finally` block in the `run()` per-video loop. The helper guards on `self.device` and `hasattr(torch, 'mps')` so it's a no-op on CPU and survives older PyTorch builds without `torch.mps`. Cache-flush exceptions are caught and swallowed (best-effort) so a broken backend cannot break the run loop. Added `test_release_accelerator_cache_noop_on_cpu` to enforce the CPU-safe contract.
+    - **Model Instructions/Context**: Any layer using GPU/MPS-resident transformer weights across a long video batch should follow the same `finally: self._release_accelerator_cache()` pattern in its run loop. The flush is fast (~milliseconds) and the steady-state memory savings compound across concurrent layers (03a + 03b + 03c + 03d) on the 24GB Mac mini.
+
+16. **Hardcoded Heuristic Constants Throughout the Vector Pipeline (Resolved - May 07)**:
+    - **Problem**: Magic numbers governing proxemic classification were inlined throughout `pipeline.py` (`noise_threshold = 15.0`, `bbox_delta / 50.0`, `-depth_delta * 2.0`, weights `0.4`/`0.6`, deadband `0.05`, action thresholds `±0.3`). None were exposed via constructor arguments, configuration, or class-level constants — retuning required hunting through helpers.
+    - **Solution**: Hoisted all seven constants into a `# --- Tuning Constants ---` block at the top of `ProxemicKinematicsPipeline` (`OPTICAL_FLOW_NOISE_THRESHOLD`, `BBOX_NORM_PCT`, `DEPTH_NORM_SCALE`, `BBOX_WEIGHT`, `DEPTH_WEIGHT`, `MICROMOVEMENT_THRESHOLD`, `APPROACH_THRESHOLD`). All inline literals in `process_video` and `_compute_proxemic_vector` now reference `self.<NAME>`. Subclassing for ablations is a one-line override. Added `test_tuning_constants_subclass_override` to verify that lowering `APPROACH_THRESHOLD` reclassifies a borderline vector without source edits.
+    - **Model Instructions/Context**: When tuning thresholds across runs (e.g., adult vs. infant scenes, switching to V1-Large), subclass `ProxemicKinematicsPipeline` and override the relevant class-level constant rather than editing source. This pattern matches the Layer03cConfig dataclass pattern adopted in 03c — both centralize the tuning surface; subclass-of-pipeline is preferred here because there are no per-instance configuration variants on the manifest path.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: SAM-1 Automatic Mask Generation Latency
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:69` and `pipeline.py:372`. The pipeline initializes SAM via `transformers.pipeline(task="mask-generation", ...)`, which runs HuggingFace's automatic mask generator (default 32x32 = 1024 candidate point prompts) over the cropped bystander region for *every* sampled frame. With 5-20 frames per task per bystander, the wall-clock cost on the Mac mini M4 Pro (MPS backend) is dominated by SAM rather than Depth Anything. The documented intent is "crops the bounding box, generates precise instance masks, selects the largest mask," which only requires a *single* mask seeded by the bbox itself, not exhaustive automatic discovery.
-
-**Option A (recommended)**: **Bbox-Prompted SAM via `SamModel` + `SamProcessor`** — Replace the `mask-generation` pipeline with the lower-level `SamModel`/`SamProcessor` API and pass `input_boxes=[[[0, 0, w, h]]]` (or the bystander bbox in original frame coordinates). This produces one mask seeded by the bbox prompt and aligns with the documented architecture.
-  - *Pros*: 10-50x speedup per frame (one forward pass vs. 1024 grid points); deterministic mask selection (no "largest area" heuristic gambling on background masks); matches documented design intent.
-  - *Cons*: Requires refactor away from the high-level `pipeline()` abstraction; manual handling of `pixel_values`, `input_boxes`, and post-processing tensors; need to manage device placement explicitly.
-
-**Option B**: **Reduce Mask-Generation Grid Density** — Pass `points_per_side=8` (or similar) to the existing `mask-generation` pipeline to reduce the candidate point grid from 32x32 to 8x8.
-  - *Pros*: Minimal code change; preserves current call structure.
-  - *Cons*: Still 16x slower than bbox prompting; quality of "largest mask" selection degrades with fewer candidates; does not address the architectural mismatch.
-
-**Option C**: **Cache SAM Masks Per (video_id, frame_idx, bbox)** — Persist generated masks to disk keyed by video and frame to amortize cost across re-runs.
-  - *Pros*: Eliminates SAM cost on resume/re-runs; useful for ablation experiments.
-  - *Cons*: Disk I/O overhead and cache management; does not help the first run; cache invalidation complexity if bbox detector upstream is retuned.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Two-Endpoint Depth Delta Discards Intermediate Samples
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:413-416`. Despite sampling up to 20 depth values across the reaction window (per Issue 6's adaptive sampling fix), `_calculate_depth_delta` only consumes `depths[0][1]` and `depths[-1][1]`. Any noise, occlusion glitch, or SAM mask error on the first or last frame propagates directly into the `proxemic_vector`, while the intermediate 3-18 samples — collected at significant compute cost — are discarded. This partially undermines the rationale for adaptive sampling, which was meant to ensure consistent 3 FPS coverage to detect rapid events within the window.
-
-**Option A (recommended)**: **Linear Regression Slope** — Fit a least-squares line through `(t, median_depth)` pairs and use the slope (Δdepth/Δt) as the delta signal. Normalizing by window duration yields a unit-consistent rate-of-approach.
-  - *Pros*: Robust to single-frame outliers at endpoints; uses all collected samples; physically meaningful (rate of approach in normalized depth/sec).
-  - *Cons*: Slightly more complex normalization in `_compute_proxemic_vector`; requires recalibration of the `-depth_delta * 2.0` scaling constant.
-
-**Option B**: **Median of First-Third vs. Last-Third** — Compute medians over the first and last thirds of the sample list, then take the difference.
-  - *Pros*: Simple change; preserves "start vs. end" semantics while resisting endpoint outliers; no calibration shift required.
-  - *Cons*: Still discards the middle third of samples; degrades to two-point delta for windows yielding only 5 samples.
-
-**Option C**: **Trimmed-Mean Endpoints** — Use the mean of the first 2-3 samples and the mean of the last 2-3 samples for the delta.
-  - *Pros*: Minimal logic change; smooths endpoint noise.
-  - *Cons*: Fixed window-size assumption; sensitive to systematic drift in the first/last samples.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Failed/Empty Videos Reprocessed on Every Resume
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:120-132`. When `process_video` returns `None` (file missing, no bystanders, no tasks, or all `tasks_analyzed` filtered out), the `if result:` guard skips both `results.append(...)` and `self.processed_ids.add(video_id)`. Consequently, every subsequent resume run re-iterates these videos, re-invokes `_extract_ego_motion_noise` (full optical-flow scan) and `_calculate_depth_delta` (Depth Anything + SAM per frame), and discards the result again. For batches with many edge-case videos, this consumes substantial time on guaranteed no-op work. Errors caught by the `except` branch (line 131) similarly never mark `video_id` processed.
-
-**Option A (recommended)**: **Sentinel-Record Tracking** — When `process_video` returns `None`, write a sentinel record (e.g., `{"video_id": ..., "layer": "03d_proxemic_kinematics", "tasks_analyzed": [], "skipped_reason": "no_bystanders"}`) to results and mark the id processed. Filter sentinel records during downstream consumption.
-  - *Pros*: Persists skip decisions; downstream layers gain explicit visibility into why a video was excluded; resume cost drops to O(JSON-load).
-  - *Cons*: Inflates the result JSON with empty-task entries; downstream consumers must filter on `tasks_analyzed` length or `skipped_reason`.
-
-**Option B**: **Separate Skip Manifest** — Maintain a sibling `03d_skipped.json` listing video_ids that produced no output, and short-circuit them at the top of the per-entry loop.
-  - *Pros*: Keeps the main result JSON clean (only positive results); explicit skip log is easy to audit.
-  - *Cons*: Two-file state machine to maintain; risk of skip-manifest/result-manifest drift if writes aren't atomic.
-
-**Option C**: **Always-Mark-Processed Policy** — Always add `video_id` to `processed_ids` after `process_video` returns (regardless of value), and persist `processed_ids` to disk separately (e.g., `03d_processed_ids.json`).
-  - *Pros*: Simplest write logic; cleanly decouples "did we attempt this?" from "did it produce output?"
-  - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 4: Hardcoded SSD Cache Path with No Mount Validation
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:6-7` and `pipeline.py:51`. `SSD_HF_CACHE = "/Volumes/Extreme SSD/huggingface_cache"` is set as a module-level constant before `transformers` import. If the external SSD is unmounted on the M4 Pro, `os.makedirs(SSD_HF_CACHE, exist_ok=True)` will succeed by creating a phantom `/Volumes/Extreme SSD/huggingface_cache` directory on the *root* filesystem (macOS does not auto-prevent writes under `/Volumes/<name>` when no volume is mounted at that name), causing model weights to spill onto the internal drive — the exact failure mode the SSD cache was introduced to prevent. The post-init existence check at `pipeline.py:72-74` only emits a print warning and does not abort.
-
-**Option A (recommended)**: **Mount Validation with Hard Failure** — Before `os.makedirs`, verify `/Volumes/Extreme SSD` is an actual mount point via `os.path.ismount("/Volumes/Extreme SSD")` and raise `RuntimeError` with an actionable message if not mounted.
-  - *Pros*: Fails fast with a clear error message; prevents silent disk fillup on the internal drive; deterministic.
-  - *Cons*: Couples the pipeline to a specific external-volume topology; requires manual unmount checks for CI environments without the SSD.
-
-**Option B**: **Environment-Driven Cache Path** — Read `SSD_HF_CACHE` from an env var (e.g., `PROXEMIC_HF_CACHE`) with a sane default and validate the parent directory exists before assignment.
-  - *Pros*: Decouples code from hardware topology; CI and dev environments can override; aligns with twelve-factor configuration.
-  - *Cons*: Adds an environment-config burden on contributors; existing scripts/runs depending on the hardcoded path must be updated.
-
-**Option C**: **Promote Warning to Error** — Keep the hardcoded path but escalate the post-init check from `print("Warning: ...")` to `raise RuntimeError(...)` if the cache directory under `SSD_HF_CACHE/hub/...` does not exist after model download.
-  - *Pros*: Minimal change; catches the failure mode after model download attempts.
-  - *Cons*: Models may have already filled the internal drive by the time the error fires; reactive rather than preventive.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 5: GPU/MPS Memory Not Released Across Long Batch Runs
-**Status**: ⚠️ Confirmed Unresolved — Verified across `pipeline.py:44-77` (model init) and `pipeline.py:102-134` (`run` loop). Both `self.depth_estimator` (Depth Anything V2-Small, ~25M params) and `self.sam_estimator` (SAM ViT-Base, ~94M params) are instantiated once and held for the lifetime of `ProxemicKinematicsPipeline`. Neither `torch.mps.empty_cache()` (for the documented MPS backend on M4 Pro) nor `torch.cuda.empty_cache()` is called between videos or between frames. Across batches with 10-20 frame samples × multiple bystanders × dozens of videos, MPS unified-memory pressure can accumulate from cached intermediate activations and lead to allocation failures or thermal-induced throttling on the 24GB shared budget.
-
-**Option A (recommended)**: **Per-Video `torch.mps.empty_cache()`** — Call `torch.mps.empty_cache()` (with a CUDA-equivalent guarded by `self.device == 'cuda'`) at the end of each `process_video` iteration in `run()`.
-  - *Pros*: Bounds MPS cache growth at one-video granularity; minimal latency overhead (cache-flush is fast); negligible code change.
-  - *Cons*: Does not address per-frame accumulation within a single long task; minor wall-clock cost per video.
-
-**Option B**: **Per-Frame `torch.no_grad()` + Cache Flush** — Wrap depth and SAM inference in `torch.inference_mode()` (or `no_grad()`) and flush the MPS cache every N frames.
-  - *Pros*: Tightest memory bound; eliminates gradient buffer overhead which `transformers.pipeline` may not disable by default.
-  - *Cons*: More invasive; need to verify `pipeline()` honors the outer context; per-frame flush adds non-trivial overhead.
-
-**Option C**: **Lazy Model Lifecycle** — Initialize models on first use within `process_video` and `del` them after each video, allowing Python GC + MPS to fully reclaim.
-  - *Pros*: Strongest memory containment.
-  - *Cons*: Pays full model-load cost (seconds for SAM, sub-second for Depth Anything) per video; severely degrades batch throughput.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 6: Hardcoded Heuristic Constants Throughout the Vector Pipeline
-**Status**: ⚠️ Confirmed Unresolved — Magic numbers governing the proxemic classification are inlined as literals: `noise_threshold = 15.0` at `pipeline.py:163`, `bbox_delta / 50.0` at `pipeline.py:424`, `-depth_delta * 2.0` at `pipeline.py:430`, weights `0.4`/`0.6` at `pipeline.py:431`, micro-movement deadband `0.05` at `pipeline.py:434`, and action thresholds `±0.3` at `pipeline.py:438-441`. None are exposed via constructor arguments, configuration, or class-level constants. Tuning the pipeline (e.g., adjusting sensitivity for older infants vs. adults, or recalibrating after switching to V1-Large per the documented fallback) requires editing source.
-
-**Option A (recommended)**: **Class-Level Constants Block** — Hoist all heuristic constants to a `# --- Tuning Constants ---` block at the top of `ProxemicKinematicsPipeline` (e.g., `BBOX_NORM_PCT = 50.0`, `DEPTH_NORM_SCALE = 2.0`, `BBOX_WEIGHT = 0.4`, `DEPTH_WEIGHT = 0.6`, `MICROMOVEMENT_THRESHOLD = 0.05`, `APPROACH_THRESHOLD = 0.3`, `OPTICAL_FLOW_NOISE_THRESHOLD = 15.0`).
-  - *Pros*: Centralizes tuning surface; easy to override via subclassing for ablations; zero runtime overhead; no schema change.
-  - *Cons*: Still requires code edit to retune for production runs; not externally configurable per-batch.
-
-**Option B**: **Config File (YAML/JSON)** — Load constants from a `proxemic_config.yaml` alongside the manifest path, with documented defaults.
-  - *Pros*: Non-developers can retune; supports per-experiment configurations; auditable as artifacts.
-  - *Cons*: Adds a config-loader dependency; tests must construct config fixtures; potential for misconfiguration drift.
-
-**Option C**: **Constructor Arguments with Defaults** — Add named parameters (`bbox_norm_pct=50.0`, etc.) to `__init__` with sensible defaults.
-  - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
-  - *Cons*: Constructor signature explosion (7+ new args); callers must thread through orchestration code.
-
-Your selection: Proceed with Option A.
+_No unresolved issues at this time._

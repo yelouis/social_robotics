@@ -14,19 +14,31 @@ from PIL import Image
 
 try:
     import torch
-    from transformers import pipeline
+    from transformers import pipeline, SamModel, SamProcessor
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
 
 class ProxemicKinematicsPipeline:
+    # --- Tuning Constants ---
+    # All proxemic heuristic thresholds live here so retuning is a single-file
+    # surgical edit (or a subclass override) rather than a hunt across helpers.
+    OPTICAL_FLOW_NOISE_THRESHOLD = 15.0   # 95th percentile farneback magnitude beyond which we void the proxemic vector
+    BBOX_NORM_PCT = 50.0                  # bbox area delta % that maps to ±1.0 after normalization
+    DEPTH_NORM_SCALE = 2.0                # multiplier on -depth_delta when normalizing into [-1, 1]
+    BBOX_WEIGHT = 0.4                     # weight of bbox heuristic in the fused proxemic vector
+    DEPTH_WEIGHT = 0.6                    # weight of depth heuristic in the fused proxemic vector
+    MICROMOVEMENT_THRESHOLD = 0.05        # |vector| below this is treated as no movement (jitter rejection)
+    APPROACH_THRESHOLD = 0.3              # vector > this -> Approach_Intervention; < -this -> Avoidance
+
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_result_path = Path(output_result_path)
         self.error_log_path = self.output_result_path.parent / "03d_proxemic_kinematics_errors.json"
         self.force = force
         self.depth_estimator = None
-        self.sam_estimator = None
+        self.sam_model = None
+        self.sam_processor = None
         self.device = 'cpu'
         
         self.processed_ids = set()
@@ -46,6 +58,21 @@ class ProxemicKinematicsPipeline:
             raise RuntimeError("Missing required dependency 'transformers>=4.35.0'. "
                                "Install with: pip install transformers>=4.35.0 huggingface_hub torch")
 
+        # Validate the Extreme SSD is actually mounted before letting transformers
+        # write multi-hundred-MB model weights into a phantom /Volumes/<name>
+        # directory on the internal drive. macOS does not block writes under
+        # /Volumes/<name> when nothing is mounted there, so a missing SSD silently
+        # fills the boot disk — exactly the failure mode the SSD cache exists to
+        # prevent.
+        ssd_root = SSD_HF_CACHE.rsplit("/huggingface_cache", 1)[0]
+        if not os.path.ismount(ssd_root):
+            raise RuntimeError(
+                f"Extreme SSD is not mounted at '{ssd_root}'. The Proxemic Kinematics "
+                f"layer caches Depth Anything V2 + SAM weights (~500MB) on this volume "
+                f"to keep the boot disk clear. Mount the SSD and retry, or override "
+                f"SSD_HF_CACHE in pipeline.py if running on a host without the SSD."
+            )
+
         try:
             # Create SSD cache directory if it doesn't exist
             os.makedirs(SSD_HF_CACHE, exist_ok=True)
@@ -55,24 +82,31 @@ class ProxemicKinematicsPipeline:
                 self.device = 'mps'
             elif torch.cuda.is_available():
                 self.device = 'cuda'
-                
+
             device_id = -1
             if self.device == 'mps':
                 device_id = 'mps'
             elif self.device == 'cuda':
                 device_id = 0
-                
+
             print(f"Initializing Depth Anything V2-Small on {self.device} (Cache: {SSD_HF_CACHE})...")
             self.depth_estimator = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=device_id)
-            
-            print(f"Initializing SAM-1 (mask-generation) on {self.device}...")
-            self.sam_estimator = pipeline(task="mask-generation", model="facebook/sam-vit-base", device=device_id)
-            
+
+            print(f"Initializing SAM-1 (bbox-prompted) on {self.device}...")
+            # Bbox-prompted SAM via the lower-level SamModel/SamProcessor API.
+            # The high-level mask-generation pipeline runs an exhaustive 32x32
+            # candidate-point grid (1024 forward passes per crop), which dominates
+            # wall-clock cost on the M4 Pro MPS backend and is wasted work given
+            # we already have the bystander bbox as a single-mask prompt.
+            self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
+            self.sam_model.eval()
+            self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+
             # Validate download path
             model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--depth-anything--Depth-Anything-V2-Small-hf"
             if not model_cache_path.exists():
                 print("Warning: Model does not appear to be saved in the expected Extreme SSD cache location.")
-                
+
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Depth Anything V2: {e}")
 
@@ -119,19 +153,48 @@ class ProxemicKinematicsPipeline:
             print(f"Processing Proxemic Kinematics for video: {video_id}")
             try:
                 result = self.process_video(entry)
-                if result:
-                    results.append(result)
-                    self.processed_ids.add(video_id)
-                    
-                    # Atomic write
-                    temp_out = self.output_result_path.with_suffix('.tmp')
-                    with open(temp_out, 'w') as f:
-                        json.dump(results, f, indent=4)
-                    temp_out.replace(self.output_result_path)
+                if result is None:
+                    # Sentinel record: persist the skip decision so subsequent
+                    # resume runs don't redo the (expensive) optical-flow + depth
+                    # scans only to discard the result again. Downstream consumers
+                    # filter on `tasks_analyzed` length or `skipped_reason`.
+                    result = {
+                        "video_id": video_id,
+                        "layer": "03d_proxemic_kinematics",
+                        "tasks_analyzed": [],
+                        "skipped_reason": "no_output_produced"
+                    }
+                results.append(result)
+                self.processed_ids.add(video_id)
+
+                # Atomic write
+                temp_out = self.output_result_path.with_suffix('.tmp')
+                with open(temp_out, 'w') as f:
+                    json.dump(results, f, indent=4)
+                temp_out.replace(self.output_result_path)
             except Exception as e:
                 self._log_error(video_id, e)
+            finally:
+                # Bound MPS/CUDA cache growth at one-video granularity. Long
+                # batches accumulate intermediate activations across Depth
+                # Anything + SAM forward passes; flushing here keeps the 24GB
+                # M4 Pro shared budget from sliding into thermal throttle.
+                self._release_accelerator_cache()
 
         print(f"Final count: {len(results)} videos processed for Proxemic Kinematics.")
+
+    def _release_accelerator_cache(self):
+        """Flush the per-device cache after each video. No-op on CPU."""
+        if not TRANSFORMERS_AVAILABLE:
+            return
+        try:
+            if self.device == 'mps' and hasattr(torch, 'mps'):
+                torch.mps.empty_cache()
+            elif self.device == 'cuda':
+                torch.cuda.empty_cache()
+        except Exception:
+            # Cache flush is best-effort; never let it break the run loop.
+            pass
 
     def process_video(self, entry):
         video_id = entry.get('id', entry.get('video_id'))
@@ -160,8 +223,8 @@ class ProxemicKinematicsPipeline:
             start_sec, end_sec = reaction_window
             
             chaos_score = self._extract_ego_motion_noise(video_path, start_sec, end_sec)
-            noise_threshold = 15.0
-            
+            noise_threshold = self.OPTICAL_FLOW_NOISE_THRESHOLD
+
             per_person = []
             for bystander in bystanders:
                 person_id = bystander.get('person_id')
@@ -366,36 +429,30 @@ class ProxemicKinematicsPipeline:
                 dx2 = min(dw, int(x2 * scale_x))
                 dy2 = min(dh, int(y2 * scale_y))
                 
-                # SAM-1 Instance Mask Generation
-                if self.sam_estimator is not None:
-                    crop = img.crop((x1, y1, x2, y2))
-                    sam_out = self.sam_estimator(crop)
-                    
-                    masks_list = sam_out if isinstance(sam_out, list) else sam_out.get('masks', [])
-                    best_mask = None
-                    max_area = 0
-                    for m_item in masks_list:
-                        m_img = m_item.get('mask') if isinstance(m_item, dict) else m_item
-                        if m_img is not None:
-                            m_arr = np.array(m_img)
-                            area = np.sum(m_arr)
-                            if area > max_area:
-                                max_area = area
-                                best_mask = m_arr
-                                
-                    if best_mask is not None:
-                        # Resize best_mask to match depth map crop region
-                        best_mask_img = Image.fromarray(best_mask).resize((dx2 - dx1, dy2 - dy1), Image.NEAREST)
-                        mask = np.zeros(depth_arr.shape[:2], dtype=bool)
-                        mask[dy1:dy2, dx1:dx2] = np.array(best_mask_img, dtype=bool)
-                    else:
+                # SAM-1 bbox-prompted segmentation. We pass the bystander bbox in
+                # original frame coordinates as an `input_boxes` prompt and take
+                # the highest-IoU mask from the (1, num_masks_per_box, H, W)
+                # output. One forward pass per frame instead of 1024 candidate
+                # points; deterministic mask selection by IoU, not by largest-
+                # area heuristic gambling on background.
+                best_mask_full = self._segment_with_sam(img, x1, y1, x2, y2)
+                if best_mask_full is not None:
+                    # The SAM mask is at the original frame resolution; resize
+                    # to the depth map's resolution so masking aligns 1:1.
+                    mask_pil = Image.fromarray(best_mask_full.astype(np.uint8) * 255).resize(
+                        (dw, dh), Image.NEAREST
+                    )
+                    mask = np.array(mask_pil, dtype=bool)
+                    # If SAM returned an empty mask (degenerate prompt), fall
+                    # back to the rectangular bbox so we still produce a sample.
+                    if not mask.any():
                         mask = np.zeros(depth_arr.shape[:2], dtype=bool)
                         mask[dy1:dy2, dx1:dx2] = True
                 else:
-                    # Fallback to rectangular bbox
+                    # SAM unavailable or inference failed — fall back to the bbox.
                     mask = np.zeros(depth_arr.shape[:2], dtype=bool)
                     mask[dy1:dy2, dx1:dx2] = True
-                
+
                 masked_depths = depth_arr[mask]
                 if masked_depths.size > 0:
                     median_depth = float(np.median(masked_depths))
@@ -405,41 +462,76 @@ class ProxemicKinematicsPipeline:
                 print(f"Depth inference failed at t={t}: {e}")
                 
         cap.release()
-        
+
+        return self._slope_span_delta(depths)
+
+    @staticmethod
+    def _slope_span_delta(depths):
+        """Linear-regression slope through (t, median_depth) pairs, scaled by
+        window duration to recover a unit-consistent "predicted span" delta.
+
+        Robust to single-frame outliers at either endpoint and uses all
+        collected samples — recovering the rationale for the adaptive 3 FPS
+        sampling that previously fed a discarded two-point delta.
+        """
         if len(depths) < 2:
             return None
-            
-        # delta = last_depth - first_depth
-        first_depth = depths[0][1]
-        last_depth = depths[-1][1]
-        
-        return last_depth - first_depth
+        ts = np.array([t for t, _ in depths], dtype=float)
+        ds = np.array([d for _, d in depths], dtype=float)
+        slope, _ = np.polyfit(ts, ds, 1)
+        window_duration = ts[-1] - ts[0]
+        if window_duration <= 0:
+            return None
+        return float(slope * window_duration)
+
+    def _segment_with_sam(self, img, x1, y1, x2, y2):
+        """Run SAM with the bbox as an input-box prompt; return a boolean mask
+        at the original image resolution, or None if SAM is unavailable / fails.
+
+        The mask is selected by the SAM IoU score head rather than by largest
+        area, so we don't accidentally promote a background mask just because
+        it covers more pixels.
+        """
+        if self.sam_model is None or self.sam_processor is None:
+            return None
+        try:
+            inputs = self.sam_processor(
+                img,
+                input_boxes=[[[float(x1), float(y1), float(x2), float(y2)]]],
+                return_tensors="pt",
+            ).to(self.device)
+            with torch.no_grad():
+                outputs = self.sam_model(**inputs)
+            masks = self.sam_processor.image_processor.post_process_masks(
+                outputs.pred_masks.cpu(),
+                inputs["original_sizes"].cpu(),
+                inputs["reshaped_input_sizes"].cpu(),
+            )
+            # masks[0] shape: (num_prompts=1, num_masks_per_prompt, H, W)
+            mask_tensor = masks[0][0]
+            iou_scores = outputs.iou_scores.cpu().numpy().reshape(-1)
+            best_idx = int(np.argmax(iou_scores))
+            return mask_tensor[best_idx].numpy().astype(bool)
+        except Exception as e:
+            print(f"SAM bbox-prompt inference failed: {e}")
+            return None
 
     def _compute_proxemic_vector(self, bbox_delta, depth_delta):
-        # Heuristic combination
-        # bbox_delta is in % (e.g. 24.5 = 24.5% increase in area) -> Approach
-        # depth_delta: -0.32 (decreasing depth) -> Approach
-        
-        # Normalize bbox: let's say +/- 50% is +/- 1.0
-        norm_bbox = max(-1.0, min(1.0, bbox_delta / 50.0))
-        
-        # The prompt says: "A rapidly decreasing depth map value indicates approach."
-        # So decreasing depth -> approach -> positive vector.
-        # depth_delta = last - first. If decreasing, depth_delta < 0.
-        # So norm_depth = -depth_delta * 2.0 (scaling factor)
-        norm_depth = max(-1.0, min(1.0, -depth_delta * 2.0))
-        vector = (norm_bbox * 0.4) + (norm_depth * 0.6)
-            
-        # Ignore +/- 0.05 micro-movements
-        if abs(vector) < 0.05:
+        # Heuristic combination of bbox-area % delta and depth slope-span.
+        # Decreasing depth (depth_delta < 0) -> approach -> positive vector.
+        norm_bbox = max(-1.0, min(1.0, bbox_delta / self.BBOX_NORM_PCT))
+        norm_depth = max(-1.0, min(1.0, -depth_delta * self.DEPTH_NORM_SCALE))
+        vector = (norm_bbox * self.BBOX_WEIGHT) + (norm_depth * self.DEPTH_WEIGHT)
+
+        # Reject jitter inside the deadband.
+        if abs(vector) < self.MICROMOVEMENT_THRESHOLD:
             vector = 0.0
-            
-        # Classify
-        if vector > 0.3:
+
+        if vector > self.APPROACH_THRESHOLD:
             action = "Approach_Intervention"
-        elif vector < -0.3:
+        elif vector < -self.APPROACH_THRESHOLD:
             action = "Avoidance"
         else:
             action = "Neutral"
-            
+
         return vector, action
