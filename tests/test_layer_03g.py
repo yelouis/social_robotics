@@ -76,16 +76,25 @@ def test_pipeline_initialization(dummy_manifest, tmp_path):
     assert pipeline is not None
 
 def test_missing_video_handling(pipeline_instance, dummy_manifest):
+    """Missing-video entries now produce a sentinel record with skipped_reason
+    so resumes do not redo the failed lookup (Resolved Issue 12)."""
     pipeline_instance.run()
-    # Should gracefully skip non-existent videos
-    assert not pipeline_instance.output_result_path.exists()
+    assert pipeline_instance.output_result_path.exists()
+    with open(pipeline_instance.output_result_path, 'r') as f:
+        data = json.load(f)
+    assert len(data) == 1
+    assert data[0]['video_id'] == "test_vid_01"
+    assert data[0]['tasks_analyzed'] == []
+    assert data[0]['skipped_reason'] == "missing_video"
 
 def test_camera_shift_static_video(pipeline_instance, tmp_path):
     video_path = tmp_path / "static.mp4"
     _create_synthetic_video(video_path, fps=30, duration_sec=2.0)
-    
-    dx, dy = pipeline_instance._extract_camera_shift(video_path, 0.0, 1.5)
-    
+
+    dx, dy = pipeline_instance._extract_camera_shift(
+        video_path, 0.0, 1.5, 480, 480, 30, []
+    )
+
     # Assert shift is close to 0
     assert abs(dx) < 5.0
     assert abs(dy) < 5.0
@@ -94,34 +103,50 @@ def test_camera_shift_panning_video(pipeline_instance, tmp_path):
     video_path = tmp_path / "pan.mp4"
     # Pan velocity of 5 pixels per frame
     _create_synthetic_video(video_path, fps=30, duration_sec=2.0, pan_velocity_x=5.0, pan_velocity_y=-2.0)
-    
-    dx, dy = pipeline_instance._extract_camera_shift(video_path, 0.0, 1.0)
-    
+
+    dx, dy = pipeline_instance._extract_camera_shift(
+        video_path, 0.0, 1.0, 480, 480, 30, []
+    )
+
     # The camera panning right (+x direction) and up (-y direction)
     # The dx should be positive and dy should be negative.
     assert dx > 10.0
     assert dy < -5.0
 
 def test_bystander_centered(pipeline_instance, tmp_path):
-    video_path = tmp_path / "dummy.mp4"
-    _create_synthetic_video(video_path, fps=30, duration_sec=1.0)
-    
-    # Frame is 480x480. Middle 30% is X: [168, 312], Y: [168, 312]
-    # Centered bystander
+    # Frame is 480x480. Middle 30% is X: [168, 312], Y: [168, 312].
+    # Resolved Issue 11 requires the centering hit to land in the final
+    # FINAL_CENTERING_TAIL_FRACTION (25%) of the reaction window — for a
+    # [0.0, 1.0] window that's t >= 0.75.
     bystanders = [{
-        "timestamps_sec": [0.5],
-        "bounding_boxes": [[200, 200, 280, 280]] # Center is 240, 240
+        "timestamps_sec": [0.9],
+        "bounding_boxes": [[200, 200, 280, 280]]  # Center is 240, 240
     }]
-    
-    assert pipeline_instance._check_bystander_centering(video_path, bystanders, 0.0, 1.0) == True
-    
+
+    assert pipeline_instance._check_bystander_centering(
+        bystanders, 0.0, 1.0, 480, 480
+    ) is True
+
     # Not centered bystander
     bystanders_not_centered = [{
-        "timestamps_sec": [0.5],
-        "bounding_boxes": [[10, 10, 50, 50]] # Center is 30, 30
+        "timestamps_sec": [0.9],
+        "bounding_boxes": [[10, 10, 50, 50]]  # Center is 30, 30
     }]
-    
-    assert pipeline_instance._check_bystander_centering(video_path, bystanders_not_centered, 0.0, 1.0) == False
+
+    assert pipeline_instance._check_bystander_centering(
+        bystanders_not_centered, 0.0, 1.0, 480, 480
+    ) is False
+
+    # Pre-tail centering must NOT trigger (Resolved Issue 11): a bystander
+    # already centered at task climax with no late camera pan is not a true
+    # social-referencing event.
+    bystanders_pre_tail = [{
+        "timestamps_sec": [0.5],
+        "bounding_boxes": [[200, 200, 280, 280]]
+    }]
+    assert pipeline_instance._check_bystander_centering(
+        bystanders_pre_tail, 0.0, 1.0, 480, 480
+    ) is False
 
 def test_full_pipeline_schema(pipeline_instance, tmp_path):
     video_path = tmp_path / "schema_test.mp4"
@@ -133,7 +158,10 @@ def test_full_pipeline_schema(pipeline_instance, tmp_path):
         "bystander_detections": [
             {
                 "person_id": 0,
-                "timestamps_sec": [0.5],
+                # Bystander timestamp must be in the tail 25% of the
+                # reaction window for the centering check to fire
+                # (Resolved Issue 11).
+                "timestamps_sec": [0.9],
                 "bounding_boxes": [[200, 200, 280, 280]]
             }
         ],
@@ -146,7 +174,7 @@ def test_full_pipeline_schema(pipeline_instance, tmp_path):
             }
         ]
     }
-    
+
     result = pipeline_instance.process_video(entry)
     
     assert result is not None
@@ -178,20 +206,18 @@ def test_bystander_outside_reaction_window(pipeline_instance, tmp_path):
     """Bystander timestamps that fall entirely outside the reaction window
     should NOT trigger bystander_centered_in_fov, even if the centroid
     would otherwise land in the middle 30%."""
-    video_path = tmp_path / "window_test.mp4"
-    _create_synthetic_video(video_path, fps=30, duration_sec=3.0)
-
     # Bystander at center (240,240) but at t=2.5 — outside the [0.0, 1.0] window
     bystanders = [{
         "timestamps_sec": [2.5],
         "bounding_boxes": [[200, 200, 280, 280]]
     }]
 
-    result = pipeline_instance._check_bystander_centering(video_path, bystanders, 0.0, 1.0)
+    result = pipeline_instance._check_bystander_centering(bystanders, 0.0, 1.0, 480, 480)
     assert result is False
 
-def test_no_bystander_returns_none(pipeline_instance, tmp_path):
-    """Videos with no bystander detections should return None."""
+def test_no_bystander_returns_sentinel(pipeline_instance, tmp_path):
+    """Videos with no bystander detections now produce a sentinel record
+    with skipped_reason instead of None (Resolved Issue 12)."""
     video_path = tmp_path / "no_bystander.mp4"
     _create_synthetic_video(video_path, fps=30, duration_sec=2.0)
 
@@ -210,4 +236,6 @@ def test_no_bystander_returns_none(pipeline_instance, tmp_path):
     }
 
     result = pipeline_instance.process_video(entry)
-    assert result is None
+    assert result is not None
+    assert result['tasks_analyzed'] == []
+    assert result['skipped_reason'] == "no_bystanders_or_tasks"

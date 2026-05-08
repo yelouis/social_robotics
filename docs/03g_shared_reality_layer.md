@@ -91,116 +91,31 @@ The current pipeline relies exclusively on optical flow and bounding box centeri
    - **Problem**: The `social_reference_sought` logic used an absolute shift magnitude threshold of `30.0` pixels, which was calibrated for 480p clips but was overly permissive and prone to false positives for higher resolution (e.g. 1080p, 4K) footage.
    - **Solution**: Replaced the static absolute threshold in `process_video` with a resolution-normalized threshold dynamically computed as 4% of the frame's diagonal (`threshold = frame_diagonal * 0.04`). This properly scales the sensitivity across varying video resolutions.
 
+10. **Heuristic Constants Hoisted to Class-Level Tuning Block (Resolved - May 08)**:
+    - **Problem**: Magic numbers governing classification decisions were inlined as literals throughout the detection path: spatial-downsample factor `0.5` at the Farneback call sites, upscale factor `2.0` (the inverse of the downsample, linked only by convention), centering bounds `0.35`/`0.65`, threshold ratio `0.04`, and the unreachable `30.0` fallback. The downsample/upscale coupling was particularly fragile — editing one literal without the other would silently miscalibrate the camera-shift magnitude.
+    - **Solution**: Hoisted all heuristic constants into a `# --- Detection Tuning ---` block at the top of `SharedRealityPipeline`: `OPTICAL_FLOW_DOWNSAMPLE`, `TARGET_FLOW_FPS`, `CENTERING_LOWER_BOUND`, `CENTERING_UPPER_BOUND`, `SHIFT_THRESHOLD_RATIO`, and `FINAL_CENTERING_TAIL_FRACTION`. The upscale factor is exposed as a derived `OPTICAL_FLOW_UPSCALE` property (`1.0 / OPTICAL_FLOW_DOWNSAMPLE`), enforcing the inverse coupling at the source level. The unreachable `30.0` fallback in `process_video` was deleted because the new flow returns sentinels when the metadata read fails (Resolved Issue 18), so the threshold-fallback branch is no longer reachable.
+
+11. **Bystander Centering Has No Temporal Ordering Constraint (Resolved - May 08)**:
+    - **Problem**: `_check_bystander_centering` returned `True` if any bystander bbox centroid landed in the middle 35–65% region at *any* timestamp inside the reaction window. The downstream `social_reference_sought` then conjuncted this with a global shift-magnitude check derived from accumulated optical flow over the same window. The two signals were computed independently with no temporal causality check: a video where the bystander was already centered at `start_sec` and the camera panned for an unrelated reason (handing the actor a tool, repositioning the head) would falsely trigger `social_reference_sought = True`. The documented intent — "the camera explicitly pans away from the task centroid AND centers the bystander's bounding box" — explicitly requires a transition (away → toward bystander), not coincidental centering anywhere in the window.
+    - **Solution**: `_check_bystander_centering` now restricts its temporal filter to the *final `FINAL_CENTERING_TAIL_FRACTION` (25%) of the reaction window*, computed as `tail_start = end_sec - (end_sec - start_sec) * 0.25`. Pre-centering at task climax is excluded; only stable centering after the camera has had time to pan registers as a hit. Combined with the existing shift-magnitude conjunction in `social_reference_sought`, the layer now requires both a meaningful camera shift *and* end-of-window bystander centering to flag a social-referencing event. The corresponding test cases in `tests/test_layer_03g.py` were updated to use timestamps in the tail of the reaction window, and a new sub-assertion verifies that pre-tail centering does not trigger the flag.
+
+12. **Skipped Videos Reprocessed on Every Resume (Resolved - May 08)**:
+    - **Problem**: When `process_video` returned `None` (file missing, no bystanders/tasks, or every reaction window malformed), the `if result:` guard in `run` skipped both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs re-iterated these videos, re-executed Farneback optical flow, re-opened `cv2.VideoCapture` per task, and re-iterated every bystander bbox, only to discard the result again. Errors caught at the outer except similarly never marked `video_id` processed.
+    - **Solution**: Introduced a `_sentinel(video_id, reason)` helper that returns `{"video_id": ..., "layer": "03g_shared_reality", "tasks_analyzed": [], "skipped_reason": "missing_video" | "no_bystanders_or_tasks" | "no_valid_tasks"}`, and replaced the four `return None` sites in `process_video` with calls to this helper. The truthiness gate in `run` was removed so every video — including skipped ones — is appended to `results`, written atomically, and added to `self.processed_ids`. Resume cost for previously-skipped videos drops to set-membership lookup, and downstream consumers gain explicit visibility into why a video was excluded. The exception path retains its existing behavior (errors logged but not marked processed) so transient failures remain retryable on rerun. Consumers must filter on `tasks_analyzed` length or the presence of `skipped_reason` to avoid treating sentinel entries as detection results.
+
+13. **Three Redundant `cv2.VideoCapture` Opens Per Task (Resolved - May 08)**:
+    - **Problem**: For each task in each video, the pipeline opened `cv2.VideoCapture(str(video_path))` three times sequentially: once inside `_extract_camera_shift`, once inside `_check_bystander_centering`, and once inline in `process_video` to fetch frame width/height for the threshold computation. Each open performed codec parsing, container demuxing initialization, and (depending on backend) potentially a full container index scan — costs that scaled poorly on long-GOP H.264/H.265 Ego4D clips. The third open was particularly wasteful because it only read two metadata properties already available inside `_check_bystander_centering`.
+    - **Solution**: `process_video` now opens the capture once at the top, reads `width`/`height`/`fps`, releases the capture, and computes the resolution-normalized threshold from the cached metadata. `_check_bystander_centering`'s signature was changed to `(bystanders, start_sec, end_sec, width, height)` — it no longer opens any capture since it never reads frame data, only metadata. `_extract_camera_shift`'s signature was changed to `(video_path, start_sec, end_sec, width, height, fps, bystanders)` and uses the passed `fps` directly, keeping a single capture open only for frame iteration. Net: 3 opens per task → 2 opens per task with no behavior change. The capture-reading test fixtures in `tests/test_layer_03g.py` were updated to pass `width`, `height`, `fps`, and an empty bystanders list explicitly.
+
+14. **Background Optical Flow Polluted by Foreground Bystander Motion (Resolved - May 08)**:
+    - **Problem**: The camera shift estimate computed `mean_dx = -np.mean(flow[..., 0])` and `mean_dy = -np.mean(flow[..., 1])` over the *entire* downsampled frame, including the pixels of the bystander. The inline comment acknowledged the assumption — "average flow is an estimation of background movement (assuming background is dominant)" — but provided no enforcement. When the bystander walked across the frame during the reaction window, their motion contaminated `mean_dx`/`mean_dy`, fabricating a phantom "camera shift" magnitude that could push `shift_magnitude` over the resolution-normalized threshold. The same failure mode is independently flagged in 03f Resolved Issue 11.
+    - **Solution**: Added a `_bystander_mask_for_frame(t, frame_shape_ds, bystanders)` helper that builds a boolean mask over the downsampled frame zeroing out the nearest-timestamp bbox for every bystander (rectangles scaled by `OPTICAL_FLOW_DOWNSAMPLE`). `_extract_camera_shift` now accepts the `bystanders` list (plumbed in from `process_video`) and computes `mean_dx`/`mean_dy` over background pixels only via `np.mean(flow[..., k][mask])`, falling back to the unmasked mean only when every pixel is inside a bbox (degenerate case).
+
+15. **`_extract_camera_shift` Read Every Source Frame at Full FPS (Resolved - May 08)**:
+    - **Problem**: `_extract_camera_shift` seeked to `start_frame = int(start_sec * fps)` and incremented `current_frame_idx += 1` each iteration, computing dense Farneback flow on *every* frame in the reaction window. For a 30 FPS source and a 5-second window this was 150 dense optical-flow computations per task. The 0.5× spatial downsample helped per-frame cost but no temporal subsampling occurred.
+    - **Solution**: Added a `TARGET_FLOW_FPS = 10.0` class constant; `_extract_camera_shift` now computes `frame_stride = max(1, round(fps / TARGET_FLOW_FPS))` and seeks/reads frames in stride-sized hops. Pan detection survives because pans last several seconds (much longer than the new 100 ms inter-sample interval). Calibration: per-iteration flow magnitude scales linearly with stride for continuous motion, and the loop runs `1/stride` as many iterations, so the accumulated `total_dx`/`total_dy` for continuous motion remains the same as the per-frame loop — no extra multiplier needed (matching Option A's note). At 30 FPS this is a 3× speedup with no behavior change on the existing pan-detection test fixture.
+
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Bystander Centering Has No Temporal Ordering Constraint
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:240-249` and `pipeline.py:130-131`. `_check_bystander_centering` returns `True` if *any* bystander bbox centroid falls in the middle 35%–65% region at *any* timestamp inside the reaction window. The downstream `social_reference_sought` then conjuncts this with a global `shift_magnitude > threshold` derived from accumulated optical flow over the *same* window. The two signals are computed independently with no temporal causality check: a video where the bystander was already centered at `start_sec` and the camera panned for an unrelated reason (handing the actor a tool, repositioning the head) would falsely trigger `social_reference_sought = True`. The documented intent — "the camera explicitly pans away from the task centroid AND centers the bystander's bounding box" — explicitly requires a transition (away → toward bystander), not coincidental centering anywhere in the window.
-
-**Option A (recommended)**: **Final-Frame Centering Check** — Replace "any frame in window" with "centering must hold during the last 25% of the reaction window." Pre-centering at task climax is excluded; final stable centering after the camera shift is required.
-  - *Pros*: Captures the documented "pan away then center" pattern; minimal logic change (filter timestamps to `t >= start_sec + 0.75 * window_duration`); no schema change.
-  - *Cons*: Misses cases where the social reference is brief (glance and back); requires calibrating the 25% tail fraction.
-
-**Option B**: **Centering-Before-vs-After Comparison** — Check centering separately in the first 25% and last 25% of the window. Flag `social_reference_sought` only if the bystander was *not* centered initially but *is* centered at the end.
-  - *Pros*: Directly encodes the "transition" semantic; rules out pre-centered-bystander false positives.
-  - *Cons*: Requires bystander bbox samples in both temporal segments; videos with sparse bbox sampling may produce ambiguous results.
-
-**Option C**: **Bystander-Aligned Shift Direction** — Compute the vector from the frame center to the bystander centroid at `end_sec`, and require the optical-flow shift vector to be aligned (cosine similarity > 0.6). Drop the binary "centered in middle 30%" gate.
-  - *Pros*: Strongest semantic match with "the camera panned toward the bystander"; handles bystanders not exactly in the central rectangle.
-  - *Cons*: Larger refactor; needs to handle multi-bystander tiebreaking; affected by the foreground-pollution issue (Issue 4 below).
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Skipped Videos Reprocessed on Every Resume
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:60-78`. When `process_video` returns `None` (file missing at line 88, no bystanders/tasks at line 95, or every reaction window is malformed at line 104), the `if result:` guard skips both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs re-iterate these videos, re-execute Farneback optical flow over the entire reaction window in `_extract_camera_shift`, re-open `cv2.VideoCapture` three times per task, and re-iterate every bystander bbox in `_check_bystander_centering`, only to discard the result again. Errors caught at line 77 also never mark `video_id` processed.
-
-**Option A (recommended)**: **Sentinel-Record Tracking** — When `process_video` returns `None`, write a sentinel record (e.g., `{"video_id": ..., "layer": "03g_shared_reality", "tasks_analyzed": [], "skipped_reason": "no_bystanders" | "missing_video" | "no_valid_tasks"}`) to results and mark the id processed.
-  - *Pros*: Persists skip decisions; downstream consumers gain explicit visibility into skip reasons; resume cost drops to O(JSON-load + set-membership).
-  - *Cons*: Output JSON inflates with empty entries; downstream consumers must filter on `tasks_analyzed` length or `skipped_reason`.
-
-**Option B**: **Skip Manifest Sidecar** — Maintain `03g_skipped.json` listing video_ids that produced no output, short-circuit them at the top of the per-entry loop.
-  - *Pros*: Keeps the main result JSON clean; explicit skip log is easy to audit.
-  - *Cons*: Two-file state machine to maintain; risk of skip-manifest/result-manifest drift if writes aren't atomic.
-
-**Option C**: **Always-Mark-Processed Policy** — Always add `video_id` to `processed_ids` after `process_video` returns, persisting `processed_ids` separately.
-  - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?".
-  - *Cons*: Adds a third state file; loses the rationale for *why* a video was skipped.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Three Redundant `cv2.VideoCapture` Opens Per Task
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:108-123`. For each task in each video, the pipeline opens `cv2.VideoCapture(str(video_path))` three times sequentially: once inside `_extract_camera_shift` (line 154), once inside `_check_bystander_centering` (line 217), and once inline at line 117 to fetch frame width/height for the threshold computation. Each open performs codec parsing, container demuxing initialization, and (depending on backend) potentially a full container index scan — costs that scale poorly on long-GOP H.264/H.265 Ego4D clips. The third open at line 117 is particularly wasteful because it only reads two metadata properties already available inside `_check_bystander_centering` (lines 221-222).
-
-**Option A (recommended)**: **Cache Frame Metadata at the Top of `process_video`** — Open the capture once, read width/height/fps, close, and pass these into both helper methods as plain values. `_check_bystander_centering` no longer needs to open a capture at all (it never reads frame data, only metadata). `_extract_camera_shift` still needs its own open for frame iteration.
-  - *Pros*: Reduces opens from 3 → 2 per task; eliminates the duplicate metadata fetch; minor refactor; no schema change.
-  - *Cons*: Helper signatures must change to accept (width, height); mocked tests need to be updated.
-
-**Option B**: **Reuse a Single Capture Across All Operations Per Task** — Open the capture once at the top of `process_video`, pass it into both helpers (which seek to their respective frame ranges), and release at the end.
-  - *Pros*: Maximum reuse; one open per task; aligns with cv2 best practices.
-  - *Cons*: Helpers can no longer be unit-tested in isolation with file paths; sharing a stateful capture across helpers is error-prone (seek state); error recovery becomes harder.
-
-**Option C**: **Process-Wide LRU Capture Cache** — Maintain an LRU cache of `cv2.VideoCapture` objects keyed by video_path within the pipeline instance.
-  - *Pros*: Fastest for repeated access patterns; transparent to call sites.
-  - *Cons*: Capture objects hold OS file descriptors; cache eviction needs explicit `release()` to avoid FD exhaustion; over-engineering for the current 3-open pattern.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 4: Background Optical Flow Polluted by Foreground Bystander Motion
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:189-200`. The camera shift estimate computes `mean_dx = -np.mean(flow[..., 0])` and `mean_dy = -np.mean(flow[..., 1])` over the *entire* downsampled frame, including the pixels of the bystander. The inline comment at lines 192-193 acknowledges the assumption — "average flow is an estimation of background movement (assuming background is dominant)" — but provides no enforcement. When the bystander walks across the frame during the reaction window, their motion contaminates `mean_dx`/`mean_dy`, fabricating a phantom "camera shift" magnitude that can push `shift_magnitude` over the resolution-normalized threshold (`frame_diagonal * 0.04`). This produces false-positive `social_reference_sought = True` even when the camera was static. The same issue is independently flagged in 03f Issue 3 (`mean_v` pollution).
-
-**Option A (recommended)**: **Mask Out Bystander Bounding Boxes Before Averaging** — Before computing the mean over `flow[..., 0]`/`flow[..., 1]`, zero out (or mask) the regions inside each bystander bbox at the corresponding timestamp. Compute the mean only over remaining (background) pixels using `np.mean(flow[..., 0][~mask])`.
-  - *Pros*: Aligns implementation with the documented "background pixels" intent; cheap mask construction; bystander bboxes are already passed into `process_video`.
-  - *Cons*: Requires plumbing bystander bboxes into `_extract_camera_shift`; rectangular masks may exclude legitimate background at the edges; bbox samples are sparse so per-frame mask reconstruction needs interpolation.
-
-**Option B**: **Use the Median Instead of Mean** — Replace `np.mean` with `np.median`. As long as the bystander occupies < 50% of frame pixels, the median is robust to localized foreground motion.
-  - *Pros*: One-line change; no bbox plumbing; resistant to localized motion regardless of bbox availability.
-  - *Cons*: Fails when foreground exceeds 50% of frame (close-up bystander); biases toward zero in static scenes; loses signal magnitude for small genuine pans.
-
-**Option C**: **Border-Strip Sampling** — Compute `mean_dx`/`mean_dy` only over the outer 20% border of the frame.
-  - *Pros*: No bbox plumbing; deterministic background sampling.
-  - *Cons*: POV close-quarters scenes (kitchen, table) often have no clear "edge background"; may falsely zero the signal.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 5: `_extract_camera_shift` Reads Every Source Frame at Full FPS
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:181-203`. The method seeks to `start_frame = int(start_sec * fps)` and increments `current_frame_idx += 1` in every iteration, reading and Farneback-flowing *every* frame in the reaction window. For a 30 FPS source with a 5-second reaction window, this is 150 dense optical-flow computations per task. The same pattern exists in sister layers 03d (`_extract_ego_motion_noise`) and 03f (`_extract_ego_motion`). The 0.5x spatial downsample (per Resolved Issue 8) helps per-frame cost, but no temporal subsampling occurs.
-
-**Option A (recommended)**: **Adaptive Frame Stride for Optical Flow** — Skip frames so effective flow-FPS is ~10 Hz (`frame_stride = max(1, int(fps / 10))`), iterating `current_frame_idx += frame_stride`. The accumulated shift remains valid because per-frame `mean_dx * 2.0` already represents the displacement between consecutive *processed* frames; with stride > 1, each accumulation step represents a larger inter-frame displacement that should NOT be re-multiplied by stride (the shift is already proportional to elapsed inter-frame time).
-  - *Pros*: 3x speedup on 30 FPS videos; pan detection survives because pans last several seconds; no schema change; aligns with proposed 03f optimization.
-  - *Cons*: Sub-second jolts may be missed; sister layers should adopt the same stride for consistency; needs validation that accumulated shift remains comparable to current values.
-
-**Option B**: **Use Sparse Feature Tracking (`cv2.calcOpticalFlowPyrLK`)** — Replace dense Farneback with sparse Lucas-Kanade tracking on a grid of corner features (`cv2.goodFeaturesToTrack`). Compute mean shift over surviving features.
-  - *Pros*: 10-100x faster than dense Farneback; naturally tracks textured background features more than blank foreground; partially mitigates Issue 4 (foreground pollution) since features are usually on textured background.
-  - *Cons*: More moving parts (feature reseeding, tracking failures); requires picking a feature density; less robust on low-texture frames.
-
-**Option C**: **First-vs-Last Frame Subtraction** — Skip optical flow entirely; compute camera shift as ORB/SIFT feature-match displacement between the first and last frame of the window.
-  - *Pros*: Constant cost regardless of window length; explicit net displacement (matches the "panned away" semantic).
-  - *Cons*: Sensitive to lighting changes between endpoints; misses non-monotonic pans; new dependency on feature matching.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 6: Hardcoded Heuristic Constants
-**Status**: ⚠️ Confirmed Unresolved — Magic numbers governing classification decisions are inlined as literals: spatial-downsample factor `0.5` at `pipeline.py:174, 187`, upscale factor `2.0` at `pipeline.py:199-200` (must mirror the downsample factor), centering bounds `0.35`/`0.65` at `pipeline.py:228-231`, threshold ratio `0.04` at `pipeline.py:123`, and the unreachable fallback `30.0` at `pipeline.py:125`. None are exposed via constructor arguments, configuration, or class-level constants. Of particular concern: the `0.5` and `2.0` constants are coupled (one is the inverse of the other) but linked only by convention, so an edit to one without the other silently miscalibrates the camera-shift magnitude.
-
-**Option A (recommended)**: **Class-Level Tuning Constants Block** — Hoist constants into a `# --- Detection Tuning ---` block at the top of `SharedRealityPipeline` (e.g., `OPTICAL_FLOW_DOWNSAMPLE = 0.5`, `CENTERING_LOWER_BOUND = 0.35`, `CENTERING_UPPER_BOUND = 0.65`, `SHIFT_THRESHOLD_RATIO = 0.04`). Derive the upscale factor as `1.0 / OPTICAL_FLOW_DOWNSAMPLE` to enforce the inverse coupling; remove the unreachable `30.0` fallback (since the corresponding code path also produces an all-zero shift vector, making the threshold moot).
-  - *Pros*: Centralizes tuning surface; eliminates the silent-decoupling bug between downsample/upscale; easy to override via subclassing; zero runtime overhead.
-  - *Cons*: Still requires code edit to retune in production; not externally configurable per-batch.
-
-**Option B**: **Config File (YAML/JSON)** — Load constants from a `shared_reality_config.yaml` co-located with the manifest path.
-  - *Pros*: Non-developers can retune; supports per-experiment configurations; auditable as artifacts.
-  - *Cons*: Adds a config-loader dependency; tests must construct config fixtures; potential for misconfiguration drift.
-
-**Option C**: **Constructor Arguments with Defaults** — Add named parameters to `__init__` with sensible defaults pulled from current literals.
-  - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
-  - *Cons*: Constructor-signature growth; orchestration code must thread parameters through.
-
-Your selection: Proceed with Option A.
+_No unresolved issues at this time._
