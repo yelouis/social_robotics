@@ -2,10 +2,24 @@ import json
 import traceback
 import numpy as np
 from pathlib import Path
-from scipy.signal import butter, filtfilt, find_peaks
+from scipy.signal import butter, filtfilt, find_peaks, medfilt
 from scipy.interpolate import interp1d
 
 class AffirmationGesturePipeline:
+    # --- Detection Tuning ---
+    MIN_TRACE_POINTS = 5
+    MEDFILT_KERNEL = 3
+    MAX_INTERPOLATED_FRACTION = 0.3
+    PEAK_PROMINENCE = 0.03
+    STD_DEV_FLOOR = 0.02
+    FREQ_BAND_HZ = (0.5, 4.0)
+    BANDPASS_HZ = (1.0, 3.0)
+    COUNT_CONFIDENCE_BASE = 0.5
+    COUNT_CONFIDENCE_PER_EXTREMUM = 0.1
+    RMS_THRESHOLD = 0.05
+    GESTURE_DECISION_THRESHOLD = 0.6
+    AMBIGUITY_DELTA = 0.15
+
     def __init__(self, input_manifest_path, output_result_path, attention_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_result_path = Path(output_result_path)
@@ -89,68 +103,81 @@ class AffirmationGesturePipeline:
             print(f"Processing Affirmation Gesture for video: {video_id}")
             try:
                 result = self.process_video(entry)
-                if result:
-                    results.append(result)
-                    self.processed_ids.add(video_id)
-                    
-                    # Atomic write
-                    temp_out = self.output_result_path.with_suffix('.tmp')
-                    with open(temp_out, 'w') as f:
-                        json.dump(results, f, indent=4)
-                    temp_out.replace(self.output_result_path)
+                results.append(result)
+                self.processed_ids.add(video_id)
+
+                # Atomic write
+                temp_out = self.output_result_path.with_suffix('.tmp')
+                with open(temp_out, 'w') as f:
+                    json.dump(results, f, indent=4)
+                temp_out.replace(self.output_result_path)
             except Exception as e:
                 self._log_error(video_id, e)
 
         print(f"Final count: {len(results)} videos processed for Affirmation Gesture.")
 
+    def _sentinel(self, video_id, reason):
+        return {
+            "video_id": video_id,
+            "layer": "03e_affirmation_gesture",
+            "tasks_analyzed": [],
+            "skipped_reason": reason,
+        }
+
     def process_video(self, entry):
         video_id = entry.get('id', entry.get('video_id'))
-        
+
         att_entry = self.attention_data.get(video_id)
         if not att_entry:
             print(f"No attention data found for {video_id}, skipping.")
-            return None
-            
+            return self._sentinel(video_id, "no_attention_data")
+
         tasks = entry.get('identified_tasks', [])
         if not tasks:
             print(f"No tasks found for {video_id}.")
-            return None
-            
+            return self._sentinel(video_id, "no_tasks")
+
         tasks_analyzed = []
         for task in tasks:
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
             reaction_window = meta.get('task_reaction_window_sec')
-            
+
             if not reaction_window or len(reaction_window) != 2:
                 continue
-                
+
             start_sec, end_sec = reaction_window
             per_person_att = att_entry.get('per_person', [])
-            
+
             per_person_results = []
             for p_data in per_person_att:
                 person_id = p_data.get('person_id')
                 trace = p_data.get('attention_trace', [])
-                
+
                 # Filter trace by window
                 window_trace = [t for t in trace if start_sec <= t['t'] <= end_sec]
-                
-                if len(window_trace) < 5:  # Too few points to filter
+
+                if len(window_trace) < self.MIN_TRACE_POINTS:
                     continue
-                
+
                 # Extract time, pitch, yaw
                 timestamps = np.array([x['t'] for x in window_trace])
                 pitch = np.array([x['pitch_rad'] for x in window_trace])
                 yaw = np.array([x['yaw_rad'] for x in window_trace])
-                
-                # Interpolate missing/NaN
-                pitch = self._fill_nan(pitch)
-                yaw = self._fill_nan(yaw)
-                
+
+                # Interpolate NaNs and capture how much of each axis was bridged.
+                # If too much of the trace was reconstructed, downstream filtering
+                # produces fabricated oscillations from the interpolant ramp, so
+                # short-circuit the bystander.
+                pitch, pitch_interp_frac = self._fill_nan(pitch)
+                yaw, yaw_interp_frac = self._fill_nan(yaw)
+                interpolated_fraction = max(pitch_interp_frac, yaw_interp_frac)
+
                 if len(pitch) == 0 or len(yaw) == 0:
                     continue
-                
+                if interpolated_fraction > self.MAX_INTERPOLATED_FRACTION:
+                    continue
+
                 # Resample to a uniform grid before filtering.
                 # 03a uses adaptive stride (0.2s or 0.5s), but scipy.signal.filtfilt
                 # assumes uniform sampling. We interpolate onto a fixed-dt grid.
@@ -161,53 +188,54 @@ class AffirmationGesturePipeline:
                 if dt <= 0:
                     continue
                 fps = 1.0 / dt
-                n_uniform = max(5, int(duration * fps))
+                n_uniform = max(self.MIN_TRACE_POINTS, int(duration * fps))
                 t_uniform = np.linspace(timestamps[0], timestamps[-1], n_uniform)
-                
+
                 pitch_interp = interp1d(timestamps, pitch, kind='linear', fill_value='extrapolate')
                 yaw_interp = interp1d(timestamps, yaw, kind='linear', fill_value='extrapolate')
                 pitch_uniform = pitch_interp(t_uniform)
                 yaw_uniform = yaw_interp(t_uniform)
-                
+
                 uniform_fps = (n_uniform - 1) / duration if duration > 0 else fps
-                
+
                 # Detect nod/shake
                 nod_confidence, pitch_var = self._detect_oscillation(pitch_uniform, uniform_fps, axis='pitch')
                 shake_confidence, yaw_var = self._detect_oscillation(yaw_uniform, uniform_fps, axis='yaw')
-                
+
                 gesture = "none"
                 conf = 0.0
-                
+
+                threshold = self.GESTURE_DECISION_THRESHOLD
                 # Tie-breaking: if both axes oscillate similarly, classify as ambiguous
-                if nod_confidence > 0.6 and shake_confidence > 0.6 and abs(nod_confidence - shake_confidence) < 0.15:
+                if (nod_confidence > threshold and shake_confidence > threshold
+                        and abs(nod_confidence - shake_confidence) < self.AMBIGUITY_DELTA):
                     gesture = "ambiguous_wobble"
                     conf = round((nod_confidence + shake_confidence) / 2.0, 2)
-                elif nod_confidence > 0.6 and nod_confidence > shake_confidence:
+                elif nod_confidence > threshold and nod_confidence > shake_confidence:
                     gesture = "affirming_nod"
                     conf = nod_confidence
-                elif shake_confidence > 0.6:
+                elif shake_confidence > threshold:
                     gesture = "negating_shake"
                     conf = shake_confidence
-                    
+
                 per_person_results.append({
                     "person_id": person_id,
-                    "pitch_variance_hz": round(pitch_var, 2),
-                    "yaw_variance_hz": round(yaw_var, 2),
                     "pitch_oscillation_hz": round(pitch_var, 2),
                     "yaw_oscillation_hz": round(yaw_var, 2),
+                    "interpolated_fraction": round(interpolated_fraction, 3),
                     "gesture_detected": gesture,
-                    "confidence": round(conf, 2)
+                    "confidence": round(conf, 2),
                 })
-                
+
             if per_person_results:
                 tasks_analyzed.append({
                     "task_id": task_id,
                     "per_person": per_person_results
                 })
-                
+
         if not tasks_analyzed:
-            return None
-            
+            return self._sentinel(video_id, "insufficient_trace")
+
         return {
             "video_id": video_id,
             "layer": "03e_affirmation_gesture",
@@ -216,34 +244,35 @@ class AffirmationGesturePipeline:
 
     def _fill_nan(self, arr):
         mask = np.isnan(arr)
+        if len(arr) == 0:
+            return arr, 0.0
         if mask.all():
-            return np.zeros_like(arr)
+            return np.zeros_like(arr), 1.0
         arr[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), arr[~mask])
-        return arr
+        return arr, float(mask.sum()) / float(len(arr))
 
     def _detect_oscillation(self, signal, fps, axis='pitch'):
-        # Rhythmic nodding/shaking: typically 1Hz to 3Hz
-        # We need a nyquist frequency. fps might be around 2-5fps based on 03a adaptive stride
+        # Rhythmic nodding/shaking: typically 1Hz to 3Hz.
         nyq = 0.5 * fps
-        
-        # If fps is too low to capture 1-3Hz, we can't properly filter.
-        # But we can still count zero-crossings on the raw detrended signal.
-        signal_detrended = signal - np.mean(signal)
-        
-        # Gaze-to-Head Proxy Filtering (Issue 1 Option B resolution):
-        # Apply a low-pass pre-filter to suppress fast saccadic oscillations.
-        if nyq > 3.0:
-            b_lp, a_lp = butter(2, 3.0 / nyq, btype='low')
-            signal_detrended = filtfilt(b_lp, a_lp, signal_detrended)
 
-        
+        # Median-smoothing saccade suppression (Resolved Issue 10).
+        # `medfilt` rejects single-sample impulses (saccades) but distorts pure
+        # tones whose period approaches the kernel duration. Only fire when the
+        # sampling rate is high enough that kernel*dt is well below the longest
+        # nod half-period (1/(2*FREQ_BAND_HZ.high)).
+        bp_low_hz, bp_high_hz = self.BANDPASS_HZ
+        medfilt_min_fps = self.MEDFILT_KERNEL * 2 * bp_high_hz * 2
+        if fps >= medfilt_min_fps and len(signal) >= self.MEDFILT_KERNEL:
+            signal = medfilt(signal, kernel_size=self.MEDFILT_KERNEL)
+
+        signal_detrended = signal - np.mean(signal)
+
         # Attempt bandpass if nyquist allows a meaningful passband, otherwise
         # fall back to raw detrended signal with peak-finding only.
-        # A "meaningful" band requires the normalized passband width to be > 0.1.
-        if nyq > 3.0:
-            # Nyquist comfortably above target range: standard 1-3Hz bandpass
-            low = 1.0 / nyq
-            high = 3.0 / nyq
+        if nyq > bp_high_hz:
+            # Nyquist comfortably above target range: standard bandpass
+            low = bp_low_hz / nyq
+            high = bp_high_hz / nyq
             b, a = butter(2, [low, high], btype='band')
             filtered = filtfilt(b, a, signal_detrended)
         elif nyq > 1.5:
@@ -259,29 +288,26 @@ class AffirmationGesturePipeline:
             # Nyquist too low for any filtering — use raw detrended signal
             filtered = signal_detrended
 
-        # Find peaks and troughs (oscillating zero-crossings)
-        # We need >2 crossings or peaks
-        # For a nod, we want noticeable variance.
         std_dev = np.std(filtered)
-        if std_dev < 0.02: # Too small, barely moving
+        if std_dev < self.STD_DEV_FLOOR:
             return 0.0, 0.0
-            
-        # Find peaks with some prominence
-        peaks, _ = find_peaks(filtered, prominence=0.03)
-        troughs, _ = find_peaks(-filtered, prominence=0.03)
-        
+
+        peaks, _ = find_peaks(filtered, prominence=self.PEAK_PROMINENCE)
+        troughs, _ = find_peaks(-filtered, prominence=self.PEAK_PROMINENCE)
+
         total_extrema = len(peaks) + len(troughs)
-        
-        # We approximate frequency from the number of extrema
+
         duration = len(signal) / fps
         est_hz = (total_extrema / 2.0) / duration if duration > 0 else 0
-        
+
         confidence = 0.0
-        # If we have at least 2 distinct motions (e.g. peak + trough + peak) in a short window
-        if total_extrema >= 2 and 0.5 <= est_hz <= 4.0:
-            count_confidence = min(1.0, 0.5 + (total_extrema * 0.1))
-            rms = np.sqrt(np.mean(filtered**2))
-            rms_threshold = 0.05
-            confidence = count_confidence * min(1.0, rms / rms_threshold)
-            
+        freq_lo, freq_hi = self.FREQ_BAND_HZ
+        if total_extrema >= 2 and freq_lo <= est_hz <= freq_hi:
+            count_confidence = min(
+                1.0,
+                self.COUNT_CONFIDENCE_BASE + (total_extrema * self.COUNT_CONFIDENCE_PER_EXTREMUM),
+            )
+            rms = np.sqrt(np.mean(filtered ** 2))
+            confidence = count_confidence * min(1.0, rms / self.RMS_THRESHOLD)
+
         return confidence, float(est_hz)
