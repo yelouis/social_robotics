@@ -89,12 +89,19 @@ def test_pipeline_initialization(dummy_manifest, tmp_path):
 
 
 def test_missing_video_handling(dummy_manifest, tmp_path):
+    """Missing-video entries now produce a sentinel record with skipped_reason
+    so resumes do not redo the failed lookup (Resolved Issue 10)."""
     output_path = tmp_path / "03f_output.json"
     try:
         pipeline = MotorResonancePipeline(dummy_manifest, output_path)
         pipeline.run()
-        # Should gracefully skip non-existent videos
-        assert not output_path.exists()
+        assert output_path.exists()
+        with open(output_path, 'r') as f:
+            data = json.load(f)
+        assert len(data) == 1
+        assert data[0]['video_id'] == "test_vid_01"
+        assert data[0]['tasks_analyzed'] == []
+        assert data[0]['skipped_reason'] == "file_not_found"
     except RuntimeError as e:
         if "ultralytics is required" in str(e):
             pytest.skip("Ultralytics not installed, skipping test.")
@@ -112,9 +119,10 @@ def test_ego_motion_detects_jolt(pipeline_instance, tmp_path):
     video_path = tmp_path / "jolt.mp4"
     _create_synthetic_video(video_path, fps=30, duration_sec=3.0, jolt_at_sec=1.5)
 
-    spikes, chaos = pipeline_instance._extract_ego_motion(video_path, 0.5, 2.5)
+    spikes, vflow, chaos = pipeline_instance._extract_ego_motion(video_path, 0.5, 2.5, [])
     assert len(spikes) > 0, "Expected at least one EgoMotion spike from the camera jolt"
     assert chaos > 0.1, "Expected measurable chaos score from jolt"
+    assert len(vflow) > 0, "Vertical-flow timeline should always be populated"
 
 
 def test_ego_motion_calm_video_no_spikes(pipeline_instance, tmp_path):
@@ -123,15 +131,20 @@ def test_ego_motion_calm_video_no_spikes(pipeline_instance, tmp_path):
     video_path = tmp_path / "calm.mp4"
     _create_synthetic_video(video_path, fps=30, duration_sec=3.0, jolt_at_sec=None)
 
-    spikes, chaos = pipeline_instance._extract_ego_motion(video_path, 0.0, 3.0)
+    spikes, vflow, chaos = pipeline_instance._extract_ego_motion(video_path, 0.0, 3.0, [])
     assert len(spikes) == 0, f"Calm video produced {len(spikes)} false-positive spikes"
+    # Vertical-flow timeline is independent of the chaos floor and must still
+    # be available so mirroring detection can run on calm-but-tilting footage
+    # (Resolved Issue 16).
+    assert len(vflow) > 0
 
 
 def test_ego_motion_invalid_video(pipeline_instance, tmp_path):
     """Non-existent video should return empty results without crashing."""
     fake_path = tmp_path / "does_not_exist.mp4"
-    spikes, chaos = pipeline_instance._extract_ego_motion(fake_path, 0.0, 1.0)
+    spikes, vflow, chaos = pipeline_instance._extract_ego_motion(fake_path, 0.0, 1.0, [])
     assert spikes == []
+    assert vflow == []
     assert chaos == 0.0
 
 
@@ -180,7 +193,7 @@ def test_keypoint_alignment_uses_dict_not_list(pipeline_instance, tmp_path):
         timestamps = [0.5, 1.0]
         bboxes = [[0, 0, 200, 200], [0, 0, 200, 200]]
         result = pipeline_instance._extract_and_correlate_pose(
-            video_path, timestamps, bboxes, 0.0, 2.0, [0.5]
+            video_path, timestamps, bboxes, 0.0, 2.0, [{'time': 0.5, 'v_flow': 0.0}], []
         )
 
         if result is not None:
