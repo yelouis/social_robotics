@@ -39,8 +39,9 @@ Combine this with Layer 03b. A "Smile" + "Nod" = Absolute positive validation. A
       "per_person": [
         {
           "person_id": 0,
-          "pitch_variance_hz": 2.1,
-          "yaw_variance_hz": 0.2,
+          "pitch_oscillation_hz": 2.1,
+          "yaw_oscillation_hz": 0.2,
+          "interpolated_fraction": 0.04,
           "gesture_detected": "affirming_nod",
           "confidence": 0.94
         }
@@ -103,100 +104,29 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
    - **Problem**: This layer's prior Resolved entries (#1 "Bandpass Cutoff at Low FPS", #2 "Non-Uniform Sampling Breaks `filtfilt`", #5 "Nyquist Ceiling on Fast Nods") all assumed a specific upstream cadence — first an adaptive 0.2 s–0.5 s stride, then a fixed 8 FPS stride after the 03a stabilization. Layer 03a has now been reverted to an adaptive `0.125 s` baseline (8 FPS) with 16 FPS bursts on attention-score deltas > 0.3 (see 03a Resolved Issue #12). If 03e's Nyquist tier and `interp1d` resampling logic had been tuned to the *fixed* 8 FPS assumption, the new non-uniform stride could mis-trigger or skip resampling.
    - **Solution**: No code changes were required. The 8 FPS baseline preserved by 03a is the *floor* of the new adaptive scheme, so 03e's Nyquist-aware bandpass tier (which already accommodated the original 0.2 s–0.5 s adaptive trace) and the `scipy.interpolate.interp1d` resampling step (already engaged unconditionally) both continue to behave correctly. Bursts to 16 FPS only ever *add* samples; they cannot drop the effective rate below the 4 Hz Nyquist ceiling on which Resolved Issue #5's analysis rests. This entry exists purely to record the upstream contract change so that future audits do not assume a uniform stride.
 
+10. **Redundant Gaze-to-Head Low-Pass Replaced With FPS-Gated Median Smoothing (Resolved - May 08)**:
+    - **Problem**: The "Gaze-to-Head Proxy Filtering" introduced in Resolved Issue 8 installed a 2nd-order Butterworth low-pass at cutoff `3.0 / nyq` only when `nyq > 3.0`. In that exact branch, the subsequent 1–3 Hz bandpass already attenuated everything above 3 Hz, so the low-pass added zero saccade suppression — its 0–3 Hz passband was a strict superset of the bandpass passband. In the marginal-Nyquist (`1.5 < nyq <= 3.0`) and no-filter (`nyq <= 1.5`) tiers, the low-pass did not fire at all. The fix was structurally inert and the documented motivation — suppressing saccadic oscillations that alias into the 1–3 Hz band — was not actually addressed: any saccadic energy that survived sampling and aliased into the passband was preserved by both filters.
+    - **Solution**: Removed the redundant low-pass branch from `_detect_oscillation` in `src/layer_03e_affirmation_gesture/pipeline.py` and replaced it with a `scipy.signal.medfilt(kernel_size=3)` saccade-suppression step applied to the resampled signal before detrending. Median smoothing rejects single-sample impulse outliers via rank-order operation rather than frequency-domain attenuation, providing a mechanism that is genuinely orthogonal to the bandpass. To avoid corrupting fast nods sampled near Nyquist — where a 3-sample median window spans more than half a target nod period and demolishes the tone — the filter is gated on `fps >= MEDFILT_KERNEL * 4 * BANDPASS_HZ.high` (currently 36 FPS). Under 03a's 8 FPS adaptive baseline and 16 FPS attention-burst stride, the gate keeps the filter inert; it only activates when 03e is fed higher-FPS gaze traces from a future upstream change. The trade-off is mathematically unavoidable: at the sampling rates 03a actually produces, no in-pipeline filter (frequency-domain or rank-order) can distinguish aliased saccadic energy from genuine 1–3 Hz nod content, so the resolution preserves correctness at present rates while wiring up a forward-compatible mechanism that will engage automatically on higher-FPS sources.
+
+11. **Skipped Videos Reprocessed on Every Resume (Resolved - May 08)**:
+    - **Problem**: When `process_video` returned `None` (no `att_entry` for the video, no `identified_tasks`, all `per_person_results` filtered out, or every reaction window had < 5 trace points), the `if result:` guard in `run` skipped both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs reloaded the same `registry`, failed the `if video_id in self.processed_ids` check, and re-executed the full attention-trace lookup, NaN-filling, `interp1d` resampling, and Butterworth filtering — only to discard the result again. For batches sharing a 03a result file with thousands of videos but only a fraction yielding valid bystander tasks, this wasted substantial CPU per resume.
+    - **Solution**: Introduced an `_sentinel(video_id, reason)` helper that returns `{"video_id": ..., "layer": "03e_affirmation_gesture", "tasks_analyzed": [], "skipped_reason": "no_attention_data" | "no_tasks" | "insufficient_trace"}`, and replaced the three `return None` sites in `process_video` with calls to this helper. The truthiness gate in `run` was removed so every video — including skipped ones — is appended to `results`, written atomically, and added to `self.processed_ids`. Resume cost for previously-skipped videos drops to set-membership lookup, and downstream consumers gain explicit visibility into *why* a video was excluded. Consumers must filter on `tasks_analyzed` length or the presence of `skipped_reason` to avoid treating sentinel entries as detection results.
+
+12. **Linear NaN Interpolation Has No Gap-Length Limit (Resolved - May 08)**:
+    - **Problem**: `_fill_nan` used `np.interp` to linearly bridge any contiguous NaN run, regardless of duration. When L2CS-Net (03a's gaze model) lost face tracking for an extended interval — common during partial occlusions, motion blur, or extreme head rotations — the resulting trace contained long NaN runs (e.g., 1–2 seconds = 8–16 samples at 8 FPS). Linear interpolation across these gaps produced a straight line that silently smoothed over genuine head motion in the gap and introduced an artificial low-frequency ramp that, after detrending and bandpass filtering, could either suppress real oscillations or fabricate spurious ones. The pipeline emitted no telemetry on how much of each window had been reconstructed.
+    - **Solution**: `_fill_nan` now returns a tuple `(filled_array, interpolated_fraction)` where `interpolated_fraction = mask.sum() / len(arr)`. `process_video` computes `max(pitch_interp_frac, yaw_interp_frac)` per bystander and short-circuits the bystander when the fraction exceeds the new `MAX_INTERPOLATED_FRACTION = 0.3` constant. The metric is also surfaced in the per-person output schema as `interpolated_fraction` (rounded to 3 decimals) so downstream layers can apply their own thresholds without re-deriving the figure from raw 03a traces. Bystanders with intermittent tracking that exceed the threshold yield zero results for that task, which is the documented intent — fabricated detections from sparse traces are worse than absent detections.
+
+13. **Heuristic Constants Hoisted to Class-Level Tuning Block (Resolved - May 08)**:
+    - **Problem**: Magic numbers governing classification decisions were inlined as literals throughout the detection path: minimum trace length `5`, peak prominence `0.03`, std-dev floor `0.02`, frequency band `0.5–4.0`, count-confidence formula `0.5 + 0.1 * total_extrema`, RMS threshold `0.05`, gesture decision threshold `0.6`, and ambiguity threshold `0.15`. None were exposed via constructor arguments, configuration, or class-level constants. Any retuning — adjusting sensitivity for high-noise environments, recalibrating after a 03a model swap, or comparing rad-amplitude conventions across datasets — required editing source files at multiple sites and risked drift between the detection logic and downstream documentation.
+    - **Solution**: Hoisted all heuristic constants into a `# --- Detection Tuning ---` block at the top of `AffirmationGesturePipeline`: `MIN_TRACE_POINTS`, `MEDFILT_KERNEL`, `MAX_INTERPOLATED_FRACTION`, `PEAK_PROMINENCE`, `STD_DEV_FLOOR`, `FREQ_BAND_HZ`, `BANDPASS_HZ`, `COUNT_CONFIDENCE_BASE`, `COUNT_CONFIDENCE_PER_EXTREMUM`, `RMS_THRESHOLD`, `GESTURE_DECISION_THRESHOLD`, and `AMBIGUITY_DELTA`. All call sites in `process_video` and `_detect_oscillation` now reference the class attributes. Subclass-based ablations and per-experiment overrides become a matter of attribute assignment rather than source edits; zero runtime overhead, no schema change.
+
+14. **Legacy `*_variance_hz` Fields Removed From Output Schema (Resolved - May 08)**:
+    - **Problem**: Resolved Issue 7 introduced `pitch_oscillation_hz` and `yaw_oscillation_hz` alongside the misnamed `pitch_variance_hz` and `yaw_variance_hz`, both populated with identical values via `round(pitch_var, 2)` / `round(yaw_var, 2)`. The "additive-only schema evolution" prevented downstream breakage at the time, but no deprecation timeline, schema-version field, or downstream-consumer migration plan was recorded. The duplicate fields would have persisted indefinitely in every output JSON, doubling the per-person field count for these metrics and inviting confusion in future audits about which field was authoritative — especially if a future change ever recomputed only one of them.
+    - **Solution**: Deleted `pitch_variance_hz` and `yaw_variance_hz` from the per-person output written by `process_video` in `src/layer_03e_affirmation_gesture/pipeline.py`. Only the correctly-named `pitch_oscillation_hz` / `yaw_oscillation_hz` fields remain, alongside the new `interpolated_fraction` metric. A repository-wide grep across `*.py`, `*.md`, and `*.json` confirmed no consumers outside the 03e source and docs themselves reference the legacy field names, so immediate removal is safe; any future consumer reading the legacy names will receive a `KeyError` on first read of the new outputs, which is the explicit intent — they must migrate to the canonical names.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Gaze-to-Head Low-Pass Pre-Filter is Functionally Redundant
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:235-260`. The "Gaze-to-Head Proxy Filtering" (Resolved Issue 8) installs a 2nd-order Butterworth low-pass at cutoff `3.0 / nyq`, but only when `nyq > 3.0`. In that exact branch, the subsequent bandpass at `[1.0/nyq, 3.0/nyq]` already attenuates everything above 3 Hz. The low-pass therefore adds zero suppression of saccadic oscillations — its passband (0–3 Hz) is a strict superset of the bandpass passband (1–3 Hz). In the marginal-Nyquist tier (`1.5 < nyq <= 3.0`) and the no-filter tier (`nyq <= 1.5`), the low-pass does not fire at all. The documented motivation — "suppress fast saccadic oscillations [that] could produce pitch/yaw oscillations mimicking nodding/shaking" — is not actually addressed: any saccadic energy that survived sampling and aliased into the 1–3 Hz band is preserved by *both* filters since it now lives within the passband. The fix is structurally inert.
-
-**Option A (recommended)**: **Replace the Pre-Filter With a Median-Smoothing Step on the Raw Trace** — Apply `scipy.signal.medfilt` (kernel=3 or 5) to the raw `pitch_rad`/`yaw_rad` traces *before* detrending. Saccades manifest as single-sample spikes superimposed on the slower head-pose drift; a small-kernel median filter removes them while preserving the smoother nod/shake oscillation envelope.
-  - *Pros*: Targets the actual failure mode (impulsive saccades); cheap to compute; no Nyquist constraint; preserves the bandpass downstream.
-  - *Cons*: May slightly attenuate sharp nod transitions; requires choosing kernel size; not a true frequency-domain operation.
-
-**Option B**: **Use a True Anti-Saccade Notch** — Add a notch filter centered around typical saccadic frequencies (~5–10 Hz) that fires *before* the bandpass. Requires `nyq > 10 Hz` to be meaningful, which the current 8 FPS stride does not provide (Nyquist=4 Hz).
-  - *Pros*: Frequency-domain principled; explicit saccade attenuation.
-  - *Cons*: Requires 03a to bump sampling above 20 FPS (re-opens Issue 5 trade-off); extra tier in the existing three-tier filter cascade.
-
-**Option C**: **Adopt OpenFace/MediaPipe Head-Pose Vectors Instead of L2CS Gaze Vectors** — Replace the gaze-derived `pitch_rad`/`yaw_rad` from 03a with explicit head-pose estimates from a head-pose-only model, eliminating the gaze-vs-head conflation at its source.
-  - *Pros*: Architecturally correct; no filter tricks needed; aligns with the original algorithmic intent ("3D head pose arrays").
-  - *Cons*: Heavy refactor of 03a; new model dependency; loses the "Data Reuse Pipeline" benefit that motivates this layer.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Skipped Videos Reprocessed on Every Resume
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:84-102`. When `process_video` returns `None` (no `att_entry` for the video at line 110, no `identified_tasks` at line 115, all `per_person_results` filtered out at line 208, or every reaction window has < 5 trace points at line 139), the `if result:` guard skips both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs reload the same `registry`, fail the `if video_id in self.processed_ids` check, and re-execute the full attention-trace lookup, NaN-filling, interp1d resampling, and butterworth filtering — only to discard the result again. For batches that share the upstream 03a result with thousands of videos but only a fraction with valid bystander tasks, this wastes substantial CPU per resume.
-
-**Option A (recommended)**: **Sentinel-Record Tracking** — When `process_video` returns `None`, write a sentinel record (`{"video_id": ..., "layer": "03e_affirmation_gesture", "tasks_analyzed": [], "skipped_reason": "no_attention_data" | "no_tasks" | "insufficient_trace"}`) to `results` and add to `processed_ids`.
-  - *Pros*: Persists skip decisions; downstream consumers gain visibility into *why* a video was excluded; resume cost drops to O(JSON-load + set-membership).
-  - *Cons*: Output JSON inflates with empty entries; downstream consumers must filter on `tasks_analyzed` length or `skipped_reason`.
-
-**Option B**: **Skip Manifest Sidecar** — Maintain `03e_skipped.json` listing video_ids that produced no output, short-circuit them at the top of the per-entry loop alongside the `processed_ids` check.
-  - *Pros*: Keeps the main result JSON clean; explicit skip log is easy to audit.
-  - *Cons*: Two-file state machine to maintain; risk of skip-manifest/result-manifest drift if writes aren't atomic.
-
-**Option C**: **Always-Mark-Processed Policy** — Always add `video_id` to `processed_ids` after `process_video` returns, and persist `processed_ids` to disk as a separate JSON.
-  - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?"; minimal JSON inflation.
-  - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Linear NaN Interpolation Has No Gap-Length Limit
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:217-222`. `_fill_nan` uses `np.interp` to linearly bridge any contiguous NaN run, regardless of duration. When L2CS-Net (03a's gaze model) loses face tracking for an extended interval — common during partial occlusions, motion blur, or extreme head rotations — the resulting trace contains long NaN runs (e.g., 1–2 seconds, equivalent to 8–16 samples at 8 FPS). Linear interpolation across these gaps produces a straight line that (a) silently smooths over genuine head motion that was happening during the gap and (b) introduces an artificial low-frequency ramp that, after detrending and filtering, can either suppress or fabricate oscillations. The pipeline has no telemetry on how much of each window was interpolated.
-
-**Option A (recommended)**: **Reject Windows With Excessive Interpolation** — Compute `interpolated_fraction = mask.sum() / len(arr)` and short-circuit (`return None` for the bystander) when this exceeds a threshold (e.g., 0.3). Surface the metric in the output schema as `interpolated_fraction` for downstream filtering.
-  - *Pros*: Prevents fabricated detections from sparse traces; explicit data-quality flag aligns with the documented "graceful NaN handling" rationale; cheap.
-  - *Cons*: Drops borderline-valid windows; requires picking a threshold; bystanders with intermittent tracking may yield zero results.
-
-**Option B**: **Consecutive-Gap Cap** — Detect runs of NaN longer than N samples (e.g., 4 samples = 0.5s at 8 FPS) and either (i) reject the window or (ii) split the trace into pre-gap / post-gap segments and analyze each independently.
-  - *Pros*: Catches localized tracking outages; preserves data on either side of the gap.
-  - *Cons*: Complicates window slicing; oscillation-frequency estimates degrade on short segments.
-
-**Option C**: **Cubic-Spline Interpolation Instead of Linear** — Use `scipy.interpolate.CubicSpline` to bridge NaN runs with a smoother curve more representative of natural head motion.
-  - *Pros*: Less artifactual ramping; smoother frequency response.
-  - *Cons*: Risks oscillating splines for long gaps; does not address the root issue (no signal in the gap); only papers over the symptom.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 4: Hardcoded Heuristic Constants Across the Detection Path
-**Status**: ⚠️ Confirmed Unresolved — Magic numbers governing classification decisions are inlined as literals: minimum trace length `5` at `pipeline.py:139`, peak prominence `0.03` at `pipeline.py:270-271`, std-dev floor `0.02` at `pipeline.py:266`, frequency band `0.5 <= est_hz <= 4.0` at `pipeline.py:281`, count-confidence formula `0.5 + (total_extrema * 0.1)` at `pipeline.py:282`, RMS threshold `0.05` at `pipeline.py:284`, gesture decision threshold `0.6` at `pipeline.py:182, 185, 188`, and ambiguity threshold `0.15` at `pipeline.py:182`. None are exposed via constructor arguments, configuration, or class-level constants. Any retuning — e.g., adjusting sensitivity for high-noise environments, recalibrating after a 03a model swap, or comparing rad-amplitude conventions across datasets — requires editing source.
-
-**Option A (recommended)**: **Class-Level Tuning Constants Block** — Hoist all heuristic constants into a `# --- Detection Tuning ---` block at the top of `AffirmationGesturePipeline` (e.g., `MIN_TRACE_POINTS = 5`, `PEAK_PROMINENCE = 0.03`, `STD_DEV_FLOOR = 0.02`, `FREQ_BAND = (0.5, 4.0)`, `RMS_THRESHOLD = 0.05`, `GESTURE_DECISION_THRESHOLD = 0.6`, `AMBIGUITY_DELTA = 0.15`).
-  - *Pros*: Centralizes tuning surface; easy to override via subclassing for ablations; zero runtime overhead; no schema change.
-  - *Cons*: Still requires code edit to retune in production; not externally configurable per-batch.
-
-**Option B**: **Config File (YAML/JSON)** — Load constants from a `affirmation_gesture_config.yaml` co-located with the manifest path, with documented defaults.
-  - *Pros*: Non-developers can retune; supports per-experiment configurations; auditable as artifacts.
-  - *Cons*: Adds a config-loader dependency; tests must construct config fixtures; potential for misconfiguration drift.
-
-**Option C**: **Constructor Arguments with Defaults** — Add named parameters to `__init__` with sensible defaults pulled from the current literal values.
-  - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
-  - *Cons*: Constructor-signature explosion (7+ new args); orchestration code must thread parameters through.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 5: Legacy `*_variance_hz` Fields Duplicate `*_oscillation_hz` With No Deprecation Path
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:194-197`. Resolved Issue 7 introduced `pitch_oscillation_hz` and `yaw_oscillation_hz` alongside the misnamed `pitch_variance_hz` and `yaw_variance_hz`, both populated with identical values via `round(pitch_var, 2)` / `round(yaw_var, 2)`. The "additive-only schema evolution" prevented downstream breakage, but no deprecation timeline, schema-version field, or downstream-consumer migration plan was recorded. The duplicate fields will persist indefinitely in every output JSON, doubling the per-person field count for these metrics and inviting confusion in future audits about which field is authoritative — especially if a future change recalculates only one of them.
-
-**Option A (recommended)**: **Schema Version + Deprecation Window** — Add a top-level `"schema_version": "1.1"` to each result entry, document that `*_variance_hz` is deprecated as of 1.1 and will be removed in 2.0, and grep the codebase for downstream consumers of the legacy fields. Once consumers migrate, delete the legacy fields.
-  - *Pros*: Explicit migration contract; auditable in version control; aligns with semantic-versioning practice.
-  - *Cons*: Requires coordinating with downstream layers (03c, 03f, ensemble); schema-version plumbing must be honored elsewhere.
-
-**Option B**: **Immediate Removal** — Delete `pitch_variance_hz` / `yaw_variance_hz` now and accept downstream breakage where it occurs.
-  - *Pros*: Simplest resolution; eliminates duplicate state; smaller output JSON.
-  - *Cons*: Breaks any consumer still on the legacy field name; reverts the rationale for additive-only evolution; risks silent KeyError in production runs.
-
-**Option C**: **Computed Property at Read Time** — Stop writing `*_variance_hz` to disk; instead, expose a thin `result_loader.py` helper that synthesizes the legacy field on read for backward compatibility.
-  - *Pros*: Output JSON is clean; legacy consumers still work via the loader.
-  - *Cons*: Requires consumers to adopt the loader; couples write-path and read-path; adds a maintenance burden.
-
-Your selection: Proceed with Option B.
+_No unresolved issues at this time._
 
 ### 🧪 Test Suite Results (6/6 Passed)
 
