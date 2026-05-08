@@ -89,169 +89,43 @@ We must track how the bystander responds physically.
    - **Problem**: The original specification called for tracking congruent spine-angle changes between the POV camera and the bystander. The implementation lacked the ability to extract hip keypoints, compute spine angles, and correlate them with vertical EgoMotion flow.
    - **Solution**: Expanded keypoint extraction in `pipeline.py` to include COCO hip indices (11/12). Added a `_correlate_mirroring` method that calculates the spine angle (`atan2`) and correlates significant inward angle changes (>0.1) with downward EgoMotion spikes (`v_flow < -1.0`) within the reaction window. Output updated to include `mirroring_detected` and `mirroring_scalar`.
 
+8. **Heuristic Constants Hoisted to Class-Level Tuning Block (Resolved - May 08)**:
+   - **Problem**: Magic numbers governing classification decisions were inlined as literals throughout the detection path: chaos floor `3.0`, max-chaos normalizer `20.0`, relative spike threshold `0.7`, frame-resize factor `0.5`, keypoint confidence threshold `0.5`, velocity normalizer `0.5`, velocity cap `10.0`, reaction-window cap `0.5s`, empathy normalizer `5.0`, mirroring vertical-flow threshold `-1.0`, mirroring time window `±0.5s`, mirroring-delta threshold `0.1`, and mirroring-scalar normalizer `0.5`. Tuning the pipeline (e.g., adjusting flinch sensitivity for a different age cohort, recalibrating after a YOLOv8 model swap, or adapting the chaos floor for handheld vs. head-mounted POV) required source edits at multiple sites and risked drift between the detection logic and downstream documentation.
+   - **Solution**: Hoisted all heuristic constants into a `# --- Detection Tuning ---` block at the top of `MotorResonancePipeline`: `CHAOS_FLOOR`, `CHAOS_NORMALIZER`, `SPIKE_RELATIVE_THRESHOLD`, `FRAME_RESIZE_FACTOR`, `TARGET_FLOW_FPS`, `KPT_CONFIDENCE_THRESHOLD`, `VELOCITY_NORMALIZER`, `VELOCITY_CAP`, `RESONANCE_WINDOW_SEC`, `EMPATHY_NORMALIZER`, `MIRRORING_VFLOW_THRESHOLD`, `MIRRORING_TIME_WINDOW_SEC`, `MIRRORING_DELTA_THRESHOLD`, `MIRRORING_SCALAR_NORMALIZER`, `PREV_KPTS_CARRY_FORWARD_SEC`, and `RELEVANT_KPT_INDICES`. All call sites in `_extract_ego_motion`, `_extract_and_correlate_pose`, `_correlate_mirroring`, and `_select_pose_detection` now reference the class attributes. Subclass-based ablations and per-experiment overrides become a matter of attribute assignment rather than source edits; zero runtime overhead, no schema change.
+
+9. **Skipped Videos Reprocessed on Every Resume (Resolved - May 08)**:
+   - **Problem**: When `process_video` returned `None` (file missing, no bystanders/tasks, no qualifying ego spikes, or every reaction window filtered out), the `if result:` guard in `run` skipped both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs re-iterated these videos, re-executed Farneback optical flow over the entire reaction window, and re-ran YOLOv8-pose inference per sampled frame, only to discard the result again. For batches with many edge-case videos (bystanders out-of-frame, calm videos that fail the chaos floor), this consumed substantial MPS time on guaranteed no-op work.
+   - **Solution**: Introduced a `_sentinel(video_id, reason)` helper that returns `{"video_id": ..., "layer": "03f_motor_resonance", "tasks_analyzed": [], "skipped_reason": "file_not_found" | "no_bystanders_or_tasks" | "no_ego_spikes" | "no_pose_data"}`, and replaced the four `return None` sites in `process_video` with calls to this helper. The truthiness gate in `run` was removed so every video — including skipped ones — is appended to `results`, written atomically, and added to `self.processed_ids`. Resume cost for previously-skipped videos drops to set-membership lookup, and downstream consumers gain explicit visibility into *why* a video was excluded. The exception path in `run` retains its existing behavior (errors are logged but not marked processed) so transient failures (e.g., MPS memory pressure) remain retryable on rerun. Consumers must filter on `tasks_analyzed` length or the presence of `skipped_reason` to avoid treating sentinel entries as detection results.
+
+10. **Adaptive Frame Stride for Optical Flow (Resolved - May 08)**:
+    - **Problem**: `_extract_ego_motion` seeked to `start_frame = int(start_sec * fps)` and incremented `current_frame_idx` by 1 each iteration, computing dense Farneback flow on *every* frame in the reaction window. For a 30 FPS source and a 5-second window this was 150 dense optical-flow computations per task per video, dominating wall-clock cost and scaling poorly. The pipeline already downsampled each frame to 0.5× resolution but did not subsample temporally.
+    - **Solution**: Added a `TARGET_FLOW_FPS = 10.0` class constant; `_extract_ego_motion` now computes `frame_stride = max(1, round(fps / TARGET_FLOW_FPS))` and seeks/reads frames in stride-sized hops. At 30 FPS this is a 3× speedup with negligible loss in jolt detectability (jolts last 100–300 ms and are easily caught by 10 Hz sampling). Calibration handling: `chaos_score` is intentionally left in raw flow-magnitude units regardless of stride — impulsive jolts (frame-pair pixel discontinuities) do not scale with stride the way continuous motion does, and stride-normalizing chaos would have erased the jolt fixture in `tests/test_layer_03f.py::test_ego_motion_detects_jolt`. `mean_v`, by contrast, *does* scale linearly with stride for continuous camera tilt, so it is divided by `frame_stride` to keep `MIRRORING_VFLOW_THRESHOLD` calibrated against per-frame-equivalent rates. This deviates from Option A's literal "multiply by frame_stride" instruction (which is dimensionally backwards for continuous motion) and is documented here so a future audit doesn't reintroduce the error.
+
+11. **`mean_v` Pollution by Foreground Motion in Mirroring Signal (Resolved - May 08)**:
+    - **Problem**: The vertical optical-flow signal was computed as `np.mean(flow[..., 1])` over the *entire* downsampled frame, including the bystander's body. The "Mirroring Metric" then used this signal to gate detection of "downward EgoMotion (camera pans down)". When the bystander was large in frame (close-up, multiple bystanders, or a leaning person filling 30 %+ of pixels), their own vertical motion contaminated the global mean, either fabricating a fake "camera pan down" signal or canceling a real one. The documented intent — "Compute dense Optical Flow on the *background* pixels" — was not realized.
+    - **Solution**: Added a `_bystander_mask_for_frame(t, frame_shape_ds, bystanders)` helper that builds a boolean mask over the downsampled frame zeroing out the nearest-timestamp bbox for every bystander (rectangles scaled by `FRAME_RESIZE_FACTOR`). `_extract_ego_motion` now accepts the `bystanders` list (plumbed in from `process_video`) and computes `mean_v = np.mean(flow[..., 1][mask])` over background pixels only, falling back to the unmasked mean only when every pixel is inside a bbox (degenerate case). The chaos magnitude `np.percentile(mag, 95)` deliberately remains computed over the full frame — chaos is intended to capture overall scene dynamics for flinch correlation, not background-only motion.
+
+12. **VideoCapture Resource Leak on Exceptions (Resolved - May 08)**:
+    - **Problem**: `_extract_ego_motion` and `_extract_and_correlate_pose` both opened `cv2.VideoCapture` instances and relied on a single `cap.release()` call at the end of the happy path. If any intermediate operation raised — `cv2.calcOpticalFlowFarneback` on a malformed frame, `self.model(crop, ...)` failing under MPS memory pressure, `np.percentile(mag, 95)` on an empty array, or any indexing error during keypoint extraction — control jumped to the outer `try/except` in `run`, and the `cap` object was leaked until garbage-collected.
+    - **Solution**: Both methods now wrap their post-`cap.set(...)` logic in `try: ... finally: cap.release()`, so the capture is released regardless of exception path. The duplicated early-return `cap.release()` calls were removed since `finally` handles them uniformly. Resolved Issue 5's `cap.isOpened()` and `fps == 0` guards remain at the top of each method (before the `try` block) since they must run before any state needs cleanup.
+
+13. **YOLOv8 First-Detection Selection Without Bystander Filtering (Resolved - May 08)**:
+    - **Problem**: The pipeline ran YOLOv8-pose on the cropped bystander bbox and unconditionally selected `results[0].keypoints.data[0]` — the first person detection. When the crop contained multiple persons (overlapping bystanders, partial third person at the bbox edge, or a YOLO false positive), keypoint index 0 could correspond to a different person than the intended bystander, invalidating downstream velocity and spine-angle computations across consecutive frames — the same failure mode Resolved Issue 2 fixed for keypoint *indices* but not for *person* selection.
+    - **Solution**: Added a `_select_pose_detection(results, crop_w, crop_h)` helper that computes IoU between each detection's bbox (`results[0].boxes.xyxy[i]`) and the original input crop reference `(0, 0, crop_w, crop_h)`, picking the detection with the highest IoU as the intended bystander. When `boxes` is unavailable (older ultralytics versions, malformed responses), the helper falls back to the largest keypoint-spatial-spread heuristic. The replacement is invoked in `_extract_and_correlate_pose` in place of `results[0].keypoints.data[0]`, preserving cross-frame person identity within a single bystander bbox.
+
+14. **YOLO No-Detection Guard Checked the Wrong Tensor Dimension (Resolved - May 08)**:
+    - **Problem**: The guard `if not results or not results[0].keypoints or results[0].keypoints.data.shape[1] == 0: continue` inspected `shape[1]` — the keypoint-count dimension (always 17 for a successful pose model) — instead of `shape[0]`, the person-count dimension. When YOLO returned zero person detections inside the bystander crop (small/occluded crop, motion blur, or pose-confidence below internal threshold), `data` had shape `(0, 17, 3)`. `shape[1]` was still 17, so the guard evaluated False, control fell through to indexing `data[0]`, raising `IndexError: index 0 is out of bounds for axis 0 with size 0`. The exception was caught by the outer `try/except` in `run`, aborting the *entire* video over a single empty-frame detection.
+    - **Solution**: The new `_select_pose_detection` helper checks `r.keypoints.data.shape[0] == 0` (person count) and returns `None` to signal "no detection in this frame." It additionally guards against malformed tensors with `shape[1] < 17`. The caller in `_extract_and_correlate_pose` now `continue`s on `None`, so empty-frame detections skip cleanly without aborting the rest of the reaction window.
+
+15. **Mirroring Detection Inherits the Chaos-Floor False-Negative (Resolved - May 08)**:
+    - **Problem**: Resolved Issue 3 added an absolute chaos floor (`max_chaos_score < 3.0`) that returned an empty spike list from `_extract_ego_motion`, suppressing every ego spike. Downstream, `_correlate_mirroring` iterated `ego_spikes` to gate detection. When the spike list was empty, mirroring was never evaluated. However, the documented intent of mirroring — "If the EgoMotion pans down rapidly (POV person leaning over), and the bystander's spine keypoints angle inward congruently" — does not require *chaotic* camera motion. A calm, deliberate downward camera tilt while the parent leans toward a fallen child is exactly the scenario the layer should catch, yet it produced no chaos spike, no ego_spike, and therefore no mirroring detection. The chaos-floor fix correctly suppressed flinch false-positives but inadvertently suppressed legitimate mirroring true-positives.
+    - **Solution**: `_extract_ego_motion` now returns three parallel signals: `(chaos_spikes, vertical_flow_timeline, norm_max_chaos)`. `chaos_spikes` is still subject to the 3.0 floor for flinch correlation; `vertical_flow_timeline` is the full unfiltered `[(t, mean_v), ...]` series and is always populated. `_correlate_mirroring` now consumes `vertical_flow_timeline` directly, scanning for sustained `v_flow < MIRRORING_VFLOW_THRESHOLD` regions independent of the chaos floor. The flinch false-positive suppression remains intact (chaos-floor still gates the spike list); calm-but-tilting POV footage now correctly produces mirroring detections when the bystander's spine angle changes congruently. `process_video`'s sentinel logic was updated so a video with no chaos spikes but a populated vertical-flow timeline still proceeds to per-bystander pose evaluation rather than short-circuiting on `no_ego_spikes`.
+
+16. **`prev_kpts_by_idx` Reset Broke Velocity Chain on Sparse Detection Failures (Resolved - May 08)**:
+    - **Problem**: The pose extraction loop assigned `prev_kpts_by_idx = current_kpts_by_idx` unconditionally, even when `current_kpts_by_idx` was empty (every relevant keypoint fell below the 0.5 confidence threshold for that frame). On the next iteration, `prev_kpts_by_idx` was `{}`, the `common_keys` intersection with the new frame was empty, and no velocity was recorded. Velocity computation only resumed after two *consecutive* frames with high-confidence keypoints. For bystander reaction windows where motion blur, partial occlusion (e.g., a hand passing in front of the face during a flinch), or YOLO confidence dips intermittently dropped frames, the velocity chain repeatedly reset, and the peak velocity from the actual flinch could be missed entirely.
+    - **Solution**: `prev_kpts_by_idx` and `prev_t` are now only updated when `current_kpts_by_idx` is non-empty — a failed-detection frame leaves the prior reference in place so the next successful frame can still compute velocity. To prevent stale comparisons across long occlusions, the velocity computation is gated on `0 < dt <= PREV_KPTS_CARRY_FORWARD_SEC` (0.5 s); gaps longer than the cap silently skip that velocity sample and wait for the next pair. Velocities computed across a small gap use the actual elapsed `dt`, so larger gaps yield naturally lower magnitudes — slight signal attenuation rather than total loss, which aligns with the spirit of Resolved Issue 2's keypoint-index fix.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Skipped Videos Reprocessed on Every Resume
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:99-117`. When `process_video` returns `None` (file missing at line 127, no bystanders/tasks at line 134, no qualifying ego spikes at line 151, all bystanders yield no `pose_velocities` at line 367, or every reaction window is filtered out), the `if result:` guard skips both `results.append(...)` and `self.processed_ids.add(video_id)`. Subsequent resume runs re-iterate these videos, re-execute Farneback optical flow over the entire reaction window, and re-run YOLOv8-pose inference per sampled frame, only to discard the result again. For batches with many edge-case videos (e.g., bystanders out-of-frame during the reaction window, or calm videos that fail the chaos floor), this consumes substantial MPS time on guaranteed no-op work. Errors caught by the `except` branch at line 116 similarly never mark `video_id` processed.
+_No unresolved issues at this time._
 
-**Option A (recommended)**: **Sentinel-Record Tracking** — When `process_video` returns `None`, write a sentinel record (e.g., `{"video_id": ..., "layer": "03f_motor_resonance", "tasks_analyzed": [], "skipped_reason": "no_ego_spikes" | "no_pose_data" | "no_bystanders"}`) to results and mark the id processed.
-  - *Pros*: Persists skip decisions; downstream consumers gain visibility into why a video was excluded; resume cost drops to O(JSON-load + set-membership).
-  - *Cons*: Output JSON inflates with empty entries; downstream consumers must filter on `tasks_analyzed` length or `skipped_reason`.
-
-**Option B**: **Skip Manifest Sidecar** — Maintain `03f_skipped.json` listing video_ids that produced no output, short-circuit them at the top of the per-entry loop alongside `processed_ids`.
-  - *Pros*: Keeps the main result JSON clean; explicit skip log is easy to audit.
-  - *Cons*: Two-file state machine to maintain; risk of skip-manifest/result-manifest drift if writes aren't atomic.
-
-**Option C**: **Always-Mark-Processed Policy** — Always add `video_id` to `processed_ids` after `process_video` returns regardless of value, persisting `processed_ids` to disk separately.
-  - *Pros*: Cleanly decouples "did we attempt this?" from "did it produce output?"; minimal JSON inflation.
-  - *Cons*: Adds a third state file; tests must mock or write the new file; loses the rationale for *why* a video was skipped.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: `_extract_ego_motion` Reads Every Source Frame at Full FPS
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:204-238`. The method seeks to `start_frame = int(start_sec * fps)` and increments `current_frame_idx` by 1 in every iteration (`current_frame_idx += 1` at line 238), reading and Farneback-flowing *every* frame in the reaction window. For a 30 FPS source and a 5-second reaction window, this is 150 dense optical-flow computations per task per video, which dominates wall-clock per video and scales poorly. Sister layer 03d's `_extract_ego_motion_noise` (in `src/layer_03d_proxemic_kinematics/pipeline.py`) follows the same pattern, so the cost compounds across the pipeline. The pipeline already downsamples each frame to 0.5x resolution (lines 215, 226), but does not subsample temporally.
-
-**Option A (recommended)**: **Adaptive Frame Stride for Optical Flow** — Skip frames so that effective flow-FPS is ~10 Hz (e.g., `frame_stride = max(1, int(fps / 10))`), iterating `current_frame_idx += frame_stride`. The `dt` between consecutive `prev_gray` and `gray` is correspondingly larger; multiply optical-flow magnitude by `frame_stride` so the chaos score remains comparable to per-frame magnitude.
-  - *Pros*: 3x speedup on 30 FPS videos with negligible loss in jolt detectability (jolts last 100-300ms and are easily caught by 10 Hz sampling); preserves the existing chaos-score scale via the multiplier; no schema change.
-  - *Cons*: Borderline jolts shorter than 100ms could be missed; requires the multiplier to be calibrated; sister layer 03d would need a parallel update for consistency.
-
-**Option B**: **Cache Ego-Motion Per (video_id, window) Tuple** — Persist computed `chaos_scores` lists keyed by video_id and reaction window to a sidecar JSON. On re-run or resume, load from cache if hit.
-  - *Pros*: Eliminates repeat cost on re-runs entirely; useful during ablation experiments where pose detection is being tweaked.
-  - *Cons*: Adds disk I/O and cache-invalidation logic; first run sees no benefit; cache size grows with batch.
-
-**Option C**: **Batch Frame Reads via `cv2.VideoCapture.read()` Streaming** — Replace per-frame `cap.set(...)` seeking + read with a streaming read loop that pre-buffers frames and emits flow lazily.
-  - *Pros*: Eliminates seek overhead which can be ~ms-per-frame on long-GOP codecs.
-  - *Cons*: More complex control flow; the current code already streams via sequential `cap.read()` after a single seek, so gain is small.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: `mean_v` Pollution by Foreground Motion in Mirroring Signal
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:230` and `pipeline.py:418-440`. The vertical optical-flow signal is computed as `mean_v = np.mean(flow[..., 1])` over the *entire* downsampled frame, including the bystander's body. The "Mirroring Metric" then uses this signal at `pipeline.py:426` (`if v_flow < -1.0`) to gate detection of "downward EgoMotion (camera pans down)". When the bystander is large in frame (close-up, multiple bystanders, or a leaning person filling 30%+ of pixels), their own vertical motion contaminates the global mean, either fabricating a fake "camera pan down" signal or canceling a real one. The documented intent — "Compute dense Optical Flow on the *background* pixels" — is not realized; the implementation flows the entire frame.
-
-**Option A (recommended)**: **Mask Out Bystander Bounding Boxes Before Averaging** — Before `np.mean(flow[..., 1])`, zero out (or mask) the regions inside all bystander bboxes for the current frame. Compute the mean only over remaining (background) pixels.
-  - *Pros*: Aligns implementation with documented intent ("background pixels"); cheap (single mask construction per frame); leverages already-available bystander bbox data.
-  - *Cons*: Bbox masks are rectangular and may exclude legitimate background pixels at the edges; requires plumbing bystander bboxes into `_extract_ego_motion`.
-
-**Option B**: **Use the Median Instead of Mean** — Replace `np.mean(flow[..., 1])` with `np.median(flow[..., 1])`. Foreground motion contributes ~30% of pixels in the worst case, so median is robust as long as the bystander occupies <50% of frame.
-  - *Pros*: One-line change; no bbox plumbing; resistant to localized motion.
-  - *Cons*: Fails when foreground exceeds 50% of frame; biases toward zero in mostly-static frames; loses signal magnitude for legitimate global pans.
-
-**Option C**: **Border-Strip Sampling** — Compute `mean_v` only over the outer 20% border of the frame (top, bottom, left, right strips), which almost always contains background.
-  - *Pros*: No bbox plumbing; deterministic background sampling.
-  - *Cons*: POV videos often have no clear "edge background" (head-mounted camera filling frame); falsely zeroes the signal in close-quarters scenes.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 4: VideoCapture Resource Leak on Exceptions
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:194-259` (`_extract_ego_motion`) and `pipeline.py:261-365` (`_extract_and_correlate_pose`). Both methods open `cv2.VideoCapture` instances and rely on a single `cap.release()` call at the end of the happy path. If any of the intermediate operations raise — `cv2.calcOpticalFlowFarneback` on a malformed frame, `self.model(crop, ...)` failing under MPS memory pressure, `np.percentile(mag, 95)` on an empty array, or any `numpy`/`cv2` error during keypoint extraction — control jumps to the outer `try/except` at `pipeline.py:116` (`run`), and the `cap` object is leaked until garbage-collected. Resolved Issue 5 only added guards for `cap.isOpened()` and `fps == 0` at the *top* of the method, not exception-safe cleanup throughout.
-
-**Option A (recommended)**: **Wrap `cap` in `try/finally`** — Refactor both methods to wrap their post-`cap.set()` logic in `try: ... finally: cap.release()`. Removes the duplicated `cap.release()` call from both early-return paths since `finally` handles them uniformly.
-  - *Pros*: Robust to all exception types; idiomatic Python; eliminates duplicated release calls; minimal logic change.
-  - *Cons*: Slightly larger indentation diff; need to ensure no return statement bypasses the finally.
-
-**Option B**: **Use `contextlib.closing(cap)` Context Manager** — Wrap `cap` with `contextlib.closing(cv2.VideoCapture(...))` and use a `with` block for the entire method body.
-  - *Pros*: Pythonic; explicit lifecycle; mirrors file-handle patterns.
-  - *Cons*: `cv2.VideoCapture` doesn't natively implement context-manager protocol; `closing` calls `cap.close()` which doesn't exist (would need `cap.release` shim); slightly awkward.
-
-**Option C**: **Subclass `cv2.VideoCapture` With Context-Manager Support** — Create a `ManagedVideoCapture` helper that supports `__enter__`/`__exit__` and use it across all layers.
-  - *Pros*: Reusable across 03a, 03d, 03e, 03f; clean call sites.
-  - *Cons*: Touches multiple layers (out of scope for 03f-only audit); adds a shared utility module.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 5: YOLOv8 First-Detection Selection Without Bystander Filtering
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:322`. The pipeline runs YOLOv8-pose on the cropped bystander bbox and unconditionally selects `results[0].keypoints.data[0]` — the first person detection. When the crop contains multiple persons (overlapping bystanders, a partial third person at the bbox edge, the POV actor's reflected hand, or YOLO false positives picking up the photographer's body in a mirror), keypoint index 0 may correspond to a different person than the intended bystander. This invalidates downstream velocity, spine-angle, and resonance computations because keypoints across consecutive frames may belong to different individuals — the same failure mode that Resolved Issue 2 fixed for keypoint *indices* but not for *person* selection.
-
-**Option A (recommended)**: **Bbox-IoU Selection** — When YOLO returns multiple person detections in the crop, compute IoU between each detection's bbox (`results[0].boxes`) and the original input crop bbox `(0, 0, crop_w, crop_h)`. Pick the detection with the highest IoU (i.e., the one most aligned with the cropped bystander).
-  - *Pros*: Principled selection; preserves cross-frame person identity within a single bystander; cheap.
-  - *Cons*: Multiple bystanders close together still ambiguous; relies on YOLO box accuracy.
-
-**Option B**: **Largest-Detection Heuristic** — Pick the detection with the largest bbox area, on the assumption that the intended bystander dominates the crop.
-  - *Pros*: One-line change; no IoU computation.
-  - *Cons*: Fails when a partial third-party detection is closer to the camera than the bystander; less robust than IoU.
-
-**Option C**: **Run YOLO With Tracking (`model.track`) on the Full Frame** — Replace per-frame crop+detect with `ultralytics`' built-in tracker on the full frame; map detections back to the bystander via bbox IoU with the input bystander bbox.
-  - *Pros*: Cross-frame person identity is maintained by the tracker; eliminates the "first detection" ambiguity entirely.
-  - *Cons*: Larger refactor; tracker state must be reset per video; full-frame inference is slower than crop inference.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 6: Hardcoded Heuristic Constants Throughout the Detection Path
-**Status**: ⚠️ Confirmed Unresolved — Magic numbers governing classification decisions are inlined as literals: chaos floor `3.0` at `pipeline.py:253`, max-chaos normalizer `20.0` at `pipeline.py:249`, relative spike threshold `0.7` at `pipeline.py:257`, frame-resize factor `0.5` at `pipeline.py:215, 226`, keypoint confidence threshold `0.5` at `pipeline.py:329`, velocity normalizer `0.5` at `pipeline.py:381`, velocity cap `10.0` at `pipeline.py:381`, reaction-window cap `0.5s` at `pipeline.py:391`, empathy normalizer `5.0` at `pipeline.py:401`, mirroring vertical-flow threshold `-1.0` at `pipeline.py:426`, mirroring time window `±0.5s` at `pipeline.py:427-428`, mirroring-delta threshold `0.1` at `pipeline.py:435`, and mirroring-scalar normalizer `0.5` at `pipeline.py:437`. None are exposed via constructor arguments, configuration, or class-level constants. Tuning the pipeline (e.g., adjusting flinch sensitivity for a different age cohort, recalibrating after a YOLOv8 model swap, or adapting the chaos floor for handheld vs. head-mounted POV) requires source edits.
-
-**Option A (recommended)**: **Class-Level Tuning Constants Block** — Hoist all heuristic constants into a `# --- Detection Tuning ---` block at the top of `MotorResonancePipeline` (e.g., `CHAOS_FLOOR = 3.0`, `CHAOS_NORMALIZER = 20.0`, `SPIKE_RELATIVE_THRESHOLD = 0.7`, `KPT_CONFIDENCE_THRESHOLD = 0.5`, `VELOCITY_NORMALIZER_DIAG_PER_SEC = 0.5`, `VELOCITY_CAP = 10.0`, `RESONANCE_WINDOW_SEC = 0.5`, `EMPATHY_NORMALIZER = 5.0`, `MIRRORING_VFLOW_THRESHOLD = -1.0`, `MIRRORING_TIME_WINDOW_SEC = 0.5`, `MIRRORING_DELTA_THRESHOLD = 0.1`, `MIRRORING_SCALAR_NORMALIZER = 0.5`).
-  - *Pros*: Centralizes tuning surface; easy to override via subclassing for ablations; zero runtime overhead; no schema change.
-  - *Cons*: Still requires code edit to retune in production; not externally configurable per-batch.
-
-**Option B**: **Config File (YAML/JSON)** — Load constants from a `motor_resonance_config.yaml` co-located with the manifest path.
-  - *Pros*: Non-developers can retune; supports per-experiment configurations; auditable as artifacts.
-  - *Cons*: Adds a config-loader dependency; tests must construct config fixtures; potential for misconfiguration drift.
-
-**Option C**: **Constructor Arguments with Defaults** — Add named parameters to `__init__` with sensible defaults pulled from current literals.
-  - *Pros*: Pythonic; tests can override per-test; type-hints document the tuning surface.
-  - *Cons*: Constructor-signature explosion (12+ new args); orchestration code must thread parameters through.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 7: Mirroring Detection Inherits the Chaos-Floor False-Negative
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:253` and `pipeline.py:414-440`. Resolved Issue 3 added an absolute chaos floor (`max_chaos_score < 3.0`) that returns `[], norm_max_chaos` from `_extract_ego_motion`, suppressing every ego spike. Downstream, `_correlate_mirroring` iterates `ego_spikes` to gate detection (line 418). When the spike list is empty, mirroring is never evaluated. However, the documented intent of mirroring — "If the EgoMotion pans down rapidly (POV person leaning over), and the bystander's spine keypoints angle inward congruently" — does not require *chaotic* camera motion. A calm, deliberate downward camera tilt while the parent leans toward a fallen child is exactly the scenario the layer should catch, yet it produces no chaos spike, no ego_spike, and therefore no mirroring detection. The chaos-floor fix correctly suppresses flinch false-positives but inadvertently suppresses legitimate mirroring true-positives.
-
-**Option A (recommended)**: **Decouple Mirroring Gating From Chaos-Floor Spikes** — Have `_extract_ego_motion` return two parallel signals: `chaos_spikes` (subject to the 3.0 floor for flinch correlation) and a separate `vertical_flow_timeline` (full timeseries of `mean_v` per frame, unfiltered). `_correlate_mirroring` consumes the unfiltered vertical-flow timeline directly, scanning for sustained `v_flow < -1.0` regions independent of the chaos floor.
-  - *Pros*: Aligns with the documented semantic — mirroring can occur with calm motion; preserves the flinch false-positive suppression; minimal schema change (only an additional return value).
-  - *Cons*: Slightly more memory per video (full timeline vs. spike list); two thresholds (chaos floor and vertical-flow threshold) now live independently and must be tuned separately.
-
-**Option B**: **Lower-Floor for Vertical-Flow Spikes Only** — Apply a separate, looser floor (e.g., `abs(mean_v) > 0.5`) when constructing the spike list, so vertical-flow events can pass even when chaos magnitude is below 3.0. Tag each spike with `is_chaos_spike` vs `is_vertical_only_spike`; flinch correlation uses chaos spikes, mirroring correlation uses both.
-  - *Pros*: Single shared spike pipeline; explicit tagging makes downstream gating obvious.
-  - *Cons*: Spike-record schema grows; correlation methods must read the new tag; two thresholds in the same path is harder to reason about than two separate signals.
-
-**Option C**: **Always Emit Spikes, Tag With Confidence** — Remove the chaos-floor early-return entirely; always return spikes but tag them with a confidence scalar (`norm_max_chaos`). Downstream methods decide whether to act based on confidence.
-  - *Pros*: Maximum information preserved; no premature filtering.
-  - *Cons*: Reverts the false-positive fix from Resolved Issue 3 unless every downstream consumer correctly checks the confidence tag; risks regressing flinch detection.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 8: YOLO No-Detection Guard Checks the Wrong Tensor Dimension
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:317`. The guard is `if not results or not results[0].keypoints or results[0].keypoints.data.shape[1] == 0: continue`. YOLOv8-pose returns `keypoints.data` with shape `(N, K, 3)` where `N` is the number of detected persons, `K=17` is the COCO keypoint count, and `3` is `(x, y, conf)`. The check `shape[1] == 0` inspects the keypoint-count dimension (always 17 for a successful pose model), not the person-count dimension. When YOLO returns *zero* person detections inside the bystander crop (very small/occluded crop, motion blur, or pose-confidence below internal threshold), `data` has shape `(0, 17, 3)` — `shape[1]` is still 17, so the guard evaluates False, control falls through to line 322 `kpts = results[0].keypoints.data[0].cpu().numpy()`, which raises `IndexError: index 0 is out of bounds for axis 0 with size 0`. The exception is caught by the outer `try/except` in `run()` at line 116, which logs the error and aborts the *entire* video — even though only a single frame in the reaction window had no detection.
-
-**Option A (recommended)**: **Fix the Dimension Index** — Change the guard to `results[0].keypoints.data.shape[0] == 0` (or equivalently `len(results[0].keypoints.data) == 0`). Optionally, also defend against tensors with fewer than 17 keypoints by adding a second clause `or results[0].keypoints.data.shape[1] < 17`.
-  - *Pros*: One-character/line fix; restores the intended behavior of skipping no-detection frames; preserves all other frames' contribution to velocity computation.
-  - *Cons*: None of substance; this is a pure bug fix.
-
-**Option B**: **Wrap Per-Frame Pose Inference in `try/except`** — Surround the `self.model(crop, ...)` call and subsequent indexing in a `try/except (IndexError, AttributeError):` that `continue`s on failure. Treat the original guard as a fast-path optimization.
-  - *Pros*: Defensive against any unexpected ultralytics API changes; resilient to other unanticipated indexing failures.
-  - *Cons*: Hides legitimate errors behind a broad except; one extra except per frame is overhead; treats a bug as a tolerable runtime exception rather than fixing it.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 9: `prev_kpts_by_idx` Reset Breaks Velocity Chain on Sparse Detection Failures
-**Status**: ⚠️ Confirmed Unresolved — Verified in `pipeline.py:325-362`. The pose extraction loop assigns `prev_kpts_by_idx = current_kpts_by_idx` unconditionally at line 362, even when `current_kpts_by_idx` is empty (i.e., every relevant keypoint fell below the 0.5 confidence threshold for that frame). On the next iteration, `prev_kpts_by_idx` is `{}`, and the `common_keys` intersection at line 350 with the new `current_kpts_by_idx` is empty — no velocity is recorded for that frame either. Velocity computation only resumes after two *consecutive* frames with high-confidence keypoints. For bystander reaction windows where motion blur, partial occlusion (e.g., a hand passing in front of the face during a flinch), or YOLO confidence dips intermittently drop frames, the velocity chain repeatedly resets, and the peak velocity from the actual flinch can be missed entirely. The behavior contradicts Resolved Issue 2's intent, which assumed pairwise comparison would be available across confidence thresholds — the bug shifts the failure mode from cross-body keypoint comparison to *no* comparison at all.
-
-**Option A (recommended)**: **Carry Forward the Last Non-Empty `prev_kpts_by_idx`** — Only update `prev_kpts_by_idx` (and `prev_t`) when `current_kpts_by_idx` is non-empty. A failed-detection frame leaves `prev_kpts_by_idx` unchanged, so the next successful frame still has a reference point for velocity. Cap the carry-forward window (e.g., max 0.5s) to prevent stale comparisons across long occlusions.
-  - *Pros*: Recovers velocity computation across single-frame dropouts; cap prevents pathological stale comparisons; aligns with the spirit of Resolved Issue 2 (compare what's comparable, skip what isn't).
-  - *Cons*: Velocity computed across a gap uses the actual elapsed `dt`, so larger gaps yield lower velocities — slight signal attenuation; cap parameter is one more magic number (relevant to Issue 6).
-
-**Option B**: **Interpolate Missing Frames** — When a frame produces no keypoints, linearly interpolate from the last known `prev_kpts_by_idx` to the next successful frame and record an interpolated velocity at the missing timestamp.
-  - *Pros*: Produces a denser velocity timeseries; smooths over noise.
-  - *Cons*: Fabricates data the model didn't actually see; risk of producing artificially smooth peaks; interpolation between distant frames is unreliable.
-
-**Option C**: **Lower the Keypoint Confidence Threshold to Reduce Dropouts** — Reduce `KPT_CONFIDENCE_THRESHOLD` from 0.5 to 0.3 to ensure most frames produce at least some keypoints.
-  - *Pros*: Fewer empty frames mechanically; one-line change.
-  - *Cons*: Increases noise in keypoint coordinates; doesn't address the root cause (unconditional `prev` assignment); regresses the precision improvement that 0.5 was tuned to provide.
-
-Your selection: Proceed with Option A.
