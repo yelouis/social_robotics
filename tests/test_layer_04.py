@@ -209,11 +209,158 @@ class TestDehydratedExport(unittest.TestCase):
         corrupt_path = self.temp_dir_path / "03z_fake_result.json"
         with open(corrupt_path, 'w') as f:
             f.write("{invalid json!!! ")
-        
+
         aggregator = DataAggregator(str(self.temp_dir_path))
         # Should not raise
         df = aggregator.aggregate()
         self.assertEqual(len(df), 2)
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 10 — per-layer summary registry
+    # ------------------------------------------------------------------
+    def test_layer_03f_summary_scalars_surface_as_columns(self):
+        """03f motor resonance summary scalars (empathy, mirroring, motor_resonance)
+        must appear as Parquet-queryable columns alongside the raw JSON."""
+        path = self.temp_dir_path / "03f_motor_resonance_result.json"
+        with open(path, 'w') as f:
+            json.dump([
+                {
+                    "video_id": "vid1",
+                    "layer": "03f_motor_resonance",
+                    "tasks_analyzed": [
+                        {
+                            "task_id": "t_01",
+                            "ego_kinetic_chaos_score": 0.42,
+                            "per_person": [
+                                {"person_id": 0, "empathy_scalar": 0.8,
+                                 "motor_resonance_detected": True,
+                                 "mirroring_scalar": 0.6, "mirroring_detected": True},
+                                {"person_id": 1, "empathy_scalar": 0.3,
+                                 "motor_resonance_detected": False,
+                                 "mirroring_scalar": 0.1, "mirroring_detected": False},
+                            ],
+                        }
+                    ],
+                }
+            ], f)
+
+        df = DataAggregator(str(self.temp_dir_path)).aggregate()
+        row = df[df['video_id'] == 'vid1'].iloc[0]
+        self.assertAlmostEqual(row['03f_motor_resonance_max_empathy_scalar'], 0.8, places=3)
+        self.assertTrue(row['03f_motor_resonance_any_motor_resonance'])
+        self.assertAlmostEqual(row['03f_motor_resonance_max_mirroring_scalar'], 0.6, places=3)
+        self.assertTrue(row['03f_motor_resonance_any_mirroring'])
+        self.assertAlmostEqual(row['03f_motor_resonance_max_ego_chaos_score'], 0.42, places=3)
+
+    def test_layer_03e_summary_scalars_surface_as_columns(self):
+        path = self.temp_dir_path / "03e_affirmation_gesture_result.json"
+        with open(path, 'w') as f:
+            json.dump([
+                {
+                    "video_id": "vid1",
+                    "layer": "03e_affirmation_gesture",
+                    "tasks_analyzed": [
+                        {
+                            "task_id": "t_01",
+                            "per_person": [
+                                {"person_id": 0, "gesture_detected": "affirming_nod", "confidence": 0.9},
+                                {"person_id": 1, "gesture_detected": "none", "confidence": 0.1},
+                            ],
+                        }
+                    ],
+                }
+            ], f)
+
+        df = DataAggregator(str(self.temp_dir_path)).aggregate()
+        row = df[df['video_id'] == 'vid1'].iloc[0]
+        self.assertAlmostEqual(row['03e_affirmation_gesture_max_gesture_confidence'], 0.9, places=3)
+        self.assertTrue(row['03e_affirmation_gesture_any_nod_detected'])
+        self.assertFalse(row['03e_affirmation_gesture_any_shake_detected'])
+
+    def test_layer_03g_summary_scalars_surface_as_columns(self):
+        path = self.temp_dir_path / "03g_shared_reality_result.json"
+        with open(path, 'w') as f:
+            json.dump([
+                {
+                    "video_id": "vid1",
+                    "layer": "03g_shared_reality",
+                    "tasks_analyzed": [
+                        {"task_id": "t_01",
+                         "post_climax_camera_shift_vector": [12.0, 3.0],
+                         "bystander_centered_in_fov": True,
+                         "social_reference_sought": True}
+                    ],
+                }
+            ], f)
+
+        df = DataAggregator(str(self.temp_dir_path)).aggregate()
+        row = df[df['video_id'] == 'vid1'].iloc[0]
+        self.assertTrue(row['03g_shared_reality_any_social_reference'])
+        self.assertTrue(row['03g_shared_reality_any_bystander_centered'])
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 11 — top-level dict flattening
+    # ------------------------------------------------------------------
+    def test_03a_processing_meta_dict_is_flattened(self):
+        """Top-level provenance dicts (e.g. 03a's processing_meta) must surface
+        as flattened columns rather than being silently dropped."""
+        # Overwrite the 03a result with one that includes processing_meta
+        with open(self.result_03a_path, 'w') as f:
+            json.dump([{
+                "video_id": "vid1",
+                "layer": "03a_attention",
+                "aggregate": {"num_bystanders_tracked": 2, "any_person_engaged": True},
+                "per_person": [{"person_id": 0, "average_attention_score": 0.9}],
+                "processing_meta": {
+                    "model_used": "l2cs_net_3d_gaze",
+                    "sampling_fps_effective": "fixed_8fps",
+                },
+            }], f)
+
+        df = DataAggregator(str(self.temp_dir_path)).aggregate()
+        row = df[df['video_id'] == 'vid1'].iloc[0]
+        self.assertEqual(
+            row['03a_attention_processing_meta_model_used'], 'l2cs_net_3d_gaze',
+        )
+        self.assertEqual(
+            row['03a_attention_processing_meta_sampling_fps_effective'], 'fixed_8fps',
+        )
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 14 — schema hash versioning
+    # ------------------------------------------------------------------
+    def test_schema_version_includes_column_hash(self):
+        """add_export_metadata must emit a SemVer+hash schema_version that
+        diffs mechanically when columns change."""
+        aggregator = DataAggregator(str(self.temp_dir_path))
+        df = aggregator.aggregate()
+        df = aggregator.add_export_metadata(df, active_layers=["03a", "03b", "03c"])
+        self.assertRegex(df.attrs['schema_version'], r'^1\.0\.0\+[0-9a-f]{6}$')
+
+        # Adding a column changes the hash suffix
+        df2 = df.copy()
+        df2['new_column'] = 0
+        df2 = aggregator.add_export_metadata(df2, active_layers=["03a", "03b", "03c"])
+        self.assertNotEqual(df.attrs['schema_version'], df2.attrs['schema_version'])
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 15 — graceful handling of records without video_id
+    # ------------------------------------------------------------------
+    def test_record_missing_video_id_is_skipped_not_crash(self):
+        """A malformed layer record without video_id must be skipped with a
+        warning rather than aborting the entire aggregation run."""
+        path = self.temp_dir_path / "03y_partial_result.json"
+        with open(path, 'w') as f:
+            json.dump([
+                {"video_id": "vid1", "layer": "03y", "aggregate": {"score": 0.5}},
+                {"layer": "03y", "aggregate": {"score": 0.0}},  # malformed: no video_id
+            ], f)
+
+        # Must not raise
+        df = DataAggregator(str(self.temp_dir_path)).aggregate()
+        # vid1's column is still present despite the malformed sibling record
+        row = df[df['video_id'] == 'vid1'].iloc[0]
+        self.assertAlmostEqual(row['03y_partial_score'], 0.5, places=3)
 
 
 if __name__ == '__main__':
