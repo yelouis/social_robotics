@@ -21,7 +21,7 @@ First, we must quantify the severity of the POV actor's physical state.
 ### 2. Bystander Pose Extraction (YOLOv8 Pose)
 We must track how the bystander responds physically. 
 - **Recommended SOTA Toolkit**: Use the **Ultralytics YOLO** framework, specifically loading the **YOLOv8-pose** model architectures (`yolov8n-pose.pt`). 
-- **Mechanism**: Run YOLOv8-pose on the bystander's bounding box during the reaction window. It natively supports PyTorch MPS tensors on the M4 Pro for target real-time FPS.
+- **Mechanism**: Run YOLOv8-pose on the bystander's bounding box during the reaction window. It natively supports PyTorch MPS tensors on Apple Silicon (validated on the **Mac Studio M4 Max** target host) for target real-time FPS.
 
 ### 3. Correlating the Resonance
 - **The Flinch Metric**: Calculate the velocity of the bystander's wrist/shoulder keypoints. If they rapidly elevate (throwing hands up defensively) within `0.5s` of a spike in POV Ego-Kinetic Energy, we have detected a sympathetic physical flinch. 
@@ -55,7 +55,7 @@ We must track how the bystander responds physically.
 
 ## Verification & Validation Check
 - **Singular Video Test**: Extract a known "trip and fall" clip. Render a debug video that outputs the EgoMotion scalar text on the top-left and draws the YOLOv8 pose skeleton over the bystander. Verify the `bystander_pose_velocity_peak` triggers immediately after the camera jolt.
-- **Batch Test**: Run a subset iteration monitoring YOLOv8 inference speed. Ensure the model instantiation uses PyTorch MPS tensors correctly on the **24GB RAM Mac mini M4 Pro** so that operations process at target real-time FPS without falling back to slow CPU loops.
+- **Batch Test**: Run a subset iteration monitoring YOLOv8 inference speed. Ensure the model instantiation uses PyTorch MPS tensors correctly on the **Mac Studio (M4 Max, 64 GB unified memory)** so that operations process at target real-time FPS without falling back to slow CPU loops.
 
 ---
 
@@ -127,5 +127,35 @@ We must track how the bystander responds physically.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: YOLOv8n-pose (Nano) Selected for 24 GB Mac Mini Headroom — Larger Variants Now Viable
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #1 substituted MMPose/RTMPose with `ultralytics` YOLOv8-pose specifically using the **`yolov8n-pose.pt`** (nano, ~6.5 MB) variant. The nano tier was driven by the 24 GB Mac mini M4 Pro budget — alongside L2CS-Net (03a), Py-Feat (03b), emotion2vec+ (03c), and Depth Anything V2 + SAM ViT-Base (03d), the resident set was already tight. `yolov8s-pose` (~12 MB), `yolov8m-pose` (~26 MB), `yolov8l-pose` (~52 MB), and `yolov8x-pose` (~140 MB) all produce measurably better keypoint accuracy on partially-occluded bystanders — the dominant failure mode for the `bystander_pose_velocity_peak` flinch metric. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, every variant up to `yolov8x-pose` is loadable with no displacement of any other 03 layer.
+
+**Option A (recommended)**: **Promote `yolov8m-pose` as Default; Larger and Smaller Tiers as Opt-In** — Switch the default model identifier in `MotorResonancePipeline` from `yolov8n-pose.pt` to `yolov8m-pose.pt`. Add a `SAF_YOLO_POSE_TIER=n|s|m|l|x` env override. Re-run the Resolved Issue #2 ("Keypoint Index Misalignment") and Resolved Issue #4 ("Crop-Local Pixel Velocity") test fixtures plus the existing 03f test suite to confirm classification accuracy holds. Validate per-frame inference latency on the M4 Max stays under the per-task wall-clock budget.
+  - *Pros*: Measurable keypoint-accuracy win on the partially-occluded-bystander regime that drives the flinch false-positive/negative rate; one model ID swap; preserves the same COCO keypoint schema so Resolved Issue #2's keypoint-dict approach is unchanged; ~26 MB resident is still negligible on the new host.
+  - *Cons*: Per-frame inference latency rises from ~8 ms (nano) to ~24 ms (medium) on the M4 Max — still well within budget but worth measuring; `KPT_CONFIDENCE_THRESHOLD = 0.5` (Resolved Issue #8) may need recalibration for the medium model's different confidence distribution; pulls ~26 MB into `~/.cache/ultralytics`.
+
+**Option B**: **Jump Directly to `yolov8x-pose` for Maximum Accuracy** — Use the largest variant.
+  - *Pros*: Highest accuracy ceiling; furthest insurance against partial-occlusion false-negatives.
+  - *Cons*: ~140 MB resident plus the largest cached MPS activations; per-frame latency ~80 ms — exceeds the documented "real-time FPS" target in the Mechanism section; gain over `m` is marginal on the bystander-crop input size that 03f actually uses.
+
+**Option C**: **Stay on `yolov8n-pose`** — Defer the upgrade.
+  - *Pros*: Zero migration risk.
+  - *Cons*: Forfeits the keypoint-accuracy headroom; the M4 Max's flinch-detection precision stays gated on the smallest available model.
+
+Your selection: _____
+
+---
+
+### Issue 2: RTMPose Re-Evaluation Now That `mmcv` Compilation Constraint May No Longer Apply
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issues #1 and #6 documented that `MMPose` and `RTMPose` were dropped because `mmcv` compilation failed on Apple Silicon (M4 Pro) at the time. The same compilation chain may behave differently on the M4 Max with a more recent Clang baseline and current `mmcv-full` releases (see `ml_dependencies.md` Unresolved Issue 2). RTMPose-l outperforms YOLOv8x-pose on COCO-keypoints by ~3 AP, which is potentially material for the flinch-velocity metric.
+
+**Option A (recommended)**: **Wait for `ml_dependencies.md` Issue 2 Verdict; File a Concrete A/B If `mmcv` Builds** — This issue is gated on the compilation-status question being answered in `ml_dependencies.md` Unresolved Issue 2. If that issue resolves with a working `mmcv` install on M4 Max, file a follow-up here with a concrete RTMPose-l vs YOLOv8m-pose A/B against the existing 03f test fixtures.
+  - *Pros*: Avoids duplicating the compilation investigation; keeps the decision-making in dependency-order; ensures the model choice is benchmark-driven.
+  - *Cons*: This issue blocks on another issue.
+
+**Option B**: **Drop RTMPose From Consideration Permanently** — Treat YOLOv8-pose as the permanent production model regardless of `mmcv` status.
+  - *Pros*: Simplest dependency story.
+  - *Cons*: Forfeits a potentially measurable accuracy win on the flinch primary metric.
+
+Your selection: _____
 

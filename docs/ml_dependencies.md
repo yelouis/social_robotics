@@ -27,7 +27,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 > **Task Climax Detection (Node 02)**: This pipeline does NOT use a dedicated highlight detection model. Instead, it uses a **hybrid Optical Flow + VLM refinement** approach: (1) OpenCV's `cv2.calcOpticalFlowFarneback` finds the kinetic peak within each task segment, (2) for slow/cognitive tasks, **Qwen2.5-VL** VLM refines the climax timestamp using the task label. This requires zero new model downloads.
 
 > [!IMPORTANT]
-> **Gemma 4 variant**: The documented "~2.5 GB" refers specifically to the `gemma4:e4b` (4B parameter, 4-bit quantized) variant. Do NOT pull larger variants (`gemma4:26b` at ~15 GB or `gemma4:31b` at ~18 GB) as they will consume the entire 24GB unified memory of the Mac mini M4 Pro and cause system instability.
+> **Gemma 4 variant**: The documented "~2.5 GB" refers specifically to the `gemma4:e4b` (4B parameter, 4-bit quantized) variant, which remains the current production default. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, larger variants (`gemma4:26b` at ~15 GB or `gemma4:31b` at ~18 GB) are now physically loadable without OOM, but switching the production default requires re-validating the 03b prompt suite and re-tuning Resolved Issue #7's JSON-schema retries — see the Unresolved Issues section of `03b_reasonable_emotion_layer.md` for the upgrade trade-off matrix.
 
 ## 2. Core Libraries
 
@@ -40,11 +40,11 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
 | **transformers** | Loading Hugging Face models like Depth Anything V2 | ~150 MB | Python virtual environment | |
 | **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment | |
-| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, Py-Feat, etc. | ~2-3 GB | Python virtual environment | MPS backend works on M4 Pro |
+| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, Py-Feat, etc. | ~2-3 GB | Python virtual environment | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
 | **SciPy** | Signal processing (Affirmation Gestures) | ~150 MB | Python virtual environment | |
-| **MMPose** (+ mmengine, mmcv) | Framework for RTMPose (Deferred/Optional) | ~500 MB - 1 GB (total stack) | Python virtual environment | Requires source install; MMCV compilation fails on Apple Silicon (M4 Pro) |
+| **MMPose** (+ mmengine, mmcv) | Framework for RTMPose (Deferred/Optional) | ~500 MB - 1 GB (total stack) | Python virtual environment | Requires source install; MMCV compilation historically failed on Apple Silicon (M4 Pro). Re-verify on M4 Max + current `mmcv-full` releases before re-introducing this dependency. |
 
 ## 3. System Tools
 
@@ -55,4 +55,40 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **wget / curl** | General dataset ingestion and script downloads | System Install |
 | **ffmpeg** | Audio extraction and video frame manipulation | System Install |
 
-> **Storage Directive**: For all extremely large datasets (e.g., ego4d output directories, which can be Terabytes) and heavy VLM/LLM model blobs, map the storage volumes explicitly to the **2TB "Extreme SSD"** to preserve the internal Mac mini M4 Pro storage and handle the massive size of the videos.
+> **Storage Directive**: For all extremely large datasets (e.g., ego4d output directories, which can be Terabytes) and heavy VLM/LLM model blobs, map the storage volumes explicitly to the **2TB "Extreme SSD"** to preserve the internal Mac Studio SSD (M4 Max host) and handle the massive size of the videos. This directive is independent of host RAM — it applies equally to the Mac Studio host and any legacy Mac mini fallback.
+
+---
+
+## ⚠️ Unresolved Issues & Suggestions
+
+### Issue 1: Default Model Tier Calibrated to 24 GB Mac Mini, Underutilizes 64 GB Mac Studio Budget
+**Status**: ⚠️ Confirmed Unresolved — Every Ollama/Hugging Face model in the "Local Models" table was selected at the smallest viable tier specifically to fit within the prior 24 GB unified-memory ceiling: `gemma4:e4b` (4B/4-bit instead of 27B), `yolov8n-pose` (nano instead of x/large), Depth Anything **V2-Small** (~25M params instead of V1-Large/Metric3D v2), SAM **ViT-Base** (~93M params instead of ViT-Huge). With the new **Mac Studio (M4 Max, 64 GB unified memory)** host, the steady-state combined resident set of all 03 layers' larger variants would still fit within ~40 GB (leaving ~24 GB for OS + cached intermediates), unlocking measurable quality gains that the smaller tiers cannot match. The current defaults are now a memory-headroom regression on the new host.
+
+**Option A (recommended)**: **Tier-Per-Host Configuration Layer** — Introduce a single `models_config.yaml` (or `models_config.py`) that maps each layer to a (small, medium, large) tier with explicit model identifiers and approximate sizes. Add a startup banner that prints the active tier + total estimated resident set. Default to "medium" on hosts with ≥48 GB unified memory (auto-detected via `psutil.virtual_memory().total`), "small" otherwise. Layer pipelines read their model ID from this config instead of hardcoding.
+  - *Pros*: One configuration surface controls every layer's quality/memory trade-off; auto-detection prevents accidental OOM on smaller hosts; researchers can override per-experiment via env var.
+  - *Cons*: Requires touching every 03x layer constructor (8 files); adds a startup dependency that must be validated against the existing fail-fast pattern; medium-tier weights need to be downloaded and validated for each upgraded model.
+
+**Option B**: **Per-Layer Issues Filed in Each 03x Doc** — Keep `ml_dependencies.md` as a flat catalog and let each layer's own doc carry its own model-tier upgrade decision (e.g., 03b decides Gemma 4 27B vs 4B in its own unresolved issues block).
+  - *Pros*: Preserves the current "layer is the unit of work" architecture; smaller PRs; each tier change can be benchmarked independently.
+  - *Cons*: No single source of truth for the host's total resident-set budget; risk of two layers independently choosing "large" and collectively exceeding the 40 GB target.
+
+**Option C**: **Stay Conservative; Only Upgrade Layers Where Quality Wins Are Measurable** — Run quality benchmarks (FER+ for emotion, COCO-keypoints for pose, NYUv2 for depth) before deciding which layers benefit, and leave the others on small-tier.
+  - *Pros*: Avoids spending memory headroom on layers where the upgrade is imperceptible; matches the project's "Skip on failure / minimal-overhead" philosophy.
+  - *Cons*: Slowest to implement; benchmark harnesses don't currently exist for several layers; quality wins from a larger model can be non-linear and only show up on edge cases that aren't in the benchmark.
+
+Your selection: _____
+
+---
+
+### Issue 2: RTMPose / MMPose Compilation Status on M4 Max Unverified
+**Status**: ⚠️ Confirmed Unresolved — The MMPose row's "Notes" column documents that `mmcv` compilation historically failed on Apple Silicon M4 Pro. RTMPose remains in the Local Models table as "Deferred/Optional" and Layer 03f Resolved Issue #1/#6 substituted YOLOv8-pose explicitly because of the compilation failure. The underlying `mmcv-full` build chain has changed on PyPI between 2024 and 2026, and the M4 Max ships a different LLVM/Clang baseline than the M4 Pro it superseded. The compilation status is now stale — it may or may not still fail.
+
+**Option A (recommended)**: **Re-Attempt `pip install mmcv-full` on M4 Max in a Clean venv** — Spin up a new Python 3.10 venv, attempt the install, log the outcome, and document the result inline in this doc. If it succeeds, file a separate issue in `03f_motor_resonance_layer.md` to A/B RTMPose-l vs YOLOv8n-pose on accuracy.
+  - *Pros*: Cheap (one venv); produces a binary answer to the deferred RTMPose path; documents the result for future maintainers regardless of outcome.
+  - *Cons*: A successful build does not guarantee inference quality wins — that still requires the 03f benchmark; if compilation still fails the time is purely diagnostic.
+
+**Option B**: **Drop MMPose From the Table Entirely** — Treat the YOLOv8-pose substitution (03f Resolved Issue #1) as permanent and remove the row to stop misleading future contributors.
+  - *Pros*: Eliminates dead documentation; simplifies the dependency surface.
+  - *Cons*: Loses the explicit deferral context; future contributors who don't read 03f's history may re-propose RTMPose without knowing why it was rejected.
+
+Your selection: _____

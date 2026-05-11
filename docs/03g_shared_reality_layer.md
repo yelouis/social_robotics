@@ -49,7 +49,7 @@ The current pipeline relies exclusively on optical flow and bounding box centeri
 
 ## Verification & Validation Check
 - **Singular Video Test**: Pick an ambiguous Ego4D clip where someone builds something and then looks up to show a friend. Print out the `camera_shift_vector` timeline. Assert that the `bystander_centered_in_fov` triggers true concurrently with the frame visually aligning the bystander's face in the center matrix.
-- **Batch Test**: During large-scale aggregation, ensure that videos flagged with `social_reference_sought: true` legitimately have a shifting bounding-box origin within the array. Memory constraints are minimal here, but loop efficiency across large coordinate arrays should be benchmarked on the **Mac mini M4 Pro**.
+- **Batch Test**: During large-scale aggregation, ensure that videos flagged with `social_reference_sought: true` legitimately have a shifting bounding-box origin within the array. Memory constraints are minimal here, but loop efficiency across large coordinate arrays should be benchmarked on the **Mac Studio (M4 Max, 64 GB unified memory)**.
 
 ---
 
@@ -118,4 +118,30 @@ The current pipeline relies exclusively on optical flow and bounding box centeri
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: Aria Glasses Gaze Telemetry Integration Deferred for Memory Budget — Now Affordable
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #7 explicitly deferred Aria gaze telemetry parsing because `projectaria_tools` adds a ~200 MB Python dependency plus parser-side memory pressure during `.vrs` decoding, which was disqualifying on the 24 GB Mac mini M4 Pro alongside the rest of the 03 layers. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, the dependency is now memory-affordable. Aria gaze is a sub-degree-precision ground-truth signal for social-referencing detection — strictly higher quality than the optical-flow + bounding-box-centering heuristic this layer currently uses. The integration only benefits the Aria-glasses subset of Ego4D (not the full dataset), but for that subset it provides validation data and a precision floor the current implementation cannot reach.
+
+**Option A (recommended)**: **Add `projectaria_tools` as an Optional Dependency; Fall Through to Optical-Flow Path on Non-Aria Clips** — Add `projectaria_tools` to `ml_dependencies.md` with the `Optional` flag. In `SharedRealityPipeline`, check whether the source clip has an `.vrs` companion file (Ego4D Aria clips do). If yes, parse `gaze_x`/`gaze_y` arrays and use them as the primary `social_reference_sought` signal; if no, fall through to the existing optical-flow + bounding-box-centering logic. Add a new `gaze_source: "aria_vrs" | "optical_flow_bbox"` field to the output schema so downstream consumers can filter.
+  - *Pros*: Massive precision win on the Aria subset (sub-degree gaze vs. 4%-of-diagonal pan threshold); the existing optical-flow path is unchanged for non-Aria clips so coverage is preserved; additive schema field maintains backward compatibility.
+  - *Cons*: Adds a ~200 MB dependency to the venv; `.vrs` parsing is per-frame slow without careful chunking; the two-source signal complicates aggregation if 04's exporter doesn't handle the `gaze_source` field — see `04_dehydrated_export.md` for the registry update.
+
+**Option B**: **Stay on Optical-Flow + Bounding-Box Only** — Keep Resolved Issue #7's deferral permanent.
+  - *Pros*: Uniform code path; simpler dependency surface.
+  - *Cons*: Forfeits the precision floor on the Aria subset, which is exactly where ground-truth validation could be built.
+
+Your selection: _____
+
+---
+
+### Issue 2: Optical-Flow Downsample Pinned at 0.5× — 1.0× Now Affordable on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #8 increased the Farneback optical-flow downsample factor from 0.25× to 0.5× ("acceptable performance trade-off on the Mac mini M4 Pro"). The choice was driven by the 24 GB Mac mini's competing memory pressure from other layers. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host with `TARGET_FLOW_FPS = 10.0` (Resolved Issue #15) and 1080p Ego4D input, full-resolution Farneback is ~120 MB transient per frame — easily affordable. The 0.5× downsample is now leaving sub-degree micro-pan detail on the floor.
+
+**Option A (recommended)**: **Raise `OPTICAL_FLOW_DOWNSAMPLE` to 1.0 on 64 GB Hosts** — Tier the constant on host memory: `1.0` if `psutil.virtual_memory().total >= 48 * 2**30`, else `0.5`. The derived `OPTICAL_FLOW_UPSCALE = 1.0 / OPTICAL_FLOW_DOWNSAMPLE` already handles the inverse-coupling correctly (Resolved Issue #10).
+  - *Pros*: Recovers micro-pan resolution that the 0.5× downsample throws away; the existing inverse-coupling (Resolved Issue #10) means no other constant needs to change; preserves Mac mini compatibility via the gate.
+  - *Cons*: 4× the Farneback compute per frame — the `TARGET_FLOW_FPS = 10.0` cap still keeps it bounded; the resolution-normalized `SHIFT_THRESHOLD_RATIO = 0.04` may need to be retuned because a 1.0× flow output has a different noise floor than a 0.5× output; the bystander-mask helper (`_bystander_mask_for_frame`, Resolved Issue #14) needs to construct masks at the new resolution, but that's already parameterized correctly.
+
+**Option B**: **Keep 0.5× Until a Specific Failure Mode Demands More Resolution** — Defer the upgrade.
+  - *Pros*: Zero risk of recalibration regression.
+  - *Cons*: Forfeits the headroom; sub-degree micro-pans (e.g., a brief glance toward a bystander between two task moments) remain below the detection floor.
+
+Your selection: _____

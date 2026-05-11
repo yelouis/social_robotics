@@ -66,7 +66,7 @@ The layer outputs an isolated JSON mapping the acoustic payload per task.
 
 ## Verification & Validation Check
 - **Singular Video Test**: Extract the 2-second audio chunk of a known "yell" video. Run the Python `funasr` emotion2vec+ inference and print the 9-class emotion scores to the console. Listen to the `.wav` slice to manually confirm the model caught the exact peak of the shout.
-- **Batch Test**: Run over 100 clips. Verify that videos classified as "Alarming" correlate with high `angry` + `fearful` scores and high delta in `max_amplitude_dbFS`. Ensure audio loading does not bottleneck the **24GB RAM Mac mini M4 Pro**; use chunked torchaudio streaming interfaces where possible.
+- **Batch Test**: Run over 100 clips. Verify that videos classified as "Alarming" correlate with high `angry` + `fearful` scores and high delta in `max_amplitude_dbFS`. Ensure audio loading does not bottleneck the **Mac Studio (M4 Max, 64 GB unified memory)**; chunked torchaudio streaming is no longer strictly required (Resolved Issue #12 confirms the FFmpeg subprocess path is adequate), but the test should still verify steady-state memory does not balloon over a 100-clip run.
 
 ## 🚀 Implementation Accomplishments
 
@@ -154,4 +154,30 @@ The Acoustic Prosody Layer has been implemented and successfully integrated:
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: SenseVoice Lazy-Load Gate Now Cost-Neutral on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #16 ("SenseVoice Model Eagerly Loaded Despite Conditional Use") replaced the eager `AutoModel(model="iic/SenseVoiceSmall", ...)` construction with a lazy load gated on `emotion2vec+` dominant-confidence < 0.6. The driver was the 24 GB Mac mini M4 Pro budget: keeping ~150-200 MB of SenseVoice resident across the 03 pipeline cost more than the first-call latency penalty when the gate was rarely triggered. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, 200 MB is 0.3% of available memory — the steady-state cost is now negligible, but every clip that *does* trigger the low-confidence gate (typically the most acoustically ambiguous clips, where SenseVoice is most useful) pays the one-time ~2-3 s SenseVoice load latency at the worst possible moment.
+
+**Option A (recommended)**: **Eager-Load SenseVoice When Host Memory ≥ 48 GB** — At `_init_models` time, branch on `psutil.virtual_memory().total`. If ≥ 48 GB, construct SenseVoice eagerly (restoring the pre-Resolved-Issue-#16 behavior); otherwise stay lazy. The lazy path is still exercised in CI and on smaller hosts.
+  - *Pros*: Zero first-call latency on the ambiguous-audio clips that need SenseVoice the most; preserves the lazy path for Mac mini compatibility; one-line host gate.
+  - *Cons*: Adds a host-class branch that must be tested in both modes; if memory budget changes (e.g., user runs another large model concurrently), the eager path may have already loaded SenseVoice — minor but documented.
+
+**Option B**: **Always Eager-Load SenseVoice; Document M4 Max Requirement** — Remove the lazy path and the `_AutoModel` placeholder entirely.
+  - *Pros*: Simplest code; deterministic startup time.
+  - *Cons*: Reverts a deliberate Resolved Issue #16 fix; hard-breaks Mac mini hosts.
+
+Your selection: _____
+
+---
+
+### Issue 2: emotion2vec+ Pinned to `large` Variant — `seed` Variant Now Headroom-Affordable for Side-by-Side Validation
+**Status**: ⚠️ Confirmed Unresolved — The primary SER model is hardcoded to `iic/emotion2vec_plus_large` (~600 MB, 9-class). FunASR also ships `iic/emotion2vec_plus_base` (~300 MB) — lower quality — and `iic/emotion2vec_plus_seed` (~2 GB, transformer-XL backbone) — higher quality on long utterances with cross-speaker variation. The `seed` variant produces stronger embeddings for the cross-bystander aggregate scoring path that 03b consumes, and its memory footprint was disqualifying on the 24 GB Mac mini once L2CS, Py-Feat, and Depth Anything V2 + SAM were all simultaneously resident during the E2E run. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, `seed` is loadable with no displacement of any other layer.
+
+**Option A (recommended)**: **A/B `seed` Against `large` on a 100-Clip Acoustic Validation Subset** — Wire a `SAF_SER_VARIANT=large|seed` env var (defaults to `large`); run both on the same 100 clips with diverse acoustic profiles (alarming, soothing, neutral, discouraging, ambient laughter/applause); compare both the 9-class dominant-emotion accuracy against human labels and the downstream `prosody_scalar` distribution. Promote `seed` only if (a) dominant accuracy improves > 3 pp AND (b) the SenseVoice-gating threshold (`< 0.6`) does not need recalibration.
+  - *Pros*: Direct quality target on the most ambiguous regime (the one SenseVoice is gated to assist with); measurable before merge; reuses existing Resolved Issue #11 SenseVoice gate as the failure-mode sentinel.
+  - *Cons*: Adds ~2 GB to the `OLLAMA_MODELS`/ModelScope cache; first-run download is slower; `seed`'s 768-dim embedding may have different distributional properties that downstream consumers (if any) would need to recalibrate against.
+
+**Option B**: **Stay on `large`; Document That `seed` Is Available But Untested** — Add a note in `ml_dependencies.md` listing `seed` as a candidate but make no production change.
+  - *Pros*: Zero migration risk.
+  - *Cons*: Forfeits the headroom advantage; no measurable answer to "should we upgrade."
+
+Your selection: _____

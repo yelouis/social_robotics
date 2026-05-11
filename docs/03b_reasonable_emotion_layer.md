@@ -20,7 +20,7 @@ Crucially, this layer analyzes **emotion transitions and durations** over time (
 Because a single video might contain multiple tasks, this sequence occurs iteratively for *each* task inside the `identified_tasks` array.
 
 ### Step 1: Expectation Generation (Gemma 4)
-Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations. This lightweight local LLM inference is well-suited for the **24GB RAM Mac mini M4 Pro**, allowing concurrent tracking arrays without swapping.
+Using the extracted Contextual Task (e.g., "Juggling apples"), prompt a locally running LLM (**Gemma 4** via Ollama) to generate baseline emotional expectations. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, the current default `gemma4:e4b` (4B/4-bit, ~2.5 GB) leaves substantial headroom — see Unresolved Issue 1 for the upgrade-path trade-off matrix. Concurrent tracking arrays for multiple bystanders coexist without swapping at either the 4B or 27B tier.
 
 **Structured Prompt Template:**
 ```text
@@ -137,7 +137,7 @@ The layer outputs a structured array mapping the bystander's emotional journey *
 ## Verification & Validation Check
 To ensure the LLM reasoning is chronologically sound and empirically reliable:
 - **Singular Video Test**: Run the emotion layer for a specific video ID. Dump the exact prompt string sent to Gemma 4 and its exact JSON return to the console. Manually review the `classified_direction` logical mapping against the input `transition_pair` to verify the prompt is unbroken.
-- **Batch Test**: Run the step on an entire `filtered_manifest.json` batch. Parse the final output and check the total distribution of `task_aggregate_score` values. If >95% of the values are strictly exactly positive or exactly negative, review the Gemma 4 temperature settings as the model may have collapsed into a predictable output path. Performance profiling should verify that processing scales continuously on the **Mac mini M4 Pro (24GB RAM)**.
+- **Batch Test**: Run the step on an entire `filtered_manifest.json` batch. Parse the final output and check the total distribution of `task_aggregate_score` values. If >95% of the values are strictly exactly positive or exactly negative, review the Gemma 4 temperature settings as the model may have collapsed into a predictable output path. Performance profiling should verify that processing scales continuously on the **Mac Studio (M4 Max, 64 GB unified memory)**.
 
 ## 🚀 Implementation Accomplishments (April 2026)
 
@@ -212,4 +212,38 @@ The initial implementation of the Reasonable Emotion Layer is complete:
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: `gemma4:e4b` (4B) Default Underutilizes 64 GB Mac Studio for Multi-Step Reasoning
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #8 pinned `OLLAMA_MODEL = "gemma4:latest"` (resolving to the 4B/4-bit `e4b` tag). The choice was made for the 24 GB Mac mini M4 Pro budget, where `gemma4:26b` (~15 GB) and `gemma4:31b` (~18 GB) would have squeezed out PyFeat's CPU-side Detector cache and the L2CS-Net pipeline already resident from 03a. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, both larger variants are physically loadable with substantial headroom. The 03b reasoning chain (Step 1 expectation generation + Step 3 cumulative-history evaluation per pair) is *exactly* the multi-step structured-output regime where 27B-class models measurably reduce JSON drift and improve `classified_direction` accuracy — the failure mode Resolved Issue #7 added pydantic + retry-with-temperature defenses against. A larger model would shift load away from those defenses and toward first-pass correctness.
+
+**Option A (recommended)**: **Promote `gemma4:26b` as Default; Keep `e4b` as Mac Mini Fallback** — Switch `OLLAMA_MODEL` default in `pipeline.py` from `gemma4:latest` to `gemma4:26b` and add a `SAF_GEMMA_TIER=small|large` env override that maps to `e4b` and `26b` respectively. Re-run the Resolved Issue #9 E2E validation (`001e3e4e-2743-47fc-8564-d5efd11f9e90.mp4`, "Loading laundry") and verify (a) the `late_stage_weighted_success_score` direction is preserved, (b) `_llm_evaluate_transition` retries-with-temperature trigger less than 5% as often, and (c) the State-Change Filter (Resolved Issue #10) speedup is preserved.
+  - *Pros*: Direct quality win on multi-step structured reasoning — exactly what the 03b prompt chain depends on; reduces JSON drift, which reduces fallback to `_rule_based_classify` (a lossy path); ~15 GB resident still leaves ~45 GB headroom.
+  - *Cons*: Pulls ~15 GB onto the Extreme SSD's `OLLAMA_MODELS` directory; first-run download ~10 min; per-transition Ollama latency rises from ~250 ms (e4b) to ~700-900 ms (26b), which the State-Change Filter (Resolved Issue #10) partially absorbs but multi-bystander tasks may show a 1.5–2× wall-clock regression even after the speedup; existing pydantic+retry defenses must be re-verified on the new model's output style.
+
+**Option B**: **Make Model Tier Configurable but Default Stays at `e4b`** — Add the `SAF_GEMMA_TIER` env var but keep `e4b` as the default for backward compatibility.
+  - *Pros*: Zero behavior change for existing callers; researchers can opt in to 27B per-experiment.
+  - *Cons*: Misses the quality win in the default path; introduces a configuration surface that mostly isn't used.
+
+**Option C**: **Replace Gemma 4 With Qwen2.5 7B-Instruct for the Reasoning Path** — Qwen2.5 7B has stronger structured-output JSON adherence on multi-step chains in published benchmarks; its ~7 GB resident footprint sits between `e4b` and `26b`.
+  - *Pros*: Reuses the VLM family already pulled for Layer 02's climax refinement; potentially better JSON adherence than Gemma at the same memory footprint.
+  - *Cons*: Different prompt-template idioms — Resolved Issues #7 (pydantic + retry) and #10 (State-Change Filter) are calibrated to Gemma's response shape and would need re-validation; introduces a third Ollama model in the pipeline catalog.
+
+Your selection: _____
+
+---
+
+### Issue 2: Py-Feat CPU-Only Inference Now Bottlenecks 03b on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #6 wired `Detector` from Py-Feat with `device="cpu"` because Py-Feat lacks native MPS acceleration and the Mac mini M4 Pro's CPU side ran the model "acceptably slowly." On the **Mac Studio (M4 Max, 64 GB unified memory)** target host the per-frame latency profile changes: the M4 Max's *GPU* MPS subsystem is dramatically faster than its CPU at vision-model inference, but `device="cpu"` skips the GPU entirely. With 3–5 FPS sampling × reaction-window-length × bystander-count, Py-Feat's CPU inference dominates wall-clock on the 03b layer — yet the GPU is idle. The 03b pipeline is effectively starving the new hardware.
+
+**Option A (recommended)**: **Migrate Off Py-Feat to a Native MPS Face-Emotion Model** — Replace `Detector` with **`RMN` (Residual Masking Network) PyTorch model** or **`HSEmotion-PyTorch`** (both Apache-2.0, both load via the existing PyTorch stack, both ~50-100 MB resident). Wire `device="mps"` and drop the temporary PNG write path entirely. Map their FER+ 8-class output (`anger, contempt, disgust, fear, happiness, neutral, sadness, surprise`) into the `PYFEAT_EMOTION_COLUMNS` schema the rest of 03b consumes — these vocabularies overlap enough that the existing `_rule_based_classify` continues to function, with only the disgust/contempt mapping needing a documented rename.
+  - *Pros*: 5-10× per-frame speedup on the M4 Max from MPS; eliminates the CPU bottleneck on the bystander-count-heavy clips; native ndarray input — no temp PNG path needed.
+  - *Cons*: Different per-class probability calibration than Py-Feat, so the existing `late_stage_weighted_math` thresholds and `slice_success_scalar` magnitudes may shift; needs a side-by-side validation against the Resolved Issue #9 E2E test before merge; if Py-Feat ever ships MPS support (active upstream issue) the migration would have been unnecessary.
+
+**Option B**: **Keep Py-Feat, Add CPU-Side Parallelism Via `concurrent.futures.ProcessPoolExecutor`** — Spawn N worker processes (N=8 on M4 Max) and shard bystander × frame samples across them.
+  - *Pros*: Doesn't disturb the Py-Feat-specific calibration of the existing classifier; reuses the existing model integration.
+  - *Cons*: ProcessPoolExecutor pickle overhead for face crops; 8× the resident Py-Feat model memory across worker processes; still doesn't touch the M4 Max GPU, which is the much-bigger compute headroom.
+
+**Option C**: **Defer Py-Feat MPS Migration Until Py-Feat Upstream Adds Support** — Track the upstream Py-Feat repo and only migrate if/when MPS lands natively.
+  - *Pros*: Zero migration risk; minimal effort.
+  - *Cons*: Forfeits the new host's GPU headroom indefinitely; the upstream feature has been pending for >18 months.
+
+Your selection: _____
