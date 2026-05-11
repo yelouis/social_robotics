@@ -53,7 +53,7 @@ Combine this with Layer 03b. A "Smile" + "Nod" = Absolute positive validation. A
 
 ## Verification & Validation Check
 - **Singular Video Test**: Plot the Pitch and Yaw arrays explicitly on a matplotlib line graph for a known head-nod video. Visually identify the sine-wave signature of the nod on the Pitch axis and verify the SciPy peak-finding logic successfully counted the nods.
-- **Batch Test**: Pass 50 clips through the signal processor. Assert that the script executes in milliseconds (as it uses pre-computed vectors) and gracefully handles `NaN` values where L2CS-Net lost tracking on the face, filling defaults safely to avoid breaking the Pandas merge step on the **Mac mini M4 Pro**.
+- **Batch Test**: Pass 50 clips through the signal processor. Assert that the script executes in milliseconds (as it uses pre-computed vectors) and gracefully handles `NaN` values where L2CS-Net lost tracking on the face, filling defaults safely to avoid breaking the Pandas merge step on the **Mac Studio (M4 Max, 64 GB unified memory)**.
 
 ## 🚀 Implementation Accomplishments (April 2026)
 
@@ -126,7 +126,33 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: Median-Smoothing Saccade Suppression Gated to 36 FPS — Never Activates at 03a's Current Cadence
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #10 replaced the redundant Butterworth low-pass with a `scipy.signal.medfilt(kernel_size=3)` saccade-suppression step gated on `fps >= MEDFILT_KERNEL * 4 * BANDPASS_HZ.high` (= 36 FPS). On the 24 GB Mac mini M4 Pro the 03a layer's 8 FPS baseline / 16 FPS burst cadence was a fixed budgetary choice — sustained higher rates were considered prohibitive because Layer 03a's L2CS inference was the dominant per-frame cost. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, raising 03a's burst-window FPS to 30+ is now memory-affordable and would let the median filter activate for the first time, suppressing the aliased saccadic energy that Resolved Issue #10 explicitly acknowledged was *unaddressed* at the current rates.
+
+**Option A (recommended)**: **Raise 03a's Burst FPS to 32, Engaging 03e's Existing Median Filter** — Update 03a's `sampling_fps_burst` from 16 to 32 in `AttentionLayerPipeline._track_and_score` (gated on host memory ≥ 48 GB so Mac mini hosts retain 16 FPS). No change to 03e itself — the FPS gate in Resolved Issue #10 was already wired forward-compatible. Re-run Resolved Issue #8's "Gaze Vectors vs. Head Pose Vectors" validation to confirm the median filter actually suppresses saccadic false-positives.
+  - *Pros*: Activates the dormant saccade-suppression code path; addresses the documented limitation in Resolved Issue #10's "trade-off is mathematically unavoidable at current sampling rates" caveat; one number-change in 03a; no schema or API change in 03e.
+  - *Cons*: 03a inference cost doubles during burst windows (still acceptable on M4 Max); the median filter at 32 FPS over a 3-sample window covers 93 ms — well below the ~330-500 ms period of genuine 2-3 Hz nods, so the original Resolved Issue #10 concern about corrupting fast nods is avoided; validation against the existing `test_layer_03e.py::test_nod_detection_synthetic` sine-wave fixture should confirm correctness.
+
+**Option B**: **Lower 03e's `MEDFILT_KERNEL * 4 * BANDPASS_HZ.high` Gate to Activate at 16 FPS** — Drop the safety factor so the filter activates on current 03a output without raising 03a's FPS.
+  - *Pros*: Single-layer change; activates the filter without touching 03a.
+  - *Cons*: At 16 FPS the 3-sample median window covers 187 ms — close to the lower-bound period of fast nods (333 ms for 3 Hz); risks "demolishing the tone" exactly as Resolved Issue #10's gate was designed to prevent; reintroduces the failure mode the gate exists to avoid.
+
+Your selection: _____
+
+---
+
+### Issue 2: `MAX_INTERPOLATED_FRACTION` Threshold Calibrated Against L2CS-Net's Specific Tracking-Loss Rate
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #12 introduced `MAX_INTERPOLATED_FRACTION = 0.3` as the gate above which a bystander's per-task trace is short-circuited. The 30% threshold was calibrated against L2CS-Net's observed tracking-loss profile on Ego4D bystanders. If 03a's gaze model is upgraded (see 03a Unresolved Issue 2 — CrossGaze A/B), the tracking-loss distribution changes and the 30% threshold may either become too tight (silently dropping bystanders that would now produce valid traces with the new model's better tracking) or too loose (admitting traces that the new model would have flagged as low-quality differently).
+
+**Option A (recommended)**: **Couple the Threshold to 03a's `processing_meta.model_used` via a Calibration Table** — Maintain a small dict `{"l2cs_net_3d_gaze": 0.3, "crossgaze": 0.2, "3dgazenet": 0.25}` keyed on 03a's reported model. Read 03a's `processing_meta.model_used` at 03e startup and select the matching threshold. Default to the current 0.3 on unknown models.
+  - *Pros*: Survives a gaze-model upgrade without silently miscalibrating; each gaze model gets its own tracking-loss profile; the calibration table is one source of truth for the cross-layer dependency.
+  - *Cons*: Requires maintaining the calibration table when new gaze models are added (small ongoing cost); the per-model threshold needs to be derived empirically once per upgrade.
+
+**Option B**: **Defer Until 03a Upgrade Lands** — Leave the threshold at 0.3 and re-tune only if the 03a upgrade is merged.
+  - *Pros*: Zero work until needed.
+  - *Cons*: Couples 03e's correctness to whichever gaze model happens to be active; future audits will lose the calibration provenance.
+
+Your selection: _____
 
 ### 🧪 Test Suite Results (6/6 Passed)
 

@@ -55,7 +55,7 @@ If the local `result_file` review looks good, write an automated script leveragi
 ## Verification & Validation Check
 To guarantee the export structure adheres to safety standards and schema requirements:
 - **Singular Video Test**: Load the final `social_metadata.parquet` into a Pandas DataFrame inside a standalone Jupyter notebook or script. Select one random row (a single video) and attempt to cleanly follow the `rehydrate_dataset.py` instructions to rebuild the social context. If any keys are mismatched, it fails.
-- **Batch Test**: Run an automated validation script across the entire merged DataFrame. Assert that there are absolutely zero raw visual bytes (no images/video buffers stored). Validate that the row count matches exactly the number of clips successfully parsed, and perform a null-check analysis. Verify that this Pandas aggregation does not exceed the data limits of our **24GB RAM Mac mini M4 Pro** when reading multi-gigabyte Parquets into memory.
+- **Batch Test**: Run an automated validation script across the entire merged DataFrame. Assert that there are absolutely zero raw visual bytes (no images/video buffers stored). Validate that the row count matches exactly the number of clips successfully parsed, and perform a null-check analysis. Verify that this Pandas aggregation operates within the data limits of our **Mac Studio (M4 Max, 64 GB unified memory)** when reading multi-gigabyte Parquets into memory. The Dask fallback (Resolved Issues #7/#12/#13) still applies for datasets large enough to exceed the 50%-of-RAM threshold — on the new host this corresponds to source-JSON inputs of approximately 4 GB+ after the `PANDAS_INFLATION_FACTOR = 8` scaling — but is far less commonly triggered than on the prior 24 GB host.
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
@@ -122,4 +122,45 @@ To guarantee the export structure adheres to safety standards and schema require
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: Dask Fallback Threshold (`mem_available * 0.5`) Was Calibrated for 24 GB Mac Mini and Needs Re-Validation on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issues #7 (introducing the dynamic memory check), #12 (fixing the `npartitions=1` defeat), and #13 (introducing `PANDAS_INFLATION_FACTOR = 8`) collectively settled the question of *when* to fall back to Dask: `effective_size = total_size * 8 > mem_available * 0.5`. The `* 0.5` headroom factor was reasonable for the 24 GB Mac mini M4 Pro because other concurrent processes (Ollama VLM, MPS-resident layer models) routinely consumed a substantial fraction of unified memory during the E2E run. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, the same `* 0.5` factor yields a 32 GB effective Pandas ceiling — generous, but possibly over-conservative given that 04 typically runs *after* the 03 layers have completed and their MPS allocations have been freed. Conversely, if 04 is integrated into an in-memory orchestrator that keeps prior-layer state resident, `0.5` may now be *under*-conservative because the absolute MB budget per concurrent layer is also larger on M4 Max.
+
+**Option A (recommended)**: **Replace the Fixed `0.5` With a `MEM_HEADROOM_FACTOR` Constant and a Standalone Bench** — Hoist `MEM_HEADROOM_FACTOR = 0.5` to a module-level constant in `aggregator.py` with an inline rationale referencing this issue. Add a one-shot `python -m saf.export.bench` command that estimates the actual peak Pandas memory for the current `03*_result.json` set and prints a recommended factor. Re-tune the constant against measured peaks on the M4 Max.
+  - *Pros*: Surfaces the trade-off explicitly; the bench command gives a forensics-friendly way to recalibrate on any host; preserves the Resolved Issue #12 chunked-Dask path unchanged.
+  - *Cons*: Adds a small operational tool that must be maintained; the bench command is only useful if anyone runs it; mis-tuning the factor either way is silent (OOM kill on the low side; unnecessary Dask overhead on the high side).
+
+**Option B**: **Raise `0.5` to `0.7` on Hosts ≥ 48 GB** — Direct two-line change.
+  - *Pros*: Simplest; immediately recovers the new host's headroom in the no-Dask path.
+  - *Cons*: No empirical basis for `0.7`; if the concurrent-orchestrator scenario above applies, the new factor could cause OOM where the old one would have safely fallen back to Dask.
+
+Your selection: _____
+
+---
+
+### Issue 2: `PANDAS_INFLATION_FACTOR = 8` Was a Midpoint of the 5-10× Empirical Range — Needs Re-Validation Against Schema-B Layer Outputs
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #13 introduced `PANDAS_INFLATION_FACTOR = 8` based on a documented empirical range of 5–10× for the source JSON → Pandas DataFrame footprint inflation. The range was measured against the layer outputs as they stood when Resolved Issue #7 (May 5) was introduced. Since then, Resolved Issues #10 and #11 (May 9) added the `LAYER_SUMMARY_REGISTRY` flattening and the `processing_meta` dict promotion — both of which shift the column count and column-dtype distribution of the resulting DataFrame. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, an under-estimated inflation factor wastes headroom; an over-estimated factor triggers unnecessary Dask paths that, per Resolved Issue #12, still materialize the full result. Either direction of mis-calibration is benign in absolute terms on this host but quietly defeats the precision the upstream fixes targeted.
+
+**Option A (recommended)**: **Re-Measure the Factor After Resolved Issues #10/#11 Took Effect; Re-Pin Per Schema Hash** — Add a tiny `_compute_inflation_factor(parquet_path)` helper that loads a small sample, computes the actual ratio, and emits a log line. Re-pin `PANDAS_INFLATION_FACTOR` to the measured midpoint based on the current Schema-A / Schema-B column distribution. Optionally couple the constant to the `schema_version+<hash>` from Resolved Issue #14 so the factor is automatically invalidated when columns change.
+  - *Pros*: Mechanically tied to the same hash that already detects schema drift; preserves the Resolved Issue #14 invariant; one helper to maintain.
+  - *Cons*: Requires a sample parquet to measure against (no-op on first run with no prior exports); the schema-coupling adds complexity that may be more bookkeeping than the precision gain warrants.
+
+**Option B**: **Drop the Inflation-Factor Heuristic; Sample the Actual Memory** — Replace the static factor with a runtime measurement using `psutil.Process().memory_info().rss` before and after the aggregation completes.
+  - *Pros*: No static calibration; self-adapting.
+  - *Cons*: Memory measurement is too late to be useful for the Dask-vs-Pandas decision (the decision happens before aggregation); reactive rather than predictive.
+
+Your selection: _____
+
+---
+
+### Issue 3: Per-Layer Summary Registry Will Need New Entries For Aria Gaze Source (See 03g Issue 1)
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #10 introduced the `LAYER_SUMMARY_REGISTRY` that maps each 03x layer to summary scalars in the exported Parquet. The current 03g entry registers `(any_social_reference, any_bystander_centered)`. If 03g's Aria gaze telemetry integration ships (see `03g_shared_reality_layer.md` Unresolved Issue 1), the per-task output will gain a `gaze_source: "aria_vrs" | "optical_flow_bbox"` field whose distribution materially changes how downstream researchers should interpret `any_social_reference`. The Parquet export currently has no way to surface "which fraction of social-referencing flags came from sub-degree Aria gaze vs. heuristic optical flow."
+
+**Option A (recommended)**: **Pre-Register the `gaze_source` Mode Columns in the Registry, Gated on 03g Issue 1** — Add `("any_eq:aria_vrs", "gaze_source", "any_aria_gaze")` and `("any_eq:optical_flow_bbox", "gaze_source", "any_flow_gaze")` entries to the 03g block of `LAYER_SUMMARY_REGISTRY`. If 03g Issue 1 doesn't ship, the entries are simply absent from per-record JSON and the registry's existing `_collect_layer_values` helper emits `null`, which is harmless.
+  - *Pros*: Pre-wires the export path so 03g Issue 1 doesn't require a corresponding 04 PR; uses the already-shipped `any_eq:VALUE` aggregation; null-safe by construction.
+  - *Cons*: Adds Parquet columns that will be all-null until 03g Issue 1 ships, slightly polluting the schema-drift hash from Resolved Issue #14; the additive-only schema rule means the columns can never be removed, even if 03g Issue 1 is abandoned.
+
+**Option B**: **Defer Until 03g Issue 1 Actually Ships** — File this issue as gated; only update the registry when the upstream change lands.
+  - *Pros*: Avoids speculative schema columns.
+  - *Cons*: Couples the 03g shipping to a same-day 04 PR; if 03g ships first, the export silently loses the new field until 04 catches up.
+
+Your selection: _____

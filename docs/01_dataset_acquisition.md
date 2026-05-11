@@ -22,7 +22,7 @@ Due to storage constraints and project focus, datasets are prioritized in the fo
 Video datasets are inherently massive (often spanning terabytes). 
 **DO NOT** run these data pipelines directly on strict internal SSD setups if space/wear are concerns. 
 - Ensure your `OUTPUT_DIR` maps out to the external **2TB SSD called "Extreme SSD"**. This is explicitly designated to handle the large size of the Ego4D and other video datasets.
-- **Hardware Profile**: As we are running a **Mac mini M4 Pro with 24GB RAM**, be strictly mindful of memory ceilings when unpacking or indexing these massive datasets in Python. Rely on streaming processors or chunked extraction.
+- **Hardware Profile**: As we are running a **Mac Studio (M4 Max, 64 GB unified memory)**, the memory ceiling is more generous than the prior Mac mini M4 Pro (24 GB), but streaming/chunked extraction is still the correct architectural default. Multi-terabyte datasets can still exceed physical RAM during indexing, and other layers (03d, 03f, 03g) co-reside in unified memory during the E2E run.
 
 ## Streaming Filtering Strategy (Storage Optimization)
 To mitigate the massive storage requirements of these datasets, the system employs a **Streaming Filtering** strategy. 
@@ -130,4 +130,34 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: Per-Batch YOLO+MediaPipe Unload Now Over-Conservative on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #16 calls `self.filterer.detector.unload()` after every batch in `Ego4DDownloader.download()` because the 24 GB Mac mini M4 Pro could not safely retain YOLOv8n (~6 MB weights but ~300–500 MB of cached MPS activations) and the MediaPipe Hands graph (~150 MB resident) across hundreds of consecutive batches. On the new **Mac Studio (M4 Max, 64 GB unified memory)**, the steady-state resident set of both models combined (<1 GB) is a negligible fraction of available memory, but the lazy re-load path now pays the YOLOv8 model-load + MPS warm-up cost (~1–2 s) at the start of every batch — pure overhead on hardware that no longer needs the trade-off.
+
+**Option A (recommended)**: **Make Per-Batch Unload Configurable via a Memory-Budget Threshold** — Add a `unload_after_batch: bool = True` parameter (or a `--no-batch-unload` CLI flag) that defaults to current behavior for backward compatibility on smaller hosts but can be disabled on the M4 Max. Optionally auto-detect via `psutil.virtual_memory().total` and skip the unload if total RAM ≥ 48 GB.
+  - *Pros*: Preserves correctness on Mac mini hosts (24 GB); eliminates per-batch reload latency on M4 Max; auto-detection keeps the call-site clean.
+  - *Cons*: Adds a configuration surface that must be tested on both hardware profiles; if YOLO weights are upgraded to a larger variant (`yolov8x`, ~140 MB + cached activations), the threshold heuristic may need recalibration.
+
+**Option B**: **Always Skip Unload, Document Mac Studio Requirement** — Remove the `self.filterer.detector.unload()` call entirely and update README to mandate 48 GB+ unified memory.
+  - *Pros*: Simplest code; deterministic resident-set behavior across all batches.
+  - *Cons*: Hard-breaks the pipeline on any host with < 48 GB; loses the operationally-tested fallback path; researchers without an M4 Max-class machine cannot reproduce the dataset.
+
+**Option C**: **Unload Conditionally on Memory Pressure** — Wrap the unload in `if psutil.virtual_memory().percent > 75:` so it only fires when system memory is actually tight, regardless of host class.
+  - *Pros*: Self-adapting; survives downstream memory pressure from other concurrent processes (e.g., ffmpeg subprocesses, Python E2E orchestrator).
+  - *Cons*: Introduces non-deterministic per-batch latency; harder to reason about when debugging acquisition throughput regressions.
+
+Your selection: _____
+
+---
+
+### Issue 2: Batch Size Cap Hardcoded to 200, Below M4 Max SSD-Bandwidth Ceiling
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #10 ("Dynamic Batch Sizing") clamps `run_selective_download.py`'s computed batch size to `[10, 200]`. The 200-UID ceiling was tuned for the Mac mini M4 Pro's 24 GB memory limit and the throughput of its Thunderbolt 4 controller. The Mac Studio M4 Max has more memory headroom *and* faster Thunderbolt 5 (TB5) lanes if used with a TB5-rated enclosure, plus higher sustained SSD write throughput on the internal SoC bus. The hard 200 cap now under-utilizes the new host on disk-rich UID windows.
+
+**Option A (recommended)**: **Lift the Upper Clamp to 500 and Re-Test Throughput** — Change the clamp ceiling in `run_selective_download.py` from 200 to 500 and benchmark a few real Ego4D batches against the Extreme SSD to confirm no regressions in `aws s3 cp` parallelism or filter-loop latency.
+  - *Pros*: Better amortizes the Ego4D CLI's per-batch setup cost; quick to implement and revert if needed.
+  - *Cons*: Requires empirical benchmarking on the actual SSD and network path; large batches risk leaving more orphaned files if a mid-batch crash occurs before `processed_uids.json` is flushed.
+
+**Option B**: **Replace the Static Cap With a Throughput-Aware Heuristic** — Track actual download MB/s in the previous batch and grow/shrink the next batch size to keep wall-clock between 5–10 minutes per batch.
+  - *Pros*: Self-calibrating across SSDs, network conditions, and host classes; future-proofs against TB5 enclosures.
+  - *Cons*: Adds state-tracking complexity in `run_selective_download.py`; needs a cold-start fallback for the first batch.
+
+Your selection: _____

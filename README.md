@@ -55,7 +55,7 @@ The final output is a **Dehydrated Social Metadata Dataset**. We never export ra
 ## 🚀 Getting Started
 
 ### Prerequisites
--   **Hardware**: Optimized for Apple Silicon (M4 Pro recommended).
+-   **Hardware**: Optimized for Apple Silicon. Target development/production host: **Mac Studio (M4 Max, 64 GB unified memory)**.
 -   **Storage**: 2TB+ External SSD ("Extreme SSD") for video processing.
 -   **Dependencies**: [Ollama](https://ollama.com/), Python 3.10+, and the libraries listed in [ml_dependencies.md](docs/ml_dependencies.md).
 

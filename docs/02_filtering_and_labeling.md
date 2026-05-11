@@ -145,7 +145,7 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
 ## Verification & Validation Check
 To ensure the filtering mechanisms are robust and correct:
 - **Singular Video Test**: Execute the filter module against a single chosen `.mp4` video that is visually verified to have multiple interacting people. Inspect the generated JSON output to confirm the `bystander_detections` bounding boxes accurately surround the actors.
-- **Batch Test**: Run the node over a subset folder (e.g., 50 videos). Aggregate the output to check distribution metrics (e.g., % dropped due to no social presence, % dropped due to idling). Assert that every entry in the `filtered_manifest.json` has `identified_tasks` with non-empty attributes, effectively proving the system scaled accurately without unhandled `None` crashes. Furthermore, utilize the **24GB RAM Mac mini M4 Pro** environment effectively by ensuring the batched VLM calls do not trigger out-of-memory unified memory kills.
+- **Batch Test**: Run the node over a subset folder (e.g., 50 videos). Aggregate the output to check distribution metrics (e.g., % dropped due to no social presence, % dropped due to idling). Assert that every entry in the `filtered_manifest.json` has `identified_tasks` with non-empty attributes, effectively proving the system scaled accurately without unhandled `None` crashes. Furthermore, utilize the **Mac Studio (M4 Max, 64 GB unified memory)** environment effectively by ensuring the batched VLM calls stay within the unified-memory budget. With 64 GB available, both YOLOv8 and Qwen2.5-VL can in principle co-reside, but the two-pass architecture from Resolved Issue #11 is still the safer default until the co-resident path is benchmarked end-to-end (see Unresolved Issue 1 below).
 
 ---
 
@@ -232,4 +232,34 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: Two-Pass YOLO/VLM Architecture May Be Overcautious on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #11 ("24GB Unified Memory Constraints") refactored `pipeline.py` into a strict two-pass architecture: Pass 1 runs the YOLO Social Presence Filter for *all* videos, calls `torch.mps.empty_cache()`, then Pass 2 runs the Qwen2.5-VL climax refinement. The driver was the 24 GB Mac mini's inability to keep both models resident. On the new **Mac Studio (M4 Max, 64 GB unified memory)** host, YOLOv8 (~100 MB resident with MPS activations) and Qwen2.5-VL 3B (~6 GB) easily co-reside, leaving ~50 GB headroom. The two-pass approach now reads every video off the Extreme SSD twice — once for YOLO, once for the VLM frames — which roughly doubles the disk-read cost of the filtering stage.
+
+**Option A (recommended)**: **Single-Pass Interleaved Architecture, Gated on Host Memory** — Detect `psutil.virtual_memory().total >= 48 * 2**30` at `FilteringPipeline.__init__` and, when true, interleave YOLO + VLM per video rather than batching across videos. The two-pass code path remains as the fallback for smaller hosts and is exercised by the existing E2E test on CI.
+  - *Pros*: Halves SSD reads on the M4 Max; preserves Mac mini compatibility via the gate; reuses the existing two-pass code as the < 48 GB branch with no rewrite.
+  - *Cons*: Adds a host-class branch in the filtering pipeline; both branches must be maintained and tested; misconfigured `OLLAMA_NUM_GPU` could leak VLM weights between videos and silently undo the gain.
+
+**Option B**: **Always Single-Pass; Drop Two-Pass Code Entirely** — Commit fully to the M4 Max as the supported host and delete the two-pass branch.
+  - *Pros*: Smallest filtering codebase; one set of edge cases to test.
+  - *Cons*: Hard-breaks any researcher with a Mac mini M4 Pro or smaller; loses the operationally-validated fallback path; Resolved Issue #11's safety guarantees are dropped.
+
+**Option C**: **Keep Two-Pass But Run Pass 2 Off the In-Memory Frame Cache, Not the SSD** — Have Pass 1 retain the bystander-cropped sampled frames in a bounded LRU cache and Pass 2 read VLM inputs from that cache.
+  - *Pros*: Avoids the disk re-read without dropping two-pass isolation; cache size is bounded and easy to gate on host memory.
+  - *Cons*: Significantly more code; requires careful disk-vs-memory eviction policy; the existing `tempfile.TemporaryDirectory` plumbing already does most of this on disk so the gain is marginal.
+
+Your selection: _____
+
+---
+
+### Issue 2: Climax-Refinement VLM Pinned to Qwen2.5-VL Despite 64 GB Headroom for Larger Variants
+**Status**: ⚠️ Confirmed Unresolved — Section 3 ("Temporal Task Climax Identification") and Section 2.58 of `pipeline.py` pin the Stage-2 VLM refinement to Qwen2.5-VL 3B (~3 GB resident) for slow/cognitive tasks. The 3B tier was selected explicitly to coexist with YOLO on the 24 GB Mac mini. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, Qwen2.5-VL **7B** (~15 GB resident) or **32B** (~64 GB quantized to 4-bit) become viable. Larger VLMs have measurable accuracy gains on fine-grained action-climax localization in slow/cognitive tasks (puzzles, reading, writing) — which is exactly the regime Stage 2 was designed to address.
+
+**Option A (recommended)**: **Promote Qwen2.5-VL 7B as the Default; 3B as Mac Mini Fallback** — Switch the default model identifier in `pipeline.py` from `qwen2.5-vl:3b` to `qwen2.5-vl:7b` with an env-var override `SAF_VLM_MODEL_TIER=small` for hosts that need the 3B path. Re-run Resolved Issue #4's VLM Climax Refinement validation on a small Ego4D batch to confirm climax accuracy improves (or at minimum holds steady) before merging.
+  - *Pros*: Direct quality win on the cognitive-task subset; minimal code surface (one model ID + a host check); benchmarkable on the existing Resolved Issue #4 fixtures.
+  - *Cons*: Pulls a ~15 GB additional model weight onto the Extreme SSD (`OLLAMA_MODELS`); first-run download adds ~5-10 minutes; latency per VLM inference may rise from ~600 ms to ~1.5 s on the M4 Max's Neural Engine, but the multi-image batching (Resolved Issue #11) absorbs most of it.
+
+**Option B**: **Add a Tier Configuration Parameter, Default to 3B** — Add `vlm_tier: Literal["small","medium","large"] = "small"` to `FilteringPipeline.__init__` and only promote to 7B on user opt-in.
+  - *Pros*: Zero behavior change for existing callers; easy A/B experiments.
+  - *Cons*: Researchers who skip the docs continue running 3B and miss the quality win; bookkeeping overhead for the configuration surface.
+
+Your selection: _____

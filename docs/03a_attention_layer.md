@@ -90,7 +90,7 @@ This dehydrated result can then be successfully merged into the master database 
 ## Verification & Validation Check
 To validate the reliability of the attention scoring mechanics:
 - **Singular Video Test**: Process a single known interaction video. Output the `attention_trace` timeseries and write a quick visualization script (e.g., using `matplotlib`) to graph the `attention_score` over time alongside the video timeline. Manually verify if the peaks visually match the moments the bystander looks at the POV camera/hands.
-- **Batch Test**: Point the layer script at a batch of 100 clips from the `filtered_manifest.json`. During this batch, actively monitor the process on the **24GB RAM Mac mini M4 Pro** to ensure 3D Gaze Estimation tensor operations run stably via MPS without memory leaks over prolonged loops. Assert that the resulting `03a_attention_result.json` handles missing detections gracefully and outputs valid scores bounded between 0 and 1.
+- **Batch Test**: Point the layer script at a batch of 100 clips from the `filtered_manifest.json`. During this batch, actively monitor the process on the **Mac Studio (M4 Max, 64 GB unified memory)** to ensure 3D Gaze Estimation tensor operations run stably via MPS without memory leaks over prolonged loops. Assert that the resulting `03a_attention_result.json` handles missing detections gracefully and outputs valid scores bounded between 0 and 1.
 
 ---
 
@@ -171,5 +171,35 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No unresolved issues at this time._
+### Issue 1: L2CS-Net `unload()` Pattern Now Premature on 64 GB Mac Studio
+**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #16 ("L2CS Model / MPS Memory Unloading via Context Manager") added an explicit `unload()` method and a `__enter__/__exit__` protocol so the E2E orchestrator could free L2CS-Net's ~200 MB ResNet50 graph (plus ~500 MB of cached MPS activations) before transitioning to Layers 03b–03g. The driver was the 24 GB Mac mini M4 Pro's inability to keep L2CS resident alongside Py-Feat (03b), emotion2vec+ (03c), and Depth Anything V2 + SAM (03d). On the new **Mac Studio (M4 Max, 64 GB unified memory)** host, the steady-state combined resident set of L2CS + every downstream 03 model totals ~12 GB — well under the 40 GB budget. Forcing an unload now means the E2E orchestrator pays a ~1.5 s reload + MPS warm-up if any downstream layer needs to re-query 03a's gaze model (e.g., a re-run, a `--force` reprocess), with no compensating memory win.
+
+**Option A (recommended)**: **Keep `unload()` and `__exit__` But Make the E2E Orchestrator Opt-In** — The context manager and `unload()` method stay in `AttentionLayerPipeline` (they're useful for short-lived scripts and for memory-constrained hosts). The E2E orchestrator stops calling `unload()` automatically when `psutil.virtual_memory().total >= 48 * 2**30` and instead retains the pipeline instance for the entire 03 run. Direct callers using `with AttentionLayerPipeline(...) as p:` still get deterministic cleanup.
+  - *Pros*: Preserves Resolved Issue #16's contract for short-lived/constrained callers; eliminates the reload-cost regression on the M4 Max; the gate is a one-line check.
+  - *Cons*: Adds a host-class branch in the E2E orchestrator; if the orchestrator forgets to call `unload()` on exit, a long-lived L2CS instance survives until process exit (acceptable on the M4 Max but should be documented).
+
+**Option B**: **Remove `unload()` Entirely; Always Hold L2CS Resident** — Treat the M4 Max as the supported host and delete the `unload()` method and context-manager protocol.
+  - *Pros*: Smallest 03a codebase; one resident-set policy.
+  - *Cons*: Hard-breaks Mac mini compatibility; loses the operationally-validated cleanup path Resolved Issue #16 added; closes the door on memory-stressed CI runners.
+
+Your selection: _____
+
+---
+
+### Issue 2: L2CS-Net (ResNet50 Backbone) Predates Stronger MPS-Compatible Gaze Models
+**Status**: ⚠️ Confirmed Unresolved — `L2CS-Net` was selected (Resolved Issue #1) because its ~200 MB ResNet50 backbone fit comfortably in the 24 GB Mac mini's MPS-resident budget and because the upstream `models/l2cs-net/` repo could be patched in-tree for the `include_detector=False` path. The model is from 2022 and its angular error on Gaze360 (~10°) is now eclipsed by **3DGazeNet** and **CrossGaze** (~7° on Gaze360), both Apache-2.0 and both with ~500 MB-1 GB checkpoints that would not have fit alongside the rest of the 03 layers on a 24 GB host but easily fit on the **Mac Studio (M4 Max, 64 GB unified memory)** target.
+
+**Option A (recommended)**: **A/B CrossGaze Against L2CS-Net on a 100-Clip Validation Subset** — Add `models/crossgaze/` as a sibling to `models/l2cs-net/`, wire it through the same `gaze_pipeline` interface used by `AttentionLayerPipeline`, and run both models on the same 100-clip subset. Compare per-trace `pitch_rad`/`yaw_rad` against ground-truth Aria-glasses gaze in the subset of Ego4D clips that carry it. Promote CrossGaze as the default only if the angular error drop exceeds 1.5° and Layer 03e's nod/shake F1 score on the corresponding subset does not regress.
+  - *Pros*: Direct measurable quality target (angular error); the 03e regression check guards the most sensitive downstream consumer of L2CS's pitch/yaw output; no production change until measured.
+  - *Cons*: Requires standing up a second `gaze_pipeline` adapter and a comparison harness; CrossGaze's coordinate convention may not match `gazeto3d` (Resolved Issue #2) so the per-frame integration path needs validation; ~1-2 weeks of effort before merge.
+
+**Option B**: **Hold on L2CS-Net Until a Specific 03 Downstream Bug Demands More Precision** — Defer the upgrade until a concrete failure mode (e.g., 03e false-shake-detection that traces back to noisy L2CS pitch/yaw) justifies the effort.
+  - *Pros*: Zero risk of introducing a coordinate-convention or calibration regression in the gaze pipeline; engineering time stays on higher-priority issues.
+  - *Cons*: Forfeits the headroom advantage of the new host; if a future audit asks "why are you on a 4-year-old model," there's no documented reason beyond inertia.
+
+**Option C**: **Switch to a VLM-Based Gaze Estimator (Qwen2.5-VL or Gemma 4 Multimodal)** — Replace L2CS with a prompt-based "estimate the bystander's gaze pitch/yaw" call against the existing VLM stack.
+  - *Pros*: Reuses already-resident VLM weights; no second backbone to maintain.
+  - *Cons*: VLM gaze estimation is currently 5-15° worse than dedicated regression models; latency is ~20× higher per frame; doesn't produce continuous radians, only discrete classifications — would break Layer 03e's frequency-domain consumption entirely.
+
+Your selection: _____
 
