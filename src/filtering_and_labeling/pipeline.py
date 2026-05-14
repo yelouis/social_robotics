@@ -1,3 +1,4 @@
+import os
 import json
 import cv2
 import gc
@@ -23,8 +24,26 @@ class FilteringPipeline:
         
         # Shared components
         self.detector = SocialPresenceDetector('yolov8n.pt')
-        self.vlm_model = "qwen2.5vl"
-        
+
+        # Default the Stage-2 climax-refinement VLM to the 7B tier. 7B fits
+        # alongside YOLO on a 64 GB host and improves fine-grained climax
+        # localization on slow/cognitive tasks. Hosts that need the lighter
+        # 3B model (e.g. 24 GB Mac mini) opt down via SAF_VLM_MODEL_TIER=small.
+        vlm_tier = os.getenv("SAF_VLM_MODEL_TIER", "default").lower()
+        self.vlm_model = "qwen2.5vl:3b" if vlm_tier == "small" else "qwen2.5vl:7b"
+
+        # Gate the single-pass interleaved architecture on host memory. The
+        # two-pass path was built for the 24 GB Mac mini where YOLO and the
+        # VLM could not co-reside; on a >=48 GB host they fit together, so we
+        # interleave per video and read each file off the SSD once, not twice.
+        try:
+            import psutil
+            self.single_pass = psutil.virtual_memory().total >= 48 * 2**30
+        except ImportError:
+            self.single_pass = False
+        arch = "single-pass interleaved" if self.single_pass else "two-pass"
+        print(f"Filtering architecture: {arch} (VLM: {self.vlm_model})")
+
         # Pass storage
         self.initial_registry = [] # For Pass 1
         self.intermediate_results = [] # Pass 1 output
@@ -70,7 +89,7 @@ class FilteringPipeline:
     def run(self):
         with open(self.input_manifest_path, 'r') as f:
             self.initial_registry = json.load(f)
-            
+
         final_results = []
         # Load existing results to append to them if not forcing
         if self.output_manifest_path.exists() and not self.force:
@@ -81,6 +100,18 @@ class FilteringPipeline:
             except:
                 pass
 
+        if self.single_pass:
+            self._run_single_pass(final_results)
+        else:
+            self._run_two_pass(final_results)
+
+        print(f"Final count: {len(final_results)} videos in manifest.")
+
+    def _run_two_pass(self, final_results):
+        """ Two-pass fallback for <48 GB hosts: run YOLO across all videos,
+        unload it, then run the VLM across the survivors. Prevents YOLO and
+        Qwen2.5-VL from co-residing in unified memory on memory-constrained
+        hosts (e.g. the 24 GB Mac mini M4 Pro). """
         # --- PASS 1: Social Filter (YOLO) ---
         print("\n--- PASS 1: Social Filter (YOLO) ---")
         pass1_queue = []
@@ -88,7 +119,7 @@ class FilteringPipeline:
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
                 continue
-            
+
             video_path = Path(entry['file_path'])
             if not video_path.exists(): continue
 
@@ -114,14 +145,48 @@ class FilteringPipeline:
                 if result:
                     final_results.append(result)
                     self.processed_ids.add(video_id)
-                    
+
                     # Incremental save
                     with open(self.output_manifest_path, 'w') as f:
                         json.dump(final_results, f, indent=4)
             except Exception as e:
                 self.log_error(video_id, e)
-                
-        print(f"Final count: {len(final_results)} videos in manifest.")
+
+    def _run_single_pass(self, final_results):
+        """ Single-pass interleaved architecture for >=48 GB hosts. YOLO and
+        Qwen2.5-VL co-reside in unified memory, so each video is read off the
+        SSD once: the YOLO social filter is immediately followed by the VLM
+        task/climax pass, rather than reading the whole dataset twice. """
+        print("\n--- SINGLE-PASS: Interleaved Social Filter + Task/Climax (YOLO + VLM) ---")
+        for entry in self.initial_registry:
+            video_id = entry.get('id', entry.get('video_id'))
+            if video_id in self.processed_ids and not self.force:
+                continue
+
+            video_path = Path(entry['file_path'])
+            if not video_path.exists(): continue
+
+            print(f"Social Filter: {video_id}")
+            try:
+                bystander_detections, hand_detections = self.social_presence_filter(video_path)
+                if not bystander_detections:
+                    print(f"Dropped {video_id}: No social presence.")
+                    continue
+
+                entry['bystander_detections'] = bystander_detections
+                entry['hand_detections'] = hand_detections
+
+                print(f"Task Refinement: {video_id}")
+                result = self.process_video_vlm_pass(entry)
+                if result:
+                    final_results.append(result)
+                    self.processed_ids.add(video_id)
+
+                    # Incremental save
+                    with open(self.output_manifest_path, 'w') as f:
+                        json.dump(final_results, f, indent=4)
+            except Exception as e:
+                self.log_error(video_id, e)
 
     def process_video_vlm_pass(self, entry):
         """ Pass 2: Labeling and Climax Identification """
