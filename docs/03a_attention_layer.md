@@ -182,7 +182,7 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
   - *Pros*: Smallest 03a codebase; one resident-set policy.
   - *Cons*: Hard-breaks Mac mini compatibility; loses the operationally-validated cleanup path Resolved Issue #16 added; closes the door on memory-stressed CI runners.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -201,5 +201,5 @@ Your selection: _____
   - *Pros*: Reuses already-resident VLM weights; no second backbone to maintain.
   - *Cons*: VLM gaze estimation is currently 5-15° worse than dedicated regression models; latency is ~20× higher per frame; doesn't produce continuous radians, only discrete classifications — would break Layer 03e's frequency-domain consumption entirely.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 

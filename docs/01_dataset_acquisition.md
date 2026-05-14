@@ -145,7 +145,7 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
   - *Pros*: Self-adapting; survives downstream memory pressure from other concurrent processes (e.g., ffmpeg subprocesses, Python E2E orchestrator).
   - *Cons*: Introduces non-deterministic per-batch latency; harder to reason about when debugging acquisition throughput regressions.
 
-Your selection: _____
+Your selection: Proceed with Option C.
 
 ---
 
@@ -160,4 +160,4 @@ Your selection: _____
   - *Pros*: Self-calibrating across SSDs, network conditions, and host classes; future-proofs against TB5 enclosures.
   - *Cons*: Adds state-tracking complexity in `run_selective_download.py`; needs a cold-start fallback for the first batch.
 
-Your selection: _____
+Your selection: Proceed with Option A.

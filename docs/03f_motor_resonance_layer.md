@@ -142,7 +142,7 @@ We must track how the bystander responds physically.
   - *Pros*: Zero migration risk.
   - *Cons*: Forfeits the keypoint-accuracy headroom; the M4 Max's flinch-detection precision stays gated on the smallest available model.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -157,5 +157,5 @@ Your selection: _____
   - *Pros*: Simplest dependency story.
   - *Cons*: Forfeits a potentially measurable accuracy win on the flinch primary metric.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 

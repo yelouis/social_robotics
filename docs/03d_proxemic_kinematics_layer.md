@@ -156,7 +156,7 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
   - *Pros*: Lowest risk; zero behavior change.
   - *Cons*: Forfeits the bystander-silhouette quality win; if Issue 2 below also stays on the small variants, the 03d layer overall stays on a memory-constrained configuration on a host that no longer needs it.
 
-Your selection: _____
+Your selection: Promote V1-Large as Default on 64 GB Hosts. No need for V2-Small fallback.
 
 ---
 
@@ -175,7 +175,7 @@ Your selection: _____
   - *Pros*: Zero migration risk.
   - *Cons*: Forfeits the silhouette-precision headroom on a host that has it; SAM masks remain the dominant 03d wall-clock cost regardless.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -190,4 +190,4 @@ Your selection: _____
   - *Pros*: Maximum throughput on the M4 Max.
   - *Cons*: Loses the per-video safety net for transient anomalies; future PyTorch releases may change MPS cache behavior in ways that revalidate the per-video flush — losing the call means losing the defense.
 
-Your selection: _____
+Your selection: Proceed with Option A.

@@ -137,7 +137,7 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
   - *Pros*: Single-layer change; activates the filter without touching 03a.
   - *Cons*: At 16 FPS the 3-sample median window covers 187 ms — close to the lower-bound period of fast nods (333 ms for 3 Hz); risks "demolishing the tone" exactly as Resolved Issue #10's gate was designed to prevent; reintroduces the failure mode the gate exists to avoid.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -152,7 +152,7 @@ Your selection: _____
   - *Pros*: Zero work until needed.
   - *Cons*: Couples 03e's correctness to whichever gaze model happens to be active; future audits will lose the calibration provenance.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ### 🧪 Test Suite Results (6/6 Passed)
 

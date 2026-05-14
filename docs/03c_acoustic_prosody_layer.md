@@ -165,7 +165,7 @@ The Acoustic Prosody Layer has been implemented and successfully integrated:
   - *Pros*: Simplest code; deterministic startup time.
   - *Cons*: Reverts a deliberate Resolved Issue #16 fix; hard-breaks Mac mini hosts.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -180,4 +180,4 @@ Your selection: _____
   - *Pros*: Zero migration risk.
   - *Cons*: Forfeits the headroom advantage; no measurable answer to "should we upgrade."
 
-Your selection: _____
+Your selection: Proceed with Option A.

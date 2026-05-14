@@ -76,7 +76,7 @@ This document outlines the machine learning dependencies, models, and libraries 
   - *Pros*: Avoids spending memory headroom on layers where the upgrade is imperceptible; matches the project's "Skip on failure / minimal-overhead" philosophy.
   - *Cons*: Slowest to implement; benchmark harnesses don't currently exist for several layers; quality wins from a larger model can be non-linear and only show up on edge cases that aren't in the benchmark.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -91,4 +91,4 @@ Your selection: _____
   - *Pros*: Eliminates dead documentation; simplifies the dependency surface.
   - *Cons*: Loses the explicit deferral context; future contributors who don't read 03f's history may re-propose RTMPose without knowing why it was rejected.
 
-Your selection: _____
+Your selection: Proceed with Option B.

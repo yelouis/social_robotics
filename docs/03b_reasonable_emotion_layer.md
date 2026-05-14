@@ -227,7 +227,7 @@ The initial implementation of the Reasonable Emotion Layer is complete:
   - *Pros*: Reuses the VLM family already pulled for Layer 02's climax refinement; potentially better JSON adherence than Gemma at the same memory footprint.
   - *Cons*: Different prompt-template idioms — Resolved Issues #7 (pydantic + retry) and #10 (State-Change Filter) are calibrated to Gemma's response shape and would need re-validation; introduces a third Ollama model in the pipeline catalog.
 
-Your selection: _____
+Your selection: Promote `gemma4:26b` as Default. Don't worry about an `e4b` fallback.
 
 ---
 
@@ -246,4 +246,4 @@ Your selection: _____
   - *Pros*: Zero migration risk; minimal effort.
   - *Cons*: Forfeits the new host's GPU headroom indefinitely; the upstream feature has been pending for >18 months.
 
-Your selection: _____
+Your selection: Proceed with Option A.
