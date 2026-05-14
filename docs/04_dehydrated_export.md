@@ -133,7 +133,7 @@ To guarantee the export structure adheres to safety standards and schema require
   - *Pros*: Simplest; immediately recovers the new host's headroom in the no-Dask path.
   - *Cons*: No empirical basis for `0.7`; if the concurrent-orchestrator scenario above applies, the new factor could cause OOM where the old one would have safely fallen back to Dask.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -148,7 +148,7 @@ Your selection: _____
   - *Pros*: No static calibration; self-adapting.
   - *Cons*: Memory measurement is too late to be useful for the Dask-vs-Pandas decision (the decision happens before aggregation); reactive rather than predictive.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -163,4 +163,4 @@ Your selection: _____
   - *Pros*: Avoids speculative schema columns.
   - *Cons*: Couples the 03g shipping to a same-day 04 PR; if 03g ships first, the export silently loses the new field until 04 catches up.
 
-Your selection: _____
+Your selection: Proceed with Option B.

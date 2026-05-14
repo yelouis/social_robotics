@@ -247,7 +247,7 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
   - *Pros*: Avoids the disk re-read without dropping two-pass isolation; cache size is bounded and easy to gate on host memory.
   - *Cons*: Significantly more code; requires careful disk-vs-memory eviction policy; the existing `tempfile.TemporaryDirectory` plumbing already does most of this on disk so the gain is marginal.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -262,4 +262,4 @@ Your selection: _____
   - *Pros*: Zero behavior change for existing callers; easy A/B experiments.
   - *Cons*: Researchers who skip the docs continue running 3B and miss the quality win; bookkeeping overhead for the configuration surface.
 
-Your selection: _____
+Your selection: Proceed with Option A.

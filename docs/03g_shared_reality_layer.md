@@ -129,7 +129,7 @@ The current pipeline relies exclusively on optical flow and bounding box centeri
   - *Pros*: Uniform code path; simpler dependency surface.
   - *Cons*: Forfeits the precision floor on the Aria subset, which is exactly where ground-truth validation could be built.
 
-Your selection: _____
+Your selection: Proceed with Option B. There isn't enough proof that there are a lot of Aria clips in the dataset.
 
 ---
 
@@ -144,4 +144,4 @@ Your selection: _____
   - *Pros*: Zero risk of recalibration regression.
   - *Cons*: Forfeits the headroom; sub-degree micro-pans (e.g., a brief glance toward a bystander between two task moments) remain below the detection floor.
 
-Your selection: _____
+Your selection: Proceed with Option A.
