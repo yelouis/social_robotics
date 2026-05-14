@@ -44,6 +44,23 @@ class AcousticProsodyPipeline:
         self._load_processed_ids()
         self._init_models()
 
+    # SenseVoice (~150-200 MB resident) is eager-loaded on hosts with >= 48 GB
+    # unified memory so the low-confidence gate never pays its ~2-3s load
+    # latency mid-run. Smaller hosts (e.g. the 24 GB Mac mini M4 Pro) stay
+    # lazy. Mirrors AttentionLayerPipeline.HIGH_MEMORY_HOST_BYTES (03a).
+    HIGH_MEMORY_HOST_BYTES = 48 * 2**30
+
+    @staticmethod
+    def host_can_eager_load_sensevoice():
+        """True when the host has enough unified memory to keep SenseVoice
+        resident for the whole run. Falls back to False (lazy load) when
+        psutil is not installed."""
+        try:
+            import psutil
+        except ImportError:
+            return False
+        return psutil.virtual_memory().total >= AcousticProsodyPipeline.HIGH_MEMORY_HOST_BYTES
+
     def _init_models(self):
         """Initialize the funasr SER model, librosa, and validate ffmpeg.
         
@@ -78,9 +95,13 @@ class AcousticProsodyPipeline:
             )
 
         # --- FunASR + emotion2vec+ validation ---
-        # SenseVoice is lazy-loaded on the first low-confidence sample to avoid
-        # paying its ~150-200MB resident-memory cost on manifests where
-        # emotion2vec+ produces consistently high-confidence outputs.
+        # SenseVoice is invoked only when emotion2vec+ dominant confidence
+        # falls below the gating threshold. On high-memory hosts (>= 48 GB
+        # unified memory) it is eager-loaded below so the ambiguous-audio
+        # clips that trigger the gate do not pay its ~2-3s load latency
+        # mid-run; on smaller hosts it stays lazy-loaded (see
+        # _run_sensevoice_model) to avoid ~150-200 MB of resident memory it
+        # may never use.
         self.sensevoice_model = None
         try:
             from funasr import AutoModel
@@ -89,7 +110,7 @@ class AcousticProsodyPipeline:
             # disable_update=True prevents downloading updates on every run if already cached
             self.model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
             self.funasr_available = True
-            logger.info("emotion2vec+ initialized successfully (SenseVoice deferred until first low-confidence sample).")
+            logger.info("emotion2vec+ initialized successfully.")
         except ImportError:
             raise RuntimeError(
                 "funasr is not installed. Speech Emotion Recognition requires it. "
@@ -101,6 +122,27 @@ class AcousticProsodyPipeline:
                 "Verify the ModelScope cache at ~/.cache/modelscope or re-run with "
                 "disable_update=False to force re-download."
             ) from e
+
+        # Eager-load SenseVoice on high-memory hosts. This is a pure
+        # optimization: if construction fails, fall back to the lazy path,
+        # which retries on first use and degrades to empty audio_events if
+        # still unavailable — SenseVoice is supplementary, so unlike the
+        # primary SER model its load failure does not warrant a hard fail.
+        if self.host_can_eager_load_sensevoice():
+            try:
+                logger.info("High-memory host detected; eager-loading SenseVoiceSmall...")
+                self.sensevoice_model = self._AutoModel(
+                    model="iic/SenseVoiceSmall", disable_update=True
+                )
+                logger.info("SenseVoiceSmall eager-loaded successfully.")
+            except Exception as e:
+                logger.error(
+                    f"Eager-load of SenseVoiceSmall failed ({e}); falling back to "
+                    "lazy load on first low-confidence sample."
+                )
+                self.sensevoice_model = None
+        else:
+            logger.info("Standard-memory host; SenseVoice deferred until first low-confidence sample.")
 
     def _load_processed_ids(self):
         if self.output_result_path.exists() and not self.force:
@@ -247,8 +289,10 @@ class AcousticProsodyPipeline:
     def _run_sensevoice_model(self, wav_path: str) -> List[str]:
         """Run SenseVoiceSmall to detect non-speech audio events (laughter, applause, etc.).
 
-        Lazy-loads the SenseVoice model on first invocation. Matches only the
-        bracketed event tokens emitted by SenseVoice's special-symbol grammar
+        Lazy-loads the SenseVoice model on first invocation when the host did
+        not eager-load it at init time (see host_can_eager_load_sensevoice).
+        Matches only the bracketed event tokens emitted by SenseVoice's
+        special-symbol grammar
         (e.g. ``<|laughter|>``); bare-word matching was retired because it
         false-positived on transcribed speech (``slaughter``, ``coughed``,
         ``the laughter died down``, etc.).

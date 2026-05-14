@@ -29,6 +29,9 @@ This document outlines the machine learning dependencies, models, and libraries 
 > [!IMPORTANT]
 > **Gemma 4 variant**: The documented "~2.5 GB" refers specifically to the `gemma4:e4b` (4B parameter, 4-bit quantized) variant, which remains the current production default. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, larger variants (`gemma4:26b` at ~15 GB or `gemma4:31b` at ~18 GB) are now physically loadable without OOM, but switching the production default requires re-validating the 03b prompt suite and re-tuning Resolved Issue #7's JSON-schema retries — see the Unresolved Issues section of `03b_reasonable_emotion_layer.md` for the upgrade trade-off matrix.
 
+> [!NOTE]
+> **emotion2vec+ variant**: The "Acoustic Prosody" layer (03c) pins the SER model to the `large` variant (`iic/emotion2vec_plus_large`, ~600 MB, 9-class) — the current production default. FunASR also ships `iic/emotion2vec_plus_base` (~300 MB, lower quality) and `iic/emotion2vec_plus_seed` (~2 GB, transformer-XL backbone, stronger embeddings on long cross-speaker utterances). The `seed` variant's ~2 GB footprint was disqualifying on the legacy 24 GB Mac mini M4 Pro once L2CS, Py-Feat, and Depth Anything V2 + SAM were simultaneously resident, but on the **Mac Studio (M4 Max, 64 GB unified memory)** target host it is loadable with no displacement of any other 03 layer. It remains a **documented candidate, not a production change** — promoting `seed` would require A/B'ing 9-class dominant-emotion accuracy against human labels and re-checking that the SenseVoice low-confidence gate (`< 0.6`) does not need recalibration. See `03c_acoustic_prosody_layer.md` Resolved Issue #19 for the retention rationale.
+
 ## 2. Core Libraries
 
 | Library | Purpose | Approximate Install Size | Location | Notes |

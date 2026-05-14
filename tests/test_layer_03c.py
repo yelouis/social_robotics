@@ -322,6 +322,95 @@ def test_sensevoice_lazy_loaded_on_first_low_confidence():
     pipeline._AutoModel.assert_called_once()
 
 # ------------------------------------------------------------------
+#  SenseVoice eager-load host gate (Issue #1)
+# ------------------------------------------------------------------
+
+def test_host_can_eager_load_sensevoice_gate():
+    """Issue #1: the 48 GB unified-memory gate — hosts at or above the
+    threshold (e.g. the 64 GB Mac Studio M4 Max) eager-load SenseVoice,
+    hosts below it (e.g. the 24 GB Mac mini M4 Pro) stay lazy.
+    """
+    fake_vm = MagicMock()
+
+    fake_vm.total = 64 * 2**30
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        assert AcousticProsodyPipeline.host_can_eager_load_sensevoice() is True
+
+    fake_vm.total = 48 * 2**30
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        assert AcousticProsodyPipeline.host_can_eager_load_sensevoice() is True
+
+    fake_vm.total = 24 * 2**30
+    with patch("psutil.virtual_memory", return_value=fake_vm):
+        assert AcousticProsodyPipeline.host_can_eager_load_sensevoice() is False
+
+def test_sensevoice_eager_loaded_on_high_memory_host():
+    """Issue #1: on hosts with >= 48 GB unified memory, SenseVoice is
+    eager-loaded during _init_models so the low-confidence gate never pays
+    the ~2-3s load latency mid-run.
+    """
+    fake_funasr = MagicMock()
+    emotion_model = MagicMock(name="emotion2vec")
+    sensevoice_model = MagicMock(name="sensevoice")
+    fake_funasr.AutoModel = MagicMock(side_effect=[emotion_model, sensevoice_model])
+
+    fake_vm = MagicMock()
+    fake_vm.total = 64 * 2**30
+
+    with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+         patch.dict("sys.modules", {"funasr": fake_funasr}), \
+         patch("psutil.virtual_memory", return_value=fake_vm):
+        pipeline = AcousticProsodyPipeline("dummy.json", "dummy_out.json")
+
+    assert pipeline.sensevoice_model is sensevoice_model
+    assert fake_funasr.AutoModel.call_count == 2
+    fake_funasr.AutoModel.assert_any_call(model="iic/SenseVoiceSmall", disable_update=True)
+
+def test_sensevoice_stays_lazy_on_standard_memory_host():
+    """Issue #1: on hosts below the 48 GB gate, SenseVoice is NOT constructed
+    at init — it stays lazy so the Mac mini does not pay resident memory it
+    may never use.
+    """
+    fake_funasr = MagicMock()
+    emotion_model = MagicMock(name="emotion2vec")
+    fake_funasr.AutoModel = MagicMock(return_value=emotion_model)
+
+    fake_vm = MagicMock()
+    fake_vm.total = 24 * 2**30
+
+    with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+         patch.dict("sys.modules", {"funasr": fake_funasr}), \
+         patch("psutil.virtual_memory", return_value=fake_vm):
+        pipeline = AcousticProsodyPipeline("dummy.json", "dummy_out.json")
+
+    assert pipeline.sensevoice_model is None
+    fake_funasr.AutoModel.assert_called_once_with(
+        model="iic/emotion2vec_plus_large", disable_update=True
+    )
+
+def test_eager_load_failure_falls_back_to_lazy():
+    """Issue #1: eager-load is a pure optimization — if SenseVoice construction
+    fails on a high-memory host, _init_models must not hard-fail (SenseVoice is
+    supplementary). It falls back to the lazy path with sensevoice_model=None.
+    """
+    fake_funasr = MagicMock()
+    emotion_model = MagicMock(name="emotion2vec")
+    fake_funasr.AutoModel = MagicMock(
+        side_effect=[emotion_model, OSError("SenseVoice weights corrupt")]
+    )
+
+    fake_vm = MagicMock()
+    fake_vm.total = 64 * 2**30
+
+    with patch("shutil.which", return_value="/usr/bin/ffmpeg"), \
+         patch.dict("sys.modules", {"funasr": fake_funasr}), \
+         patch("psutil.virtual_memory", return_value=fake_vm):
+        pipeline = AcousticProsodyPipeline("dummy.json", "dummy_out.json")
+
+    assert pipeline.sensevoice_model is None
+    assert pipeline.funasr_available is True
+
+# ------------------------------------------------------------------
 #  Tunable config (Layer03cConfig)
 # ------------------------------------------------------------------
 
