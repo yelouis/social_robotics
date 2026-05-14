@@ -74,6 +74,23 @@ class AttentionLayerPipeline:
             except Exception as e:
                 print(f"Error loading existing results: {e}. Starting fresh.")
 
+    # On hosts with >= 48 GB unified memory the full 03 model set (~12 GB)
+    # stays resident, so the E2E orchestrator keeps the L2CS-Net instance
+    # alive across the whole 03 run instead of paying a reload + MPS warm-up
+    # between layers. Direct `with` callers still unload via __exit__.
+    HIGH_MEMORY_HOST_BYTES = 48 * 2**30
+
+    @staticmethod
+    def host_can_retain_resident():
+        """ True when the host has enough unified memory to keep L2CS-Net
+        resident for the whole 03 run; the E2E orchestrator uses this to skip
+        the post-run unload(). Falls back to False (unload) without psutil. """
+        try:
+            import psutil
+        except ImportError:
+            return False
+        return psutil.virtual_memory().total >= AttentionLayerPipeline.HIGH_MEMORY_HOST_BYTES
+
     def unload(self):
         """ Free the L2CS-Net model from MPS / GPU memory for downstream layers. """
         if getattr(self, 'gaze_pipeline', None) is not None:

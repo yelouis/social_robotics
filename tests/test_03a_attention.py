@@ -142,5 +142,22 @@ class TestAttentionLayerPipeline(unittest.TestCase):
             results = json.load(f)
         self.assertTrue(results[0].get('dummy'))
 
+class TestHostMemoryGate(unittest.TestCase):
+    """Issue 1: the E2E orchestrator calls host_can_retain_resident() to decide
+    whether to skip the post-run unload() on high-memory hosts."""
+
+    def test_high_memory_host_retains_resident(self):
+        mock_vm = MagicMock()
+        mock_vm.total = 64 * 2**30
+        with patch('psutil.virtual_memory', return_value=mock_vm):
+            self.assertTrue(AttentionLayerPipeline.host_can_retain_resident())
+
+    def test_constrained_host_unloads(self):
+        mock_vm = MagicMock()
+        mock_vm.total = 24 * 2**30
+        with patch('psutil.virtual_memory', return_value=mock_vm):
+            self.assertFalse(AttentionLayerPipeline.host_can_retain_resident())
+
+
 if __name__ == '__main__':
     unittest.main()
