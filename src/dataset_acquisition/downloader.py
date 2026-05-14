@@ -273,11 +273,21 @@ class Ego4DDownloader(DatasetDownloader):
                 if video_uids:
                     self.mark_as_processed(video_uids)
 
-                # Free YOLO + MediaPipe memory between batches to prevent MPS
-                # pressure on the M4 Pro's 24GB unified memory across long runs.
-                # The lazy-loading property pattern reloads on the next batch.
+                # Conditionally free YOLO + MediaPipe memory between batches.
+                # On the 64 GB Mac Studio the steady-state resident set of both
+                # models (<1 GB) is negligible, so we only pay the unload +
+                # lazy-reload cost when system memory is actually tight (e.g.
+                # concurrent ffmpeg subprocesses or the E2E orchestrator). Falls
+                # back to always unloading if psutil is unavailable, preserving
+                # the operationally-tested path for smaller hosts.
                 if self.filterer is not None:
-                    self.filterer.detector.unload()
+                    try:
+                        import psutil
+                        memory_pressure = psutil.virtual_memory().percent > 75
+                    except ImportError:
+                        memory_pressure = True
+                    if memory_pressure:
+                        self.filterer.detector.unload()
                     
         except subprocess.CalledProcessError as e:
             print(f"Error during Ego4D download: {e}")

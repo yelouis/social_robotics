@@ -63,8 +63,11 @@ def run_selective():
                     # Average size assumption: 500MB
                     avg_size_bytes = 500 * 1024 * 1024
                     safe_batch = int(usage.free / avg_size_bytes)
-                    # Clamp between 10 and 200
-                    batch_size = max(10, min(200, safe_batch))
+                    # Clamp between 10 and 500. The 500 ceiling reflects the
+                    # Mac Studio M4 Max's memory headroom and TB5/internal-SoC
+                    # SSD bandwidth; the prior 200 cap was tuned for the 24 GB
+                    # Mac mini M4 Pro and under-utilized the new host.
+                    batch_size = max(10, min(500, safe_batch))
                 except Exception as e:
                     print(f"[Warning] Could not calculate dynamic batch size: {e}")
                     batch_size = 10  # Fallback
