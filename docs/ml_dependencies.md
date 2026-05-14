@@ -12,7 +12,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **L2CS-Net** (or CrossGaze) | 3D Gaze / Head Pose Estimation | ~200 MB | Internal SSD or Local Project | MIT |
 | **Qwen2.5-VL** (via Ollama) | Primary VLM for visual classification + Task Climax VLM refinement (Node 02) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **moondream** (via Ollama) | Fast VLM alternative (Lightweight) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
-| **Gemma 4** `gemma4:e4b` (via Ollama) | Fast multimodal model for action expectation & reasoning logic | ~2.5 GB (4-bit) | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
+| **Gemma 4** `gemma4:26b` (via Ollama) | Multi-step action expectation & reasoning logic (Layer 03b) | ~15 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **emotion2vec+** `large` (via FunASR) | Acoustic Prosody — primary SER model (9-class emotion + 768-dim embeddings) | ~600 MB | Internal SSD or Local Project | MIT |
 | **SenseVoice** (`SenseVoiceSmall`) | Acoustic Prosody — supplementary Audio Event Detection (laughter, applause, crying) | ~500 MB | Internal SSD or Local Project | Apache-2.0 |
 | **Depth Anything V2-Small** (`vits`) | Proxemic Kinematics (Relative Depth Delta Mapping) | ~100 MB | Internal SSD | Apache-2.0 |
@@ -27,7 +27,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 > **Task Climax Detection (Node 02)**: This pipeline does NOT use a dedicated highlight detection model. Instead, it uses a **hybrid Optical Flow + VLM refinement** approach: (1) OpenCV's `cv2.calcOpticalFlowFarneback` finds the kinetic peak within each task segment, (2) for slow/cognitive tasks, **Qwen2.5-VL** VLM refines the climax timestamp using the task label. This requires zero new model downloads.
 
 > [!IMPORTANT]
-> **Gemma 4 variant**: The documented "~2.5 GB" refers specifically to the `gemma4:e4b` (4B parameter, 4-bit quantized) variant, which remains the current production default. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, larger variants (`gemma4:26b` at ~15 GB or `gemma4:31b` at ~18 GB) are now physically loadable without OOM, but switching the production default requires re-validating the 03b prompt suite and re-tuning Resolved Issue #7's JSON-schema retries — see the Unresolved Issues section of `03b_reasonable_emotion_layer.md` for the upgrade trade-off matrix.
+> **Gemma 4 variant**: Layer 03b's `OLLAMA_MODEL` defaults to `gemma4:26b` (27B-class, ~15 GB resident) on the **Mac Studio (M4 Max, 64 GB unified memory)** target host — the multi-step structured-output reasoning chain measurably benefits from the larger model, and the 64 GB budget has ample headroom. The prior `gemma4:e4b` (4B parameter, 4-bit quantized, ~2.5 GB) default was chosen for the legacy 24 GB Mac mini M4 Pro budget; it is no longer wired as a fallback. See Resolved Issue #16 in `03b_reasonable_emotion_layer.md` for the migration rationale and the pending live E2E re-validation step.
 
 > [!NOTE]
 > **emotion2vec+ variant**: The "Acoustic Prosody" layer (03c) pins the SER model to the `large` variant (`iic/emotion2vec_plus_large`, ~600 MB, 9-class) — the current production default. FunASR also ships `iic/emotion2vec_plus_base` (~300 MB, lower quality) and `iic/emotion2vec_plus_seed` (~2 GB, transformer-XL backbone, stronger embeddings on long cross-speaker utterances). The `seed` variant's ~2 GB footprint was disqualifying on the legacy 24 GB Mac mini M4 Pro once L2CS, Py-Feat, and Depth Anything V2 + SAM were simultaneously resident, but on the **Mac Studio (M4 Max, 64 GB unified memory)** target host it is loadable with no displacement of any other 03 layer. It remains a **documented candidate, not a production change** — promoting `seed` would require A/B'ing 9-class dominant-emotion accuracy against human labels and re-checking that the SenseVoice low-confidence gate (`< 0.6`) does not need recalibration. See `03c_acoustic_prosody_layer.md` Resolved Issue #19 for the retention rationale.
@@ -38,12 +38,12 @@ This document outlines the machine learning dependencies, models, and libraries 
 |---|---|---|---|---|
 | **Ollama** | Main engine for running Gemma 4, moondream, etc. | ~500 MB (binary + runtime) | System Install | |
 | **FunASR** | Framework for emotion2vec+ inference | ~50 MB | Python virtual environment | `pip install -U funasr` |
-| **Py-Feat** | SOTA Emotion inference on bystander faces | ~300-500 MB (incl. models) | Python virtual environment | ⚠️ CPU-only on macOS (no MPS/GPU support) |
+| **HSEmotion-PyTorch** | SOTA Emotion inference on bystander faces (Layer 03b) | ~50-100 MB (incl. `enet_b2_8` weights) | Python virtual environment | Native MPS acceleration on Apple Silicon; `pip install hsemotion`. Replaced Py-Feat, which was CPU-only on macOS. |
 | **MediaPipe** | Egocentric Hand Detection tracker | ~100 MB | Python virtual environment | |
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
 | **transformers** | Loading Hugging Face models like Depth Anything V2 | ~150 MB | Python virtual environment | |
 | **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment | |
-| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, Py-Feat, etc. | ~2-3 GB | Python virtual environment | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
+| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, HSEmotion-PyTorch, etc. | ~2-3 GB | Python virtual environment | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
 | **SciPy** | Signal processing (Affirmation Gestures) | ~150 MB | Python virtual environment | |

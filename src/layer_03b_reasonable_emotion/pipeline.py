@@ -7,11 +7,17 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import List, Literal, Optional
 
-# Optional dependency: PyFeat
+# Optional dependency: HSEmotion-PyTorch (native MPS face-emotion model)
 try:
-    from feat import Detector
+    from hsemotion.facial_emotions import HSEmotionRecognizer
 except ImportError:
-    Detector = None
+    HSEmotionRecognizer = None
+
+# Optional dependency: torch — used only for MPS device detection
+try:
+    import torch
+except ImportError:
+    torch = None
 
 # Optional dependency: Ollama
 try:
@@ -41,8 +47,21 @@ class TransitionEvalSchema(BaseModel):
     classified_direction: Literal["positive", "negative", "neutral"]
     reasoning: str = ""
 
-# PyFeat emotion column order (standard across Py-Feat versions)
-PYFEAT_EMOTION_COLUMNS = ["anger", "disgust", "fear", "joy", "sadness", "surprise", "neutral"]
+# HSEmotion model + label mapping. The 8-class HSEmotion models emit the
+# FER+ vocabulary; we fold it onto the canonical 03b label set the rest of
+# the layer consumes. `contempt` has no 03b analog and is folded onto
+# `disgust` (closest negative-valence label); `happiness` is renamed to `joy`.
+HSEMOTION_MODEL = "enet_b2_8"
+HSEMOTION_TO_CANONICAL = {
+    "anger": "anger",
+    "contempt": "disgust",
+    "disgust": "disgust",
+    "fear": "fear",
+    "happiness": "joy",
+    "neutral": "neutral",
+    "sadness": "sadness",
+    "surprise": "surprise",
+}
 
 # ---------------------------------------------------------------------------
 #  Default / fallback expectations (used when LLM is unavailable)
@@ -53,8 +72,11 @@ DEFAULT_EXPECTATIONS = {
     "neutral_baseline": ["neutral", "surprise"]
 }
 
-# LLM configuration
-OLLAMA_MODEL = "gemma4:latest"
+# LLM configuration. The 03b reasoning chain (Step 1 expectation generation +
+# Step 3 cumulative-history evaluation) is a multi-step structured-output
+# regime where the 27B-class model measurably reduces JSON drift; the
+# Mac Studio (M4 Max, 64 GB) has ample headroom for its ~15 GB resident set.
+OLLAMA_MODEL = "gemma4:26b"
 LLM_MAX_RETRIES = 3
 
 
@@ -66,19 +88,23 @@ class ReasonableEmotionPipeline:
         self.error_log_path = self.output_result_path.parent / "03b_reasonable_emotion_errors.json"
         self.force = force
 
-        # Initialize PyFeat — CPU-only on macOS (Limitation #1 fix).
-        # We instantiate once and reuse across all videos to avoid the heavy
-        # model-loading cost per frame.  All inference is synchronous on CPU;
-        # concurrency is bounded by the single-threaded iteration in run().
+        # Initialize the face-emotion model — HSEmotion-PyTorch, which runs
+        # natively on the M4 Max MPS GPU. Instantiated once and reused across
+        # all videos to avoid per-frame model-loading cost. Falls back to CPU
+        # when MPS is unavailable, and to the deterministic mock generator in
+        # _sample_emotions when the package itself is absent.
+        self.emotion_device = "mps" if (torch is not None and torch.backends.mps.is_available()) else "cpu"
         try:
-            if Detector:
-                self.feat_detector = Detector(device="cpu")
-                print("[03b] PyFeat loaded (CPU mode).")
+            if HSEmotionRecognizer:
+                self.emotion_detector = HSEmotionRecognizer(
+                    model_name=HSEMOTION_MODEL, device=self.emotion_device
+                )
+                print(f"[03b] HSEmotion loaded ({self.emotion_device} mode).")
             else:
-                self.feat_detector = None
+                self.emotion_detector = None
         except Exception as e:
-            print(f"[03b] Failed to load PyFeat: {e}")
-            self.feat_detector = None
+            print(f"[03b] Failed to load HSEmotion: {e}")
+            self.emotion_detector = None
 
         # Check Ollama availability once at init
         self.ollama_available = False
@@ -472,17 +498,18 @@ class ReasonableEmotionPipeline:
         }
 
     # ------------------------------------------------------------------
-    #  Emotion sampling (Limitation #1 fix — real PyFeat integration)
+    #  Emotion sampling (HSEmotion-PyTorch, native MPS)
     # ------------------------------------------------------------------
     def _sample_emotions(self, cap, fps, start_sec, end_sec, bystander):
         """Sample bystander emotions at ~3 FPS within the reaction window.
 
-        When PyFeat is available, the BGR crop is converted to RGB and passed
-        as a numpy ndarray directly to Detector.detect_image() — no disk
-        round-trip. The dominant emotion column from the returned DataFrame
-        becomes the label; its probability becomes the magnitude.
+        When HSEmotion is available, the BGR crop is converted to RGB and
+        passed as a numpy ndarray directly to predict_emotions() — HSEmotion
+        handles its own face resize/normalisation internally. The dominant
+        FER+ label is folded onto the canonical 03b vocabulary via
+        HSEMOTION_TO_CANONICAL; its softmax probability becomes the magnitude.
 
-        When PyFeat is unavailable (or fails), a deterministic mock
+        When HSEmotion is unavailable (or fails), a deterministic mock
         distribution is used for integration testing. The mock uses a
         method-local random.Random instance so the global RNG is never
         mutated by Layer 03b.
@@ -531,27 +558,22 @@ class ReasonableEmotionPipeline:
             magnitude = 0.5
             detected = False
 
-            if self.feat_detector:
+            if self.emotion_detector:
                 try:
-                    # In-memory PyFeat call — pass the RGB ndarray directly
-                    # to detect_image(). Modern py-feat (>=0.6) accepts both
-                    # paths and ndarrays. If a stricter version is installed
-                    # and rejects the ndarray, the exception is caught below
-                    # and we fall through to the mock generator.
+                    # In-memory call — HSEmotion accepts an RGB ndarray
+                    # directly. predict_emotions returns the argmax FER+
+                    # label plus the per-class softmax scores.
                     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    det_result = self.feat_detector.detect_image(crop_rgb)
-
-                    if det_result is not None and len(det_result) > 0:
-                        emotion_cols = [c for c in det_result.columns
-                                        if c.lower() in {e.lower() for e in PYFEAT_EMOTION_COLUMNS}]
-                        if emotion_cols:
-                            row = det_result[emotion_cols].iloc[0]
-                            dominant_idx = row.values.argmax()
-                            emotion_label = emotion_cols[dominant_idx].lower()
-                            magnitude = float(row.values[dominant_idx])
-                            detected = True
+                    emotion_raw, scores = self.emotion_detector.predict_emotions(
+                        crop_rgb, logits=False
+                    )
+                    emotion_label = HSEMOTION_TO_CANONICAL.get(
+                        emotion_raw.lower(), "neutral"
+                    )
+                    magnitude = float(max(scores))
+                    detected = True
                 except Exception as e:
-                    print(f"[03b] PyFeat inference failed at t={current_t:.2f}s: {e}")
+                    print(f"[03b] HSEmotion inference failed at t={current_t:.2f}s: {e}")
 
             if not detected:
                 # Fallback: deterministic mock distribution for integration testing

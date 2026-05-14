@@ -7,6 +7,7 @@ from src.layer_03b_reasonable_emotion.pipeline import (
     ExpectationSchema,
     TransitionEvalSchema,
     DEFAULT_EXPECTATIONS,
+    HSEMOTION_TO_CANONICAL,
 )
 import numpy as np
 
@@ -121,6 +122,31 @@ def test_transition_fallback_when_ollama_unavailable():
         "Test", DEFAULT_EXPECTATIONS, "", "neutral", "joy"
     )
     assert result["classified_direction"] == "positive"
+
+def test_hsemotion_label_mapping():
+    """HSEmotion's 8-class FER+ vocabulary folds onto the canonical 03b labels.
+
+    Locks the two documented renames from the Py-Feat -> HSEmotion migration:
+    'contempt' (no 03b analog) collapses to 'disgust', and 'happiness' becomes
+    'joy'. Every mapped value must be a label the downstream classifier and
+    DEFAULT_EXPECTATIONS already understand.
+    """
+    fer_plus_classes = {
+        "anger", "contempt", "disgust", "fear",
+        "happiness", "neutral", "sadness", "surprise",
+    }
+    assert set(HSEMOTION_TO_CANONICAL) == fer_plus_classes
+
+    assert HSEMOTION_TO_CANONICAL["contempt"] == "disgust"
+    assert HSEMOTION_TO_CANONICAL["happiness"] == "joy"
+
+    canonical_vocab = (
+        set(DEFAULT_EXPECTATIONS["positive_emotions"])
+        | set(DEFAULT_EXPECTATIONS["negative_emotions"])
+        | set(DEFAULT_EXPECTATIONS["neutral_baseline"])
+    )
+    assert set(HSEMOTION_TO_CANONICAL.values()) <= canonical_vocab
+
 
 def test_rule_based_classify():
     """Rule-based fallback correctly classifies by set membership."""
