@@ -139,55 +139,17 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
     - **Solution**: Hoisted all seven constants into a `# --- Tuning Constants ---` block at the top of `ProxemicKinematicsPipeline` (`OPTICAL_FLOW_NOISE_THRESHOLD`, `BBOX_NORM_PCT`, `DEPTH_NORM_SCALE`, `BBOX_WEIGHT`, `DEPTH_WEIGHT`, `MICROMOVEMENT_THRESHOLD`, `APPROACH_THRESHOLD`). All inline literals in `process_video` and `_compute_proxemic_vector` now reference `self.<NAME>`. Subclassing for ablations is a one-line override. Added `test_tuning_constants_subclass_override` to verify that lowering `APPROACH_THRESHOLD` reclassifies a borderline vector without source edits.
     - **Model Instructions/Context**: When tuning thresholds across runs (e.g., adult vs. infant scenes, switching to V1-Large), subclass `ProxemicKinematicsPipeline` and override the relevant class-level constant rather than editing source. This pattern matches the Layer03cConfig dataclass pattern adopted in 03c — both centralize the tuning surface; subclass-of-pipeline is preferred here because there are no per-instance configuration variants on the manifest path.
 
+17. **Model Capability Bottleneck on 64GB Hosts (Resolved - May 14)**:
+    - **Problem**: Depth Anything V2-Small was pinned to accommodate the 24GB memory limit of previous Mac mini hosts, sacrificing edge fidelity on bystander silhouettes.
+    - **Solution**: Upgraded the model unconditionally to `LiheYoung/depth-anything-large-hf` (Depth Anything V1-Large) to leverage the 64GB unified memory of the Mac Studio.
+
+18. **SAM ViT-Base Occlusion Accuracy Headroom (Resolved - May 14)**:
+    - **Problem**: The pipeline used `facebook/sam-vit-base`, which struggled with sharply masking heavily occluded bystanders compared to larger parameter variants.
+    - **Solution**: Swapped the model to `facebook/sam-vit-huge` as a drop-in replacement, improving silhouette precision at the cost of expected inference latency well within the M4 Max budget.
+
+19. **Per-Video Cache Flush Overhead (Resolved - May 14)**:
+    - **Problem**: `_release_accelerator_cache()` was invoked after every single video, which defended against OOM on 24GB hosts but wasted wall-clock time on 64GB hosts that can safely buffer many videos worth of activations.
+    - **Solution**: Introduced an auto-tuning `FLUSH_EVERY_N_VIDEOS` class constant. It dynamically evaluates host memory via `os.sysconf` at import time, setting the flush interval to `25` on hosts with >= 48GB memory and falling back to `1` on smaller hosts.
+
 ## ⚠️ Unresolved Issues & Suggestions
-
-### Issue 1: Depth Anything V2-Small Pinned for 24 GB Budget; V1-Large and Metric3D v2 Now Viable on 64 GB Mac Studio
-**Status**: ⚠️ Confirmed Unresolved — The "Why V2-Small" justification in Section 2 of this doc and `ml_dependencies.md` both spell out the trade-off: V2-Small (~100 MB, ~25M params) was chosen to fit alongside SAM ViT-Base (~375 MB) plus L2CS (03a) and emotion2vec+ (03c) on the 24 GB Mac mini M4 Pro. The Apache-2.0 alternatives — Depth Anything V1-Large (`vitl`, ~1.3 GB, ~335M params) and Metric3D v2 (~1.5 GB, absolute metric depth instead of relative) — have measurably better edge fidelity on the bystander silhouette boundary, which is where Resolved Issue #10's SAM mask integration intersects with depth median computation. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, V1-Large + SAM ViT-Huge + every other 03 model totals ~12 GB resident — well under the 40 GB working budget. The current pin is now a quality-floor regression.
-
-**Option A (recommended)**: **Promote V1-Large as Default on 64 GB Hosts; V2-Small as Mac Mini Fallback** — Tier the model selection on `psutil.virtual_memory().total`. ≥ 48 GB selects V1-Large; otherwise V2-Small. The depth-map resolution-handling code (Resolved Issue #1) already abstracts over the model-output shape; the SAM mask integration (Resolved Issue #10) is unchanged. Re-run the existing 03d test suite plus Resolved Issue #8's optical-flow noise-rejection validation to confirm `proxemic_vector` magnitudes stay within the documented [-1.0, +1.0] range.
-  - *Pros*: Direct edge-fidelity quality win at the depth/bystander mask intersection; minimal code change (one model ID + a host-class gate); existing calibration constants from Resolved Issue #16 mostly transfer because both V1-Large and V2-Small produce relative-depth outputs.
-  - *Cons*: V1-Large's depth-map resolution is different from V2-Small (518×518 vs 392×392); the rescaling code in Resolved Issue #1 already handles arbitrary resolutions but should be re-verified for V1-Large's specific axis ratios; pulls ~1.3 GB into the HF cache on the Extreme SSD.
-
-**Option B**: **Switch to Metric3D v2 for Absolute Metric Depth** — Replace the relative-depth heuristic entirely with Metric3D v2 (~1.5 GB), which produces metric-scale depth output and would let `proxemic_vector` correlate against real-world meters instead of normalized deltas.
-  - *Pros*: Most physically interpretable output of any depth model; absolute-depth deltas are research-grade for proxemics studies; downstream researchers can map directly to Hall's proxemic zones (intimate < 0.45m, personal 0.45–1.2m, social 1.2–3.7m).
-  - *Cons*: Resolved Issue #16's tuning constants (`DEPTH_NORM_SCALE`, `BBOX_WEIGHT`, `DEPTH_WEIGHT`) are all calibrated to relative-depth deltas — every constant must be re-derived; absolute-depth model errors near image edges (where bystanders often appear in egocentric clips) can be 2× the relative-depth error; significantly more validation effort.
-
-**Option C**: **Stay on V2-Small** — Defer the upgrade and document that the 64 GB headroom is reserved for SAM ViT-Huge or other layer upgrades.
-  - *Pros*: Lowest risk; zero behavior change.
-  - *Cons*: Forfeits the bystander-silhouette quality win; if Issue 2 below also stays on the small variants, the 03d layer overall stays on a memory-constrained configuration on a host that no longer needs it.
-
-Your selection: Promote V1-Large as Default on 64 GB Hosts. No need for V2-Small fallback.
-
----
-
-### Issue 2: SAM ViT-Base Selected for 24 GB Headroom; SAM-2 / ViT-Huge Now Viable
-**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #11 ("SAM-1 Automatic Mask Generation Latency") swapped the auto-mask-generation pipeline for `SamModel.from_pretrained("facebook/sam-vit-base")` with explicit `input_boxes` prompts. The `vit-base` choice (~375 MB resident, ~93M params) was driven by the 24 GB Mac mini M4 Pro budget. `facebook/sam-vit-huge` (~2.4 GB, ~636M params) and the newer `facebook/sam2-hiera-large` (~900 MB, supports video-temporal mask propagation) both produce sharper bystander silhouettes — particularly on partially occluded bystanders, which is precisely the failure mode the SAM integration was added to address.
-
-**Option A (recommended)**: **A/B SAM-2 Against SAM-1 ViT-Base on a 50-Clip Occlusion-Heavy Subset** — Cherry-pick 50 Ego4D clips with documented occlusion (hands passing in front of bystanders, partial bystanders at frame edges) and run both models. Measure (a) mask IoU against hand-labeled silhouettes, (b) the `proxemic_vector`'s false-approach rate from Resolved Issue #8, and (c) per-frame inference latency on the M4 Max. Promote SAM-2 only if mask IoU improves > 5 pp and the false-approach rate drops.
-  - *Pros*: SAM-2's video-temporal mask propagation could cut the per-frame inference cost by reusing the prior frame's mask as a temporal prior; direct quality target on the failure mode SAM was added to fix; reuses the existing `SamModel`/`SamProcessor` API.
-  - *Cons*: SAM-2's API has separate `predict_video()` semantics not exposed in the current per-frame integration; would require ~1 week to plumb through `_segment_with_sam`; adds a second ~900 MB weight to the HF cache.
-
-**Option B**: **Swap to `sam-vit-huge` (Same SAM-1 API)** — Drop-in replace `sam-vit-base` with `sam-vit-huge`; no API change.
-  - *Pros*: Smallest code change; mask quality improvement at no API risk; well-documented inference latency cost.
-  - *Cons*: ~6× the per-frame inference latency of vit-base; the IoU-score head behavior is identical so Resolved Issue #11's mask-selection logic is preserved.
-
-**Option C**: **Stay on `sam-vit-base`** — Defer the upgrade.
-  - *Pros*: Zero migration risk.
-  - *Cons*: Forfeits the silhouette-precision headroom on a host that has it; SAM masks remain the dominant 03d wall-clock cost regardless.
-
-Your selection: Proceed with Option B.
-
----
-
-### Issue 3: `_release_accelerator_cache()` Per-Video Flush Now Overcautious
-**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #15 added `_release_accelerator_cache()` as a `finally`-block-invoked MPS cache flush after every video in 03d's run loop. The driver was the 24 GB Mac mini M4 Pro's tendency to accumulate cached intermediate activations from Depth Anything V2 + SAM ViT-Base across 10–20 frame samples × bystanders × dozens of videos, risking allocation failures or thermal throttling. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, the steady-state cached intermediate budget over 100 videos is < 4 GB — well under the headroom. The per-video flush now adds ~50-100 ms of wasted wall-clock to every iteration with no compensating safety win.
-
-**Option A (recommended)**: **Flush Every N Videos Instead of Every Video, Gated on Host Memory** — Add a `FLUSH_EVERY_N_VIDEOS` class constant (default 1 on hosts < 48 GB to preserve current behavior, default 25 on hosts ≥ 48 GB). The flush still happens — just less often — preserving thermal-throttle defense without paying the per-video cost.
-  - *Pros*: Preserves Mac mini correctness; eliminates ~99% of the wasted flush calls on the M4 Max; one-line gate; trivially testable.
-  - *Cons*: If a single video produces an anomalously large allocation, it survives 24 more videos before being flushed — the current per-video flush would have caught it sooner; on the 64 GB host this is acceptable, on the 24 GB host the default-of-1 preserves the old behavior.
-
-**Option B**: **Drop the Flush Entirely on 64 GB Hosts** — Skip `_release_accelerator_cache()` invocations when host memory ≥ 48 GB.
-  - *Pros*: Maximum throughput on the M4 Max.
-  - *Cons*: Loses the per-video safety net for transient anomalies; future PyTorch releases may change MPS cache behavior in ways that revalidate the per-video flush — losing the call means losing the defense.
-
-Your selection: Proceed with Option A.
+*None*

@@ -30,6 +30,10 @@ class ProxemicKinematicsPipeline:
     DEPTH_WEIGHT = 0.6                    # weight of depth heuristic in the fused proxemic vector
     MICROMOVEMENT_THRESHOLD = 0.05        # |vector| below this is treated as no movement (jitter rejection)
     APPROACH_THRESHOLD = 0.3              # vector > this -> Approach_Intervention; < -this -> Avoidance
+    
+    # Auto-tune accelerator cache flush frequency based on host memory.
+    # Hosts with >= 48GB can absorb the intermediate cache pressure of many videos.
+    FLUSH_EVERY_N_VIDEOS = 25 if (os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')) >= 48 * 1024**3 else 1
 
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -89,8 +93,8 @@ class ProxemicKinematicsPipeline:
             elif self.device == 'cuda':
                 device_id = 0
 
-            print(f"Initializing Depth Anything V2-Small on {self.device} (Cache: {SSD_HF_CACHE})...")
-            self.depth_estimator = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf", device=device_id)
+            print(f"Initializing Depth Anything V1-Large on {self.device} (Cache: {SSD_HF_CACHE})...")
+            self.depth_estimator = pipeline(task="depth-estimation", model="LiheYoung/depth-anything-large-hf", device=device_id)
 
             print(f"Initializing SAM-1 (bbox-prompted) on {self.device}...")
             # Bbox-prompted SAM via the lower-level SamModel/SamProcessor API.
@@ -98,12 +102,12 @@ class ProxemicKinematicsPipeline:
             # candidate-point grid (1024 forward passes per crop), which dominates
             # wall-clock cost on the M4 Pro MPS backend and is wasted work given
             # we already have the bystander bbox as a single-mask prompt.
-            self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
+            self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
             self.sam_model.eval()
-            self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+            self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
 
             # Validate download path
-            model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--depth-anything--Depth-Anything-V2-Small-hf"
+            model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--LiheYoung--depth-anything-large-hf"
             if not model_cache_path.exists():
                 print("Warning: Model does not appear to be saved in the expected Extreme SSD cache location.")
 
@@ -145,11 +149,13 @@ class ProxemicKinematicsPipeline:
             except:
                 pass
 
+        videos_processed_in_session = 0
         for entry in registry:
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
                 continue
 
+            videos_processed_in_session += 1
             print(f"Processing Proxemic Kinematics for video: {video_id}")
             try:
                 result = self.process_video(entry)
@@ -175,11 +181,11 @@ class ProxemicKinematicsPipeline:
             except Exception as e:
                 self._log_error(video_id, e)
             finally:
-                # Bound MPS/CUDA cache growth at one-video granularity. Long
-                # batches accumulate intermediate activations across Depth
-                # Anything + SAM forward passes; flushing here keeps the 24GB
-                # M4 Pro shared budget from sliding into thermal throttle.
-                self._release_accelerator_cache()
+                # Bound MPS/CUDA cache growth. Long batches accumulate
+                # intermediate activations across Depth Anything + SAM forward passes.
+                # Gated on host memory to maximize throughput on larger hosts.
+                if videos_processed_in_session % self.FLUSH_EVERY_N_VIDEOS == 0:
+                    self._release_accelerator_cache()
 
         print(f"Final count: {len(results)} videos processed for Proxemic Kinematics.")
 
