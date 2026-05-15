@@ -159,5 +159,33 @@ class TestHostMemoryGate(unittest.TestCase):
             self.assertFalse(AttentionLayerPipeline.host_can_retain_resident())
 
 
+class TestBurstStrideMemoryGate(unittest.TestCase):
+    """Resolved Issue 15: burst stride switches between 16 FPS (Mac mini) and
+    32 FPS (Mac Studio / M4 Max) based on host_can_retain_resident()."""
+
+    def _build(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp = Path(td.name)
+        manifest = tmp / "manifest.json"
+        with open(manifest, 'w') as f:
+            json.dump([], f)
+        return AttentionLayerPipeline(manifest, tmp / "out.json", force=True)
+
+    def test_high_memory_host_selects_32_fps_burst(self):
+        mock_vm = MagicMock()
+        mock_vm.total = 64 * 2**30
+        with patch('psutil.virtual_memory', return_value=mock_vm):
+            pipeline = self._build()
+        self.assertAlmostEqual(pipeline.burst_stride_sec, 1.0 / 32.0)
+
+    def test_constrained_host_retains_16_fps_burst(self):
+        mock_vm = MagicMock()
+        mock_vm.total = 24 * 2**30
+        with patch('psutil.virtual_memory', return_value=mock_vm):
+            pipeline = self._build()
+        self.assertAlmostEqual(pipeline.burst_stride_sec, 1.0 / 16.0)
+
+
 if __name__ == '__main__':
     unittest.main()

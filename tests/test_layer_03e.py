@@ -224,6 +224,38 @@ def test_simultaneous_nod_shake_ambiguous(mock_data_paths):
     person_res = res['tasks_analyzed'][0]['per_person'][0]
     assert person_res['gesture_detected'] == 'ambiguous_wobble'
 
+def test_interpolation_threshold_calibrates_to_upstream_model():
+    """Resolved Issue 16: MAX_INTERPOLATED_FRACTION re-keys against
+    03a's processing_meta.model_used. Default 0.3 for unknown/L2CS, 0.2 for
+    crossgaze, 0.25 for 3dgazenet."""
+    cases = [
+        ("l2cs_net_3d_gaze", 0.3),
+        ("crossgaze", 0.2),
+        ("3dgazenet", 0.25),
+        ("future_unknown_model", 0.3),
+        ("fallback_dummy", 0.3),
+        (None, 0.3),
+    ]
+    for model, expected in cases:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            manifest = td / "m.json"
+            attention = td / "a.json"
+            output = td / "o.json"
+
+            with open(manifest, 'w') as f:
+                json.dump([], f)
+
+            entry = {"video_id": "v1", "per_person": []}
+            if model is not None:
+                entry["processing_meta"] = {"model_used": model}
+            with open(attention, 'w') as f:
+                json.dump([entry], f)
+
+            pipeline = AffirmationGesturePipeline(manifest, output, attention, force=True)
+            assert pipeline.MAX_INTERPOLATED_FRACTION == expected, (model, pipeline.MAX_INTERPOLATED_FRACTION)
+
+
 def test_nonuniform_sampling(mock_data_paths):
     """Verify the pipeline handles 03a's adaptive stride (non-uniform timestamps) correctly.
     
