@@ -66,12 +66,12 @@ class MotorResonancePipeline:
 
             print(f"Initializing YOLOv8 Pose (fallback for MMPose) on {device}...")
             base_dir = Path(__file__).resolve().parent.parent.parent
-            model_path = base_dir / "yolov8n-pose.pt"
+            model_path = base_dir / "yolov8x-pose.pt"
 
             if not model_path.exists():
                 print(f"Warning: Model {model_path} not found. Attempting to download via ultralytics...")
 
-            self.model = YOLO(str(model_path) if model_path.exists() else "yolov8n-pose.pt")
+            self.model = YOLO(str(model_path) if model_path.exists() else "yolov8x-pose.pt")
             self.device = device
 
         except Exception as e:

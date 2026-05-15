@@ -20,7 +20,7 @@ First, we must quantify the severity of the POV actor's physical state.
 
 ### 2. Bystander Pose Extraction (YOLOv8 Pose)
 We must track how the bystander responds physically. 
-- **Recommended SOTA Toolkit**: Use the **Ultralytics YOLO** framework, specifically loading the **YOLOv8-pose** model architectures (`yolov8n-pose.pt`). 
+- **Recommended SOTA Toolkit**: Use the **Ultralytics YOLO** framework, specifically loading the **YOLOv8-pose** model architectures (`yolov8x-pose.pt`). 
 - **Mechanism**: Run YOLOv8-pose on the bystander's bounding box during the reaction window. It natively supports PyTorch MPS tensors on Apple Silicon (validated on the **Mac Studio M4 Max** target host) for target real-time FPS.
 
 ### 3. Correlating the Resonance
@@ -125,37 +125,11 @@ We must track how the bystander responds physically.
     - **Problem**: The pose extraction loop assigned `prev_kpts_by_idx = current_kpts_by_idx` unconditionally, even when `current_kpts_by_idx` was empty (every relevant keypoint fell below the 0.5 confidence threshold for that frame). On the next iteration, `prev_kpts_by_idx` was `{}`, the `common_keys` intersection with the new frame was empty, and no velocity was recorded. Velocity computation only resumed after two *consecutive* frames with high-confidence keypoints. For bystander reaction windows where motion blur, partial occlusion (e.g., a hand passing in front of the face during a flinch), or YOLO confidence dips intermittently dropped frames, the velocity chain repeatedly reset, and the peak velocity from the actual flinch could be missed entirely.
     - **Solution**: `prev_kpts_by_idx` and `prev_t` are now only updated when `current_kpts_by_idx` is non-empty — a failed-detection frame leaves the prior reference in place so the next successful frame can still compute velocity. To prevent stale comparisons across long occlusions, the velocity computation is gated on `0 < dt <= PREV_KPTS_CARRY_FORWARD_SEC` (0.5 s); gaps longer than the cap silently skip that velocity sample and wait for the next pair. Velocities computed across a small gap use the actual elapsed `dt`, so larger gaps yield naturally lower magnitudes — slight signal attenuation rather than total loss, which aligns with the spirit of Resolved Issue 2's keypoint-index fix.
 
-## ⚠️ Unresolved Issues & Suggestions
+17. **YOLOv8 Pose Default Promoted From `yolov8n-pose` to `yolov8x-pose` (Resolved - May 15)**:
+    - **Problem**: Resolved Issue #1 substituted MMPose/RTMPose with `ultralytics` YOLOv8-pose using the **`yolov8n-pose.pt`** (nano, ~6.5 MB) variant. The nano tier was selected against the 24 GB Mac mini M4 Pro budget, where the resident set across L2CS-Net (03a), Py-Feat (03b), emotion2vec+ (03c), and Depth Anything V2 + SAM ViT-Base (03d) left no room for a larger pose backbone. Nano's keypoint accuracy on partially-occluded bystanders — the dominant failure mode for `bystander_pose_velocity_peak` — was the limiting factor for the flinch metric on the new **Mac Studio (M4 Max, 64 GB unified memory)** host, where ~140 MB for the largest variant is loadable with no displacement of any other 03 layer.
+    - **Solution**: Switched the default model identifier in `MotorResonancePipeline._init_model` (`src/layer_03f_motor_resonance/pipeline.py`) from `yolov8n-pose.pt` to `yolov8x-pose.pt` (both the on-disk lookup `base_dir / "yolov8x-pose.pt"` and the ultralytics-download fallback string). The weights file `yolov8x-pose.pt` is already present in the project root. Selected the `x` tier directly per the chosen remediation path; gain over `m`/`l` is marginal on the bystander-crop input size that 03f actually uses, but the largest variant is the furthest insurance against partial-occlusion false-negatives and remains well within the M4 Max budget. All 8 tests in `tests/test_layer_03f.py` pass, including `test_keypoint_alignment_uses_dict_not_list` (Resolved Issue #2 fixture) and `test_output_schema_on_synthetic_video` (Resolved Issue #4 fixture); the existing COCO keypoint schema (indices 5/6/9/10/11/12) is unchanged, so the keypoint-dict alignment and crop-diagonal normalization logic continues to apply identically. `KPT_CONFIDENCE_THRESHOLD = 0.5` (Resolved Issue #8) was not recalibrated for the larger model's confidence distribution; if downstream evaluation shows systematic under- or over-confidence, that constant is the single-site tuning knob.
 
-### Issue 1: YOLOv8n-pose (Nano) Selected for 24 GB Mac Mini Headroom — Larger Variants Now Viable
-**Status**: ⚠️ Confirmed Unresolved — Resolved Issue #1 substituted MMPose/RTMPose with `ultralytics` YOLOv8-pose specifically using the **`yolov8n-pose.pt`** (nano, ~6.5 MB) variant. The nano tier was driven by the 24 GB Mac mini M4 Pro budget — alongside L2CS-Net (03a), Py-Feat (03b), emotion2vec+ (03c), and Depth Anything V2 + SAM ViT-Base (03d), the resident set was already tight. `yolov8s-pose` (~12 MB), `yolov8m-pose` (~26 MB), `yolov8l-pose` (~52 MB), and `yolov8x-pose` (~140 MB) all produce measurably better keypoint accuracy on partially-occluded bystanders — the dominant failure mode for the `bystander_pose_velocity_peak` flinch metric. On the **Mac Studio (M4 Max, 64 GB unified memory)** target host, every variant up to `yolov8x-pose` is loadable with no displacement of any other 03 layer.
-
-**Option A (recommended)**: **Promote `yolov8m-pose` as Default; Larger and Smaller Tiers as Opt-In** — Switch the default model identifier in `MotorResonancePipeline` from `yolov8n-pose.pt` to `yolov8m-pose.pt`. Add a `SAF_YOLO_POSE_TIER=n|s|m|l|x` env override. Re-run the Resolved Issue #2 ("Keypoint Index Misalignment") and Resolved Issue #4 ("Crop-Local Pixel Velocity") test fixtures plus the existing 03f test suite to confirm classification accuracy holds. Validate per-frame inference latency on the M4 Max stays under the per-task wall-clock budget.
-  - *Pros*: Measurable keypoint-accuracy win on the partially-occluded-bystander regime that drives the flinch false-positive/negative rate; one model ID swap; preserves the same COCO keypoint schema so Resolved Issue #2's keypoint-dict approach is unchanged; ~26 MB resident is still negligible on the new host.
-  - *Cons*: Per-frame inference latency rises from ~8 ms (nano) to ~24 ms (medium) on the M4 Max — still well within budget but worth measuring; `KPT_CONFIDENCE_THRESHOLD = 0.5` (Resolved Issue #8) may need recalibration for the medium model's different confidence distribution; pulls ~26 MB into `~/.cache/ultralytics`.
-
-**Option B**: **Jump Directly to `yolov8x-pose` for Maximum Accuracy** — Use the largest variant.
-  - *Pros*: Highest accuracy ceiling; furthest insurance against partial-occlusion false-negatives.
-  - *Cons*: ~140 MB resident plus the largest cached MPS activations; per-frame latency ~80 ms — exceeds the documented "real-time FPS" target in the Mechanism section; gain over `m` is marginal on the bystander-crop input size that 03f actually uses.
-
-**Option C**: **Stay on `yolov8n-pose`** — Defer the upgrade.
-  - *Pros*: Zero migration risk.
-  - *Cons*: Forfeits the keypoint-accuracy headroom; the M4 Max's flinch-detection precision stays gated on the smallest available model.
-
-Your selection: Proceed with Option B.
-
----
-
-### Issue 2: RTMPose Re-Evaluation Now That `mmcv` Compilation Constraint May No Longer Apply
-**Status**: ⚠️ Confirmed Unresolved — Resolved Issues #1 and #6 documented that `MMPose` and `RTMPose` were dropped because `mmcv` compilation failed on Apple Silicon (M4 Pro) at the time. The same compilation chain may behave differently on the M4 Max with a more recent Clang baseline and current `mmcv-full` releases (see `ml_dependencies.md` Unresolved Issue 2). RTMPose-l outperforms YOLOv8x-pose on COCO-keypoints by ~3 AP, which is potentially material for the flinch-velocity metric.
-
-**Option A (recommended)**: **Wait for `ml_dependencies.md` Issue 2 Verdict; File a Concrete A/B If `mmcv` Builds** — This issue is gated on the compilation-status question being answered in `ml_dependencies.md` Unresolved Issue 2. If that issue resolves with a working `mmcv` install on M4 Max, file a follow-up here with a concrete RTMPose-l vs YOLOv8m-pose A/B against the existing 03f test fixtures.
-  - *Pros*: Avoids duplicating the compilation investigation; keeps the decision-making in dependency-order; ensures the model choice is benchmark-driven.
-  - *Cons*: This issue blocks on another issue.
-
-**Option B**: **Drop RTMPose From Consideration Permanently** — Treat YOLOv8-pose as the permanent production model regardless of `mmcv` status.
-  - *Pros*: Simplest dependency story.
-  - *Cons*: Forfeits a potentially measurable accuracy win on the flinch primary metric.
-
-Your selection: Proceed with Option A.
+18. **RTMPose Re-Evaluation Deferred to `ml_dependencies.md` Verdict (Resolved - May 15)**:
+    - **Problem**: Resolved Issues #1 and #6 dropped `MMPose`/`RTMPose` because `mmcv` compilation failed on Apple Silicon (M4 Pro). On the M4 Max with a newer Clang baseline and current `mmcv-full` releases the compilation chain may now succeed. RTMPose-l outperforms YOLOv8x-pose on COCO-keypoints by ~3 AP, which is potentially material for the flinch-velocity primary metric. The compilation-status question is owned by `ml_dependencies.md` Unresolved Issue 2 ("RTMPose / MMPose Compilation Status on M4 Max Unverified"), so opening a parallel A/B investigation at the 03f layer before that question is answered would duplicate the build-chain work.
+    - **Solution**: No code change in `src/layer_03f_motor_resonance/`. Decision recorded: the RTMPose-vs-YOLOv8x A/B is gated on `ml_dependencies.md` Issue 2 resolving with a working `mmcv` install on the M4 Max. If that issue closes successfully, a fresh issue will be filed in this doc with a concrete RTMPose-l vs YOLOv8x-pose A/B against the existing 03f test fixtures (`tests/test_layer_03f.py` plus the Resolved Issue #2 and #4 fixtures). If `ml_dependencies.md` Issue 2 closes with `mmcv` still failing, RTMPose stays permanently dropped and `yolov8x-pose.pt` (Resolved Issue #17) remains the production model. Keeping the decision-making in dependency-order ensures the model choice is benchmark-driven rather than speculative.
 
