@@ -1,16 +1,15 @@
 import os
+import json
+import cv2
+import traceback
+import numpy as np
+from PIL import Image
 from pathlib import Path
 
 # Set HuggingFace Cache to Extreme SSD to prevent local drive fillup
 # This must be set BEFORE transformers is imported
 SSD_HF_CACHE = "/Volumes/Extreme SSD/huggingface_cache"
 os.environ['HF_HOME'] = SSD_HF_CACHE
-
-import json
-import cv2
-import traceback
-import numpy as np
-from PIL import Image
 
 try:
     import torch

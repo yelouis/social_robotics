@@ -11,7 +11,10 @@ from tqdm import tqdm
 # Add src to path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import config
-from .filterer import StreamingFilter
+try:
+    from .filterer import StreamingFilter
+except ImportError:
+    from dataset_acquisition.filterer import StreamingFilter
 
 class DatasetDownloader(ABC):
     def __init__(self, name: str, filter_on_the_fly: bool = True):
@@ -169,7 +172,7 @@ class Ego4DDownloader(DatasetDownloader):
         # Check for ego4d python package
         ego4d_found = False
         try:
-            import ego4d
+            import ego4d  # type: ignore
             ego4d_found = True
         except ImportError:
             # Check in vlm_env
