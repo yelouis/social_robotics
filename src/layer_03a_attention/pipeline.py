@@ -74,6 +74,15 @@ class AttentionLayerPipeline:
             except Exception as e:
                 print(f"Error loading existing results: {e}. Starting fresh.")
 
+        # On ≥48 GB hosts (Mac Studio M4 Max), boost the adaptive burst to 32 FPS
+        # so the cadence clears Layer 03e's medfilt saccade-suppression gate (36 FPS
+        # in Resolved Issue 10; lowered to 32 FPS in tandem with this change).
+        # Mac mini hosts retain the 16 FPS budget.
+        if AttentionLayerPipeline.host_can_retain_resident():
+            self.burst_stride_sec = self.BURST_STRIDE_SEC_HIGH_MEM
+        else:
+            self.burst_stride_sec = self.BURST_STRIDE_SEC
+
     # On hosts with >= 48 GB unified memory the full 03 model set (~12 GB)
     # stays resident, so the E2E orchestrator keeps the L2CS-Net instance
     # alive across the whole 03 run instead of paying a reload + MPS warm-up
@@ -273,14 +282,15 @@ class AttentionLayerPipeline:
         mean_all = sum(all_scores) / len(all_scores) if all_scores else 0
         any_engaged = any(p['is_engaged'] for p in per_person_results)
         
+        burst_fps = round(1.0 / self.burst_stride_sec, 1)
         return {
             "video_id": video_id,
             "layer": "03a_attention",
             "processing_meta": {
                 "model_used": "l2cs_net_3d_gaze" if self.gaze_pipeline else "fallback_dummy",
                 "sampling_fps_effective": 8.0,
-                "sampling_fps_burst": 16.0,
-                "sampling_strategy": "adaptive_8_to_16_fps"
+                "sampling_fps_burst": burst_fps,
+                "sampling_strategy": f"adaptive_8_to_{int(burst_fps)}_fps"
             },
             "per_person": per_person_results,
             "aggregate": {
@@ -290,8 +300,9 @@ class AttentionLayerPipeline:
             }
         }
 
-    BASELINE_STRIDE_SEC = 0.125   # 8 FPS — preserves Layer 03e Nyquist floor (4 Hz)
-    BURST_STRIDE_SEC = 0.0625     # 16 FPS — engaged when |Δscore| > 0.3
+    BASELINE_STRIDE_SEC = 0.125            # 8 FPS — preserves Layer 03e Nyquist floor (4 Hz)
+    BURST_STRIDE_SEC = 0.0625              # 16 FPS — low-memory default; engaged when |Δscore| > 0.3
+    BURST_STRIDE_SEC_HIGH_MEM = 0.03125    # 32 FPS — engaged on ≥48 GB hosts to clear 03e's medfilt gate
     BURST_DURATION_SEC = 2.0
     BURST_DELTA_THRESHOLD = 0.3
 
@@ -443,7 +454,7 @@ class AttentionLayerPipeline:
             if last_score >= 0.0 and abs(score - last_score) > self.BURST_DELTA_THRESHOLD:
                 burst_until_t = current_t + self.BURST_DURATION_SEC
 
-            stride = self.BURST_STRIDE_SEC if current_t < burst_until_t else self.BASELINE_STRIDE_SEC
+            stride = self.burst_stride_sec if current_t < burst_until_t else self.BASELINE_STRIDE_SEC
             current_t += stride
             last_score = score
 

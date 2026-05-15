@@ -19,6 +19,19 @@ class AffirmationGesturePipeline:
     RMS_THRESHOLD = 0.05
     GESTURE_DECISION_THRESHOLD = 0.6
     AMBIGUITY_DELTA = 0.15
+    # Engage the medfilt saccade suppressor at 03a's M4-Max 32 FPS burst stride.
+    # 3-sample window at 32 FPS = 94 ms, comfortably below the 167 ms half-period
+    # of a 3 Hz nod so the filter does not demolish genuine fast nods.
+    MEDFILT_MIN_FPS = 32.0
+    # Per-gaze-model interpolation thresholds (Resolved Issue 16). The default
+    # 0.3 was calibrated against L2CS-Net's tracking-loss profile; alternative
+    # upstream gaze models report different tracking-loss distributions, so the
+    # threshold is re-keyed at startup from 03a's processing_meta.model_used.
+    INTERPOLATION_THRESHOLDS = {
+        "l2cs_net_3d_gaze": 0.3,
+        "crossgaze": 0.2,
+        "3dgazenet": 0.25,
+    }
 
     def __init__(self, input_manifest_path, output_result_path, attention_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -59,6 +72,25 @@ class AffirmationGesturePipeline:
             print(f"Loaded attention data for {len(self.attention_data)} videos from 03a.")
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Failed to parse 03a_attention_result.json: {e}")
+
+        # Re-key the interpolation threshold against 03a's reported gaze model.
+        # The default (class-level) 0.3 holds for L2CS-Net and unknown models.
+        active_model = self._detect_upstream_gaze_model(att_results)
+        if active_model in self.INTERPOLATION_THRESHOLDS:
+            self.MAX_INTERPOLATED_FRACTION = self.INTERPOLATION_THRESHOLDS[active_model]
+            print(
+                f"Calibrated MAX_INTERPOLATED_FRACTION to "
+                f"{self.MAX_INTERPOLATED_FRACTION} for upstream gaze model "
+                f"'{active_model}'."
+            )
+
+    @staticmethod
+    def _detect_upstream_gaze_model(att_results):
+        for r in att_results:
+            model = r.get('processing_meta', {}).get('model_used')
+            if model and model != 'fallback_dummy':
+                return model
+        return None
 
     def _log_error(self, video_id, error):
         error_entry = {
@@ -261,8 +293,7 @@ class AffirmationGesturePipeline:
         # sampling rate is high enough that kernel*dt is well below the longest
         # nod half-period (1/(2*FREQ_BAND_HZ.high)).
         bp_low_hz, bp_high_hz = self.BANDPASS_HZ
-        medfilt_min_fps = self.MEDFILT_KERNEL * 2 * bp_high_hz * 2
-        if fps >= medfilt_min_fps and len(signal) >= self.MEDFILT_KERNEL:
+        if fps >= self.MEDFILT_MIN_FPS and len(signal) >= self.MEDFILT_KERNEL:
             signal = medfilt(signal, kernel_size=self.MEDFILT_KERNEL)
 
         signal_detrended = signal - np.mean(signal)
