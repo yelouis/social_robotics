@@ -62,7 +62,20 @@ LAYER_SUMMARY_REGISTRY = {
 # and column dtype promotion. Using a midpoint-of-range constant prevents the
 # memory check from drastically underestimating Pandas state. Adjust if a
 # specific dataset's column dtype distribution shifts the empirical multiplier.
+# Operators can call ``_compute_inflation_factor`` (Resolved Issue 17) against
+# a completed export to measure the actual ratio for the current schema.
 PANDAS_INFLATION_FACTOR = 8
+
+# Resolved Issue 16: Dask-fallback headroom is host-dependent. The 0.5 default
+# was calibrated for the 24 GB Mac mini M4 Pro, where Ollama + MPS-resident
+# layer models routinely consumed a substantial fraction of unified memory
+# during the E2E run. On the Mac Studio (M4 Max, 64 GB) target, 04 runs after
+# the 03 layers' MPS allocations have been freed, so 0.7 reclaims headroom
+# that the 24 GB profile had to reserve. Hosts below the 48 GB threshold keep
+# the conservative 0.5 factor.
+MEM_HEADROOM_FACTOR_DEFAULT = 0.5
+MEM_HEADROOM_FACTOR_LARGE = 0.7
+LARGE_HOST_BYTES_THRESHOLD = 48 * 1024 ** 3
 
 
 def _collect_layer_values(item: dict, path: str) -> Iterable[Any]:
@@ -119,10 +132,68 @@ def _apply_aggregation(values: list, agg: str) -> Optional[Any]:
     raise ValueError(f"Unknown aggregation '{agg}'")
 
 
+def _compute_inflation_factor(parquet_path: Path) -> Optional[Tuple[float, str]]:
+    """Measure the empirical ``source_json_bytes → in-memory Pandas DataFrame``
+    inflation ratio for a completed export, alongside the schema hash from
+    Resolved Issue 14. This is the same quantity ``PANDAS_INFLATION_FACTOR``
+    statically estimates, so operators can call this helper after a successful
+    export to recalibrate the fallback when Resolved Issues #10/#11 (or future
+    column-shape changes) shift the Schema-A / Schema-B distribution.
+
+    Returns ``(factor, schema_hash)`` on success or ``None`` if the parquet or
+    its sibling source JSONs cannot be measured. The schema hash is logged so
+    a recalibration can be pinned per-schema if desired — see Resolved Issue
+    14 for the additive-only column rule that keeps the hash mechanical.
+    """
+    parquet_path = Path(parquet_path)
+    if not parquet_path.exists():
+        logger.warning("Parquet file %s not found for inflation measurement.", parquet_path)
+        return None
+    try:
+        df = pd.read_parquet(parquet_path)
+    except Exception as exc:
+        logger.warning("Failed to read parquet %s: %s", parquet_path, exc)
+        return None
+    if df.empty:
+        return None
+
+    in_memory_bytes = int(df.memory_usage(index=True, deep=True).sum())
+    data_dir = parquet_path.parent
+    manifest = data_dir / "filtered_manifest.json"
+    source_size = sum(f.stat().st_size for f in data_dir.glob("03*_result.json"))
+    if manifest.exists():
+        source_size += manifest.stat().st_size
+    if source_size == 0:
+        logger.warning("No source JSONs alongside %s; cannot compute factor.", parquet_path)
+        return None
+
+    factor = in_memory_bytes / source_size
+    column_hash = hashlib.sha256(
+        ",".join(sorted(df.columns)).encode("utf-8")
+    ).hexdigest()[:6]
+    logger.info(
+        "Measured pandas inflation factor: %.2fx for schema hash %s "
+        "(source JSON %.2f MB → in-memory DataFrame %.2f MB across %d rows)",
+        factor,
+        column_hash,
+        source_size / (1024 ** 2),
+        in_memory_bytes / (1024 ** 2),
+        len(df),
+    )
+    return factor, column_hash
+
+
 class DataAggregator:
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, inflation_factor: Optional[float] = None):
+        """Set ``inflation_factor`` to override ``PANDAS_INFLATION_FACTOR`` for
+        the memory check (Resolved Issue 17). Run ``_compute_inflation_factor``
+        against a prior export to obtain a host- and schema-specific value;
+        leaving it ``None`` falls back to the documented 8x midpoint."""
         self.data_dir = Path(data_dir)
         self.manifest_path = self.data_dir / "filtered_manifest.json"
+        self.inflation_factor = (
+            float(inflation_factor) if inflation_factor is not None else PANDAS_INFLATION_FACTOR
+        )
 
     def aggregate(self, output_parquet_path: Optional[Path] = None) -> Optional[pd.DataFrame]:
         """Outer-join the manifest and every ``03*_result.json`` into a single
@@ -157,15 +228,23 @@ class DataAggregator:
         # Memory check — see PANDAS_INFLATION_FACTOR comment for rationale.
         try:
             import psutil
-            mem_available = psutil.virtual_memory().available
+            mem_info = psutil.virtual_memory()
+            mem_available = mem_info.available
+            mem_total = mem_info.total
         except ImportError:
             mem_available = 8 * 1024 ** 3  # Fallback estimate: 8GB
+            mem_total = mem_available
 
         layer_files = sorted(self.data_dir.glob("03*_result.json"))
         total_size = self.manifest_path.stat().st_size + sum(f.stat().st_size for f in layer_files)
-        effective_size = total_size * PANDAS_INFLATION_FACTOR
+        effective_size = total_size * self.inflation_factor
 
-        use_dask = effective_size > mem_available * 0.5
+        headroom_factor = (
+            MEM_HEADROOM_FACTOR_LARGE
+            if mem_total >= LARGE_HOST_BYTES_THRESHOLD
+            else MEM_HEADROOM_FACTOR_DEFAULT
+        )
+        use_dask = effective_size > mem_available * headroom_factor
         npartitions = 1
         if use_dask:
             # Resolved Issue 12: size each partition at ~10% of available
@@ -173,9 +252,11 @@ class DataAggregator:
             # materializing the whole dataset at once.
             npartitions = max(2, int(effective_size / max(1, int(mem_available * 0.1))))
             logger.warning(
-                "Dataset effective size (%.2f GB) exceeds 50%% of available "
+                "Dataset effective size (%.2f GB) exceeds %.0f%% of available "
                 "memory; falling back to Dask with %d partitions.",
-                effective_size / (1024 ** 3), npartitions,
+                effective_size / (1024 ** 3),
+                headroom_factor * 100,
+                npartitions,
             )
             try:
                 import dask.dataframe as dd

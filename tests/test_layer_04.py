@@ -1,5 +1,6 @@
 import unittest
 import json
+import logging
 import tempfile
 from pathlib import Path
 import pandas as pd
@@ -9,7 +10,15 @@ import sys
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from layer_04_dehydrated_export.aggregator import DataAggregator
+from unittest.mock import patch
+from layer_04_dehydrated_export.aggregator import (
+    DataAggregator,
+    PANDAS_INFLATION_FACTOR,
+    MEM_HEADROOM_FACTOR_DEFAULT,
+    MEM_HEADROOM_FACTOR_LARGE,
+    LARGE_HOST_BYTES_THRESHOLD,
+    _compute_inflation_factor,
+)
 from layer_04_dehydrated_export.export import DehydratedExporter
 
 class TestDehydratedExport(unittest.TestCase):
@@ -361,6 +370,91 @@ class TestDehydratedExport(unittest.TestCase):
         # vid1's column is still present despite the malformed sibling record
         row = df[df['video_id'] == 'vid1'].iloc[0]
         self.assertAlmostEqual(row['03y_partial_score'], 0.5, places=3)
+
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 16 — host-adaptive Dask headroom factor
+    # ------------------------------------------------------------------
+    def test_headroom_factor_uses_large_value_on_64gb_host(self):
+        """A 64 GB Mac Studio crosses the 48 GB threshold; with available
+        memory just below the 0.7-factor ceiling but above the old 0.5
+        ceiling, the aggregator must stay on the Pandas path under the new
+        constant (i.e., NOT trigger Dask)."""
+        # Constants are wired correctly.
+        self.assertGreater(MEM_HEADROOM_FACTOR_LARGE, MEM_HEADROOM_FACTOR_DEFAULT)
+        self.assertEqual(LARGE_HOST_BYTES_THRESHOLD, 48 * 1024 ** 3)
+
+        # Craft fake memory so effective_size sits between 0.5*avail and
+        # 0.7*avail — under the old factor this would have fired Dask; under
+        # the new factor on a 64 GB host it must NOT.
+        layer_files = list(self.temp_dir_path.glob("03*_result.json"))
+        total_size = self.manifest_path.stat().st_size + sum(f.stat().st_size for f in layer_files)
+        effective_size = total_size * PANDAS_INFLATION_FACTOR
+        fake_available = int(effective_size / 0.6)  # 0.5 < ratio < 0.7
+        fake_vm = type('VM', (), {
+            'total': 64 * 1024 ** 3,
+            'available': fake_available,
+        })()
+        with patch('psutil.virtual_memory', return_value=fake_vm):
+            # Capture all logs (not just WARNING) so the context manager
+            # doesn't fail when no warnings are emitted.
+            with self.assertLogs('layer_04_dehydrated_export.aggregator', level='DEBUG') as cm:
+                logger = logging.getLogger('layer_04_dehydrated_export.aggregator')
+                logger.debug("test marker")  # ensures assertLogs has something
+                DataAggregator(str(self.temp_dir_path)).aggregate()
+                for msg in cm.output:
+                    self.assertNotIn("falling back to Dask", msg)
+
+    def test_headroom_factor_falls_back_to_default_on_small_host(self):
+        """A 24 GB Mac mini stays under the 48 GB threshold and must keep the
+        original 0.5 factor to preserve the calibration of Resolved Issue 7."""
+        # 24 GB host, available memory pushed below effective_size so Dask
+        # triggers; this exercises the default-factor branch end-to-end.
+        fake_vm = type('VM', (), {
+            'total': 24 * 1024 ** 3,
+            'available': 100,  # tiny — guarantees the Dask path
+        })()
+        with patch('psutil.virtual_memory', return_value=fake_vm):
+            with self.assertLogs('layer_04_dehydrated_export.aggregator', level='WARNING') as cm:
+                try:
+                    DataAggregator(str(self.temp_dir_path)).aggregate()
+                except Exception:
+                    pass  # Dask path may not have it installed; the warning is the contract.
+                joined = "\n".join(cm.output)
+                self.assertIn("exceeds 50%", joined)
+
+    # ------------------------------------------------------------------
+    # Resolved Issue 17 — measurable inflation factor + override hook
+    # ------------------------------------------------------------------
+    def test_inflation_factor_override_propagates_to_memory_check(self):
+        """An explicit ``inflation_factor`` on the aggregator must replace the
+        static ``PANDAS_INFLATION_FACTOR`` in the effective_size calculation."""
+        agg = DataAggregator(str(self.temp_dir_path), inflation_factor=12.5)
+        self.assertEqual(agg.inflation_factor, 12.5)
+        # Default constructor still uses the documented constant.
+        self.assertEqual(
+            DataAggregator(str(self.temp_dir_path)).inflation_factor,
+            PANDAS_INFLATION_FACTOR,
+        )
+
+    def test_compute_inflation_factor_emits_ratio_and_schema_hash(self):
+        """Running the helper on an exported parquet must produce a positive
+        ratio paired with the same column-hash shape used by Resolved Issue 14."""
+        aggregator = DataAggregator(str(self.temp_dir_path))
+        df = aggregator.aggregate()
+        df = aggregator.add_export_metadata(df, active_layers=["03a", "03b", "03c"])
+        exporter = DehydratedExporter(str(self.temp_dir_path))
+        parquet_path, _ = exporter.export_parquet(df)
+
+        result = _compute_inflation_factor(parquet_path)
+        self.assertIsNotNone(result)
+        factor, schema_hash = result
+        self.assertGreater(factor, 0.0)
+        self.assertRegex(schema_hash, r'^[0-9a-f]{6}$')
+
+    def test_compute_inflation_factor_returns_none_for_missing_parquet(self):
+        result = _compute_inflation_factor(self.temp_dir_path / "does_not_exist.parquet")
+        self.assertIsNone(result)
 
 
 if __name__ == '__main__':
