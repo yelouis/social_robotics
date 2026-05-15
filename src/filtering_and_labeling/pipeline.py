@@ -22,8 +22,14 @@ class FilteringPipeline:
         self.force = force
         self.skip_vlm = skip_vlm
         
-        # Shared components
-        self.detector = SocialPresenceDetector('yolov8n.pt')
+        # Shared components. Default to YOLO-pose + VLM-gated verification
+        # (Resolved Issue #22) so the filtering stage rejects the wearer's own
+        # limbs / equipment that the bbox-only yolov8n previously kept.
+        # Hosts that need to disable the per-candidate-frame VLM round-trip
+        # (e.g. throughput-sensitive overnight backfills) opt out via
+        # SAF_VLM_VERIFY_SOCIAL=0.
+        vlm_verify = os.getenv("SAF_VLM_VERIFY_SOCIAL", "1").lower() in ("1", "true", "yes")
+        self.detector = SocialPresenceDetector('yolov8n-pose.pt', vlm_verify=vlm_verify)
 
         # Default the Stage-2 climax-refinement VLM to the 7B tier. 7B fits
         # alongside YOLO on a 64 GB host and improves fine-grained climax
