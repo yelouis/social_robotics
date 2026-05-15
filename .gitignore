@@ -18,6 +18,7 @@ vlm_env/
 *.zip
 charades_ego_data/
 test_raw_videos/
+e2e_reports/
 
 # OS
 .DS_Store

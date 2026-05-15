@@ -77,10 +77,11 @@ class DatasetDownloader(ABC):
     def check_disk_space(self, min_gb: float = 10.0) -> bool:
         """Check if there is enough space left on the output disk."""
         try:
-            usage = shutil.disk_usage(self.output_path.anchor if self.output_path.exists() else self.output_path.parent.anchor)
+            path_to_check = self.output_path if self.output_path.exists() else self.output_path.parent
+            usage = shutil.disk_usage(path_to_check)
             free_gb = usage.free / (1024**3)
             if free_gb < min_gb:
-                print(f"\n[CRITICAL] Low Disk Space: {free_gb:.2f} GB remaining on {self.output_path.anchor}")
+                print(f"\n[CRITICAL] Low Disk Space: {free_gb:.2f} GB remaining on {path_to_check}")
                 print(f"Required: at least {min_gb} GB. Stopping acquisition to prevent corruption.")
                 return False
             return True

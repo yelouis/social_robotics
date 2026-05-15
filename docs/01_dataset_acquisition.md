@@ -136,6 +136,18 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
     - **Problem**: Resolved Issue #10 ("Dynamic Batch Sizing") clamped `run_selective_download.py`'s `shutil.disk_usage()`-derived batch size to `[10, 200]`. The 200-UID ceiling was tuned for the Mac mini M4 Pro's 24 GB memory limit and the throughput of its Thunderbolt 4 controller. The Mac Studio M4 Max has more memory headroom and higher sustained SSD write throughput on the internal SoC bus, so the hard 200 cap under-utilized the new host on disk-rich UID windows.
     - **Solution**: Raised the upper clamp ceiling in `run_selective_download.py` from 200 to 500 (`batch_size = max(10, min(500, safe_batch))`), better amortizing the Ego4D CLI's per-batch setup cost on the new host. The dynamic disk-usage sizing logic is otherwise unchanged, so disk-constrained UID windows still scale the batch down safely. Empirical throughput benchmarking against the live Extreme SSD and AWS network path remains to be confirmed during the next real acquisition run.
 
+19. **Incorrect Disk Space Checking Partition (Resolved - May 14)**:
+    - **Problem**: The `check_disk_space()` function in `downloader.py` used `self.output_path.anchor`, which on macOS returns `/`. This caused the pipeline to evaluate the remaining disk space on the internal system SSD instead of the external `Extreme SSD`, prematurely halting downloads with a "[CRITICAL] Low Disk Space" error despite terabytes of external capacity.
+    - **Solution**: Updated `check_disk_space()` to pass `self.output_path` (or its parent if the directory does not exist yet) directly to `shutil.disk_usage()`, ensuring the function checks the actual mounted filesystem where the data will be written.
+
+20. **Internal SSD OOM due to PyTorch Temp Directory (Resolved - May 14)**:
+    - **Problem**: PyTorch distributed and initialization components (e.g., `dill` in dataloaders) default to creating temporary caches in `/var/folders/.../T` on the internal SSD. The internal SSD reached 100% capacity during E2E testing, causing the entire python environment (and OS) to crash with `[Errno 28] No space left on device`.
+    - **Solution**: Overrode `TMPDIR`, `TEMP`, and `TMP` environment variables to point to `/Volumes/Extreme SSD/tmp` before running any scripts, ensuring all heavy tensor caches and compilation outputs map to the high-capacity external drive.
+
+21. **Internal SSD OOM due to HuggingFace Cache (Resolved - May 14)**:
+    - **Problem**: High-parameter models (like Depth Anything) fetched via HuggingFace defaulted their cache to `~/.cache/huggingface` on the internal SSD, consuming over 11GB of critical OS space.
+    - **Solution**: Deleted the internal cache and established a workflow rule to explicitly export `HF_HOME="/Volumes/Extreme SSD/huggingface_cache"` to prevent future downloads from filling the primary disk.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
 _No unresolved issues at this time._

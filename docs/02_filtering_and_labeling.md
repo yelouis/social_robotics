@@ -238,6 +238,21 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
     - **Problem**: Section 3 ("Temporal Task Climax Identification") and `pipeline.py` pinned the Stage-2 VLM refinement to Qwen2.5-VL 3B (~3 GB resident) for slow/cognitive tasks. The 3B tier was selected explicitly to coexist with YOLO on the 24 GB Mac mini. On the Mac Studio (M4 Max, 64 GB unified memory) target host, Qwen2.5-VL 7B (~15 GB resident) is comfortably viable and has measurable accuracy gains on fine-grained action-climax localization in slow/cognitive tasks (puzzles, reading, writing) — exactly the regime Stage 2's VLM refinement was built to address.
     - **Solution**: Promoted the 7B tier to the default. `FilteringPipeline.__init__` previously hardcoded `self.vlm_model = "qwen2.5vl"`; it now reads the `SAF_VLM_MODEL_TIER` environment variable and sets `self.vlm_model` to `qwen2.5vl:3b` when the value is `small` (case-insensitive) or `qwen2.5vl:7b` otherwise. `import os` was re-added to `pipeline.py` to support the env lookup (it had been removed as dead code in Resolved Issue #18 and is now genuinely used again). The resolved tier is printed at construction alongside the filtering architecture mode. Memory-constrained hosts such as the 24 GB Mac mini opt down to the 3B model via `SAF_VLM_MODEL_TIER=small`.
 
+21. **MediaPipe Graph Initialization Crash on M4 Max (Resolved - May 14)**:
+    - **Problem**: `MediaPipe` version `0.10.11` failed with `ValidatedGraphConfig Initialization failed: Output tensor range is required` inside the `ImageToTensorCalculator` when initializing `Hands` for wearer occlusion suppression. This failure is a known incompatibility with modern `protobuf` builds on Apple Silicon.
+    - **Solution**: Downgraded `mediapipe` to `0.10.9` in the `vlm_env` environment, restoring stability without sacrificing hand-tracking precision.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-_None currently open._
+### Issue 1: YOLO False Positives on Wearer Limbs & Equipment
+**Status**: ⚠️ Confirmed Unresolved — Verified during E2E testing in `social_presence.py`: the base `yolov8n.pt` object detection model falsely flags the camera wearer's clothed limbs (e.g., jacket sleeves) or complex mechanical equipment as a "person". The `MediaPipe Hands` occlusion logic and spatial heuristics are insufficient to suppress these.
+
+**Option A (recommended)**: **Migrate to YOLO Pose (`yolov8n-pose.pt`)** — Require detected "persons" to have visible head and shoulder keypoints to confirm social presence.
+  - *Pros*: Intrinsically rejects disconnected limbs and non-human objects; eliminates the need for the secondary `MediaPipe Hands` model.
+  - *Cons*: Slight increase in inference latency compared to the standard bounding-box model.
+
+**Option B**: **Two-Pass VLM Early-Exit Verification** — Keep `yolov8n.pt` as a fast first pass, but use a fast VLM (e.g., Gemma 2B) to verify frames that YOLO flags. The VLM can early-exit as soon as it confirms multiple people.
+  - *Pros*: Leverages deep contextual understanding to perfectly differentiate between a reflection, a poster, an object, and a real human.
+  - *Cons*: Extremely high compute overhead. Even with early exit, invoking an LLM on every candidate frame will severely bottleneck the Node 01 streaming filter.
+
+Your selection: Migrate to Migrate to YOLO Pose and use a two pass vlm Early-Exit Verification.
