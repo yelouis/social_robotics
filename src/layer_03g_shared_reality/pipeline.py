@@ -7,12 +7,31 @@ from pathlib import Path
 
 class SharedRealityPipeline:
     # --- Detection Tuning ---
-    OPTICAL_FLOW_DOWNSAMPLE = 0.5
+    # Spatial downsample tier for Farneback optical flow. Resolved on
+    # `_host_high_memory()` at construction: 1.0× on >= 48 GB hosts (Mac
+    # Studio M4 Max, 64 GB) recovers sub-degree micro-pan detail; 0.5× on
+    # smaller hosts (legacy 24 GB Mac mini M4 Pro) keeps Farneback bounded.
+    # The OPTICAL_FLOW_UPSCALE property reads self.OPTICAL_FLOW_DOWNSAMPLE
+    # so the inverse coupling holds at either tier.
+    OPTICAL_FLOW_DOWNSAMPLE_HIGH_MEM = 1.0
+    OPTICAL_FLOW_DOWNSAMPLE_LOW_MEM = 0.5
+    HIGH_MEMORY_HOST_BYTES = 48 * 2**30
     TARGET_FLOW_FPS = 10.0
     CENTERING_LOWER_BOUND = 0.35
     CENTERING_UPPER_BOUND = 0.65
     SHIFT_THRESHOLD_RATIO = 0.04
     FINAL_CENTERING_TAIL_FRACTION = 0.25
+
+    @staticmethod
+    def _host_high_memory():
+        """True when the host has >= HIGH_MEMORY_HOST_BYTES of unified memory.
+        Mirrors AttentionLayerPipeline (03a) / AcousticProsodyPipeline (03c).
+        Falls back to False (downsample tier) when psutil is missing."""
+        try:
+            import psutil
+        except ImportError:
+            return False
+        return psutil.virtual_memory().total >= SharedRealityPipeline.HIGH_MEMORY_HOST_BYTES
 
     @property
     def OPTICAL_FLOW_UPSCALE(self):
@@ -25,6 +44,11 @@ class SharedRealityPipeline:
         self.error_log_path = self.output_result_path.parent / "03g_shared_reality_errors.json"
         self.force = force
         self.processed_ids = set()
+        self.OPTICAL_FLOW_DOWNSAMPLE = (
+            self.OPTICAL_FLOW_DOWNSAMPLE_HIGH_MEM
+            if self._host_high_memory()
+            else self.OPTICAL_FLOW_DOWNSAMPLE_LOW_MEM
+        )
 
         if self.output_result_path.exists() and not self.force:
             try:

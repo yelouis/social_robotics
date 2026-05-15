@@ -44,15 +44,13 @@ def _create_synthetic_video(path, fps=30, duration_sec=3.0, width=480, height=48
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
     total_frames = int(fps * duration_sec)
-    
-    # We will simulate panning by translating a checkerboard pattern
-    # Create a base image larger than the frame
+
+    # A high-frequency, non-repetitive texture avoids the aperture problem
+    # that repetitive checkerboards trigger in Farneback at full resolution
+    # (the OPTICAL_FLOW_DOWNSAMPLE = 1.0 tier engaged on >= 48 GB hosts).
     base_size = int(max(width, height) * 2)
-    base_img = np.zeros((base_size, base_size, 3), dtype=np.uint8)
-    for y in range(0, base_size, 40):
-        for x in range(0, base_size, 40):
-            if (x // 40 + y // 40) % 2 == 0:
-                base_img[y:y+40, x:x+40] = 255
+    rng = np.random.default_rng(seed=42)
+    base_img = rng.integers(0, 256, size=(base_size, base_size, 3), dtype=np.uint8)
                 
     center_x = base_size // 2
     center_y = base_size // 2
