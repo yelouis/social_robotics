@@ -2,7 +2,7 @@ from pathlib import Path
 from shared.social_presence import SocialPresenceDetector
 
 class StreamingFilter:
-    def __init__(self, model_path='yolov8n.pt'):
+    def __init__(self, model_path='yolov8n-pose.pt'):
         self.detector = SocialPresenceDetector(model_path)
 
     def check_social_presence(self, video_path: Path, sample_rate_fps=1) -> bool:

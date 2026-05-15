@@ -1,16 +1,40 @@
+import os
 import cv2
 import gc
+import tempfile
 import torch
 import mediapipe as mp
 from ultralytics import YOLO
 from pathlib import Path
 
+# COCO-17 keypoint indices used by ultralytics YOLO-pose. We gate "real
+# bystander" on visible head (any of nose/eyes/ears) AND at least one
+# shoulder, which is the cheapest geometric proxy for a torso-attached
+# human and intrinsically rejects disconnected limbs / equipment that the
+# bbox-only yolov8n flagged as Resolved Issue #22.
+KP_NOSE = 0
+KP_LEFT_EYE = 1
+KP_RIGHT_EYE = 2
+KP_LEFT_EAR = 3
+KP_RIGHT_EAR = 4
+KP_LEFT_SHOULDER = 5
+KP_RIGHT_SHOULDER = 6
+KEYPOINT_CONF_THRESHOLD = 0.3
+MAX_VLM_VERIFY_FRAMES = 5
+
+
 class SocialPresenceDetector:
-    def __init__(self, model_path='yolov8n.pt'):
+    def __init__(self, model_path='yolov8n-pose.pt', vlm_verify=None, vlm_model=None):
         self.model_path = model_path
         self._model = None
         self._mp_hands = None
         self._hands_detector = None
+
+        if vlm_verify is None:
+            vlm_verify = os.getenv("SAF_VLM_VERIFY_SOCIAL", "").lower() in ("1", "true", "yes")
+        self.vlm_verify = vlm_verify
+        self.vlm_model = vlm_model or os.getenv("SAF_VLM_VERIFY_MODEL", "moondream")
+        self._ollama = None
 
     @property
     def model(self):
@@ -33,18 +57,25 @@ class SocialPresenceDetector:
             )
         return self._hands_detector
 
+    @property
+    def ollama_client(self):
+        if self._ollama is None:
+            import ollama
+            self._ollama = ollama
+        return self._ollama
+
     def unload(self):
         """ Explicitly unload the model and clear memory """
         if self._model is not None:
             print(f"[SocialPresenceDetector] Unloading YOLO model...")
             del self._model
             self._model = None
-            
+
         if self._hands_detector is not None:
             print(f"[SocialPresenceDetector] Unloading MediaPipe Hands model...")
             self._hands_detector.close()
             self._hands_detector = None
-            
+
         # Force garbage collection and clear MPS/CUDA cache
         gc.collect()
         if torch.backends.mps.is_available():
@@ -52,19 +83,74 @@ class SocialPresenceDetector:
         elif torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _has_head_and_shoulder(self, kps_conf):
+        """ Return True if at least one head keypoint AND at least one
+        shoulder keypoint clear the confidence threshold. """
+        head_visible = any(
+            kps_conf[i] >= KEYPOINT_CONF_THRESHOLD
+            for i in (KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE, KP_LEFT_EAR, KP_RIGHT_EAR)
+        )
+        shoulder_visible = (
+            kps_conf[KP_LEFT_SHOULDER] >= KEYPOINT_CONF_THRESHOLD
+            or kps_conf[KP_RIGHT_SHOULDER] >= KEYPOINT_CONF_THRESHOLD
+        )
+        return head_visible and shoulder_visible
+
+    def _vlm_confirms_multiple_people(self, frame_bgr) -> bool:
+        """ Ask the configured fast VLM whether the frame clearly shows two
+        or more distinct people (excluding the wearer's own limbs).
+        Returns True if the VLM confirms, False if it explicitly denies, and
+        True on infrastructure errors so VLM availability is not the sole
+        reason to drop an otherwise-valid YOLO-pose-confirmed frame. """
+        try:
+            h, w = frame_bgr.shape[:2]
+            max_dim = 768
+            if max(h, w) > max_dim:
+                scale = max_dim / max(h, w)
+                frame_bgr = cv2.resize(frame_bgr, (0, 0), fx=scale, fy=scale)
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+            os.close(fd)
+            try:
+                cv2.imwrite(tmp_path, frame_bgr)
+                response = self.ollama_client.chat(
+                    model=self.vlm_model,
+                    messages=[{
+                        'role': 'user',
+                        'content': (
+                            "Does this image clearly show two or more distinct people, "
+                            "not counting the camera operator's own hands or limbs? "
+                            "Respond with just YES or NO."
+                        ),
+                        'images': [tmp_path],
+                    }],
+                )
+                content = response['message']['content'].strip().upper()
+                return content.startswith("YES")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        except Exception as e:
+            print(f"[SocialPresenceDetector] VLM verification failed: {e}")
+            return True
+
     def detect(self, video_path: Path, sample_rate_fps=1, fast_mode=False, min_consistency=2, return_hands=False):
         """
         Detect persons in a video.
-        
+
         Args:
             video_path: Path to the video file.
             sample_rate_fps: How many frames to sample per second.
             fast_mode: If True, returns True as soon as 'min_consistency' person frames are detected.
                       If False, returns a list of all detections per frame.
             min_consistency: Number of frames with social presence required to confirm (default 2).
+            return_hands: If True, also returns MediaPipe Hands boxes per frame (consumed by
+                          Layer 03a as documented `hand_detections` per Resolved Issue #17).
         """
         if not video_path.exists():
-            return False if fast_mode else []
+            return False if fast_mode else ([] if not return_hands else ([], []))
 
         # Reset ByteTrack state to prevent ID/trajectory bleeding across videos.
         # The model uses persist=True for within-video temporal consistency, so
@@ -81,20 +167,22 @@ class SocialPresenceDetector:
         cap = cv2.VideoCapture(str(video_path))
         try:
             if not cap.isOpened():
-                return False if fast_mode else []
+                return False if fast_mode else ([] if not return_hands else ([], []))
 
             fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
+
             if fps == 0 or total_frames == 0:
-                return False if fast_mode else []
+                return False if fast_mode else ([] if not return_hands else ([], []))
 
             frame_interval = int(max(1, fps / sample_rate_fps))
-            
+
             all_detections = []
             all_hands = []
             detected_frames_count = 0
-            
+            vlm_verified_count = 0
+            vlm_attempts = 0
+
             batch_frames = []
             batch_timestamps = []
             BATCH_SIZE = 16  # Adjustable batch size based on memory
@@ -103,69 +191,77 @@ class SocialPresenceDetector:
             current_frame_idx = 0
             while True:
                 ret, frame = cap.read()
-                
+
                 # Only process frames at the specified interval
                 if ret and current_frame_idx % frame_interval == 0:
                     if frame is not None and frame.size > 0:
                         batch_frames.append(frame)
                         batch_timestamps.append(current_frame_idx / fps)
-                
+
                 current_frame_idx += 1
                 is_end = not ret or current_frame_idx >= total_frames
-                
+
                 # Process batch if full or at end of video
                 if len(batch_frames) >= BATCH_SIZE or (is_end and len(batch_frames) > 0):
                     # Use YOLO internal batching with ByteTrack
-                    results = self.model.track(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames), persist=True, tracker="bytetrack.yaml") 
-                    
+                    results = self.model.track(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames), persist=True, tracker="bytetrack.yaml")
+
                     for i, result in enumerate(results):
                         timestamp = batch_timestamps[i]
                         frame_detections = []
                         has_bystander_in_frame = False
                         img_h, img_w = batch_frames[i].shape[:2]
-                        
-                        # MediaPipe Hand Detection
-                        frame_rgb = cv2.cvtColor(batch_frames[i], cv2.COLOR_BGR2RGB)
-                        hand_results = self.mp_hands.process(frame_rgb)
-                        hand_boxes = []
-                        if hand_results.multi_hand_landmarks:
-                            for hand_landmarks in hand_results.multi_hand_landmarks:
-                                x_min, y_min = img_w, img_h
-                                x_max, y_max = 0, 0
-                                for lm in hand_landmarks.landmark:
-                                    x, y = int(lm.x * img_w), int(lm.y * img_h)
-                                    x_min, y_min = min(x_min, x), min(y_min, y)
-                                    x_max, y_max = max(x_max, x), max(y_max, y)
-                                pad = 20
-                                hand_boxes.append((max(0, x_min - pad), max(0, y_min - pad), min(img_w, x_max + pad), min(img_h, y_max + pad)))
 
-                        for box in result.boxes:
+                        # MediaPipe Hand Detection is only needed when the caller
+                        # asks for `return_hands` (i.e. Node 02 building the
+                        # `hand_detections` schema field for Layer 03a). YOLO-pose
+                        # keypoint validation below makes hand-overlap suppression
+                        # redundant, so skipping MediaPipe entirely on the Node 01
+                        # streaming filter is a real per-batch perf win.
+                        hand_boxes = []
+                        if return_hands:
+                            frame_rgb = cv2.cvtColor(batch_frames[i], cv2.COLOR_BGR2RGB)
+                            hand_results = self.mp_hands.process(frame_rgb)
+                            if hand_results.multi_hand_landmarks:
+                                for hand_landmarks in hand_results.multi_hand_landmarks:
+                                    x_min, y_min = img_w, img_h
+                                    x_max, y_max = 0, 0
+                                    for lm in hand_landmarks.landmark:
+                                        x, y = int(lm.x * img_w), int(lm.y * img_h)
+                                        x_min, y_min = min(x_min, x), min(y_min, y)
+                                        x_max, y_max = max(x_max, x), max(y_max, y)
+                                    pad = 20
+                                    hand_boxes.append((max(0, x_min - pad), max(0, y_min - pad), min(img_w, x_max + pad), min(img_h, y_max + pad)))
+
+                        # YOLO-pose keypoint tensors. The boxes and keypoints arrays
+                        # are co-indexed: result.boxes[k] corresponds to result.keypoints[k].
+                        kps_conf = None
+                        keypoints_obj = getattr(result, "keypoints", None)
+                        if keypoints_obj is not None and getattr(keypoints_obj, "conf", None) is not None:
+                            kps_conf_tensor = keypoints_obj.conf
+                            kps_conf = kps_conf_tensor.cpu().numpy() if hasattr(kps_conf_tensor, "cpu") else kps_conf_tensor
+
+                        for box_idx, box in enumerate(result.boxes):
                             coords = [int(v) for v in box.xyxy[0].tolist()]
                             x1, y1, x2, y2 = coords
-                            
-                            # Refined Anti-Wearer Heuristic
+
+                            # Refined Anti-Wearer Heuristic (kept as a cheap geometric
+                            # prefilter on top of the pose-keypoint check below)
                             is_limb = (y2 > 0.95 * img_h) and (y1 > 0.15 * img_h)
                             is_ghost = (y1 == 0) and (y2 > 0.90 * img_h)
-                            
+
                             if is_limb or is_ghost:
                                 continue
 
-                            # MediaPipe Hand Overlap Suppression
-                            is_hand = False
-                            p_area = max(0, x2 - x1) * max(0, y2 - y1)
-                            if p_area > 0:
-                                for (hx1, hy1, hx2, hy2) in hand_boxes:
-                                    ix1 = max(x1, hx1)
-                                    iy1 = max(y1, hy1)
-                                    ix2 = min(x2, hx2)
-                                    iy2 = min(y2, hy2)
-                                    if ix1 < ix2 and iy1 < iy2:
-                                        i_area = (ix2 - ix1) * (iy2 - iy1)
-                                        # Use 40% overlap threshold
-                                        if (i_area / p_area) > 0.4:
-                                            is_hand = True
-                                            break
-                            if is_hand:
+                            # YOLO-pose head+shoulder gate (Option A from Resolved Issue #22).
+                            # Disconnected limbs / mannequins / equipment never satisfy both
+                            # a visible head keypoint and a visible shoulder keypoint.
+                            if kps_conf is not None and box_idx < len(kps_conf):
+                                if not self._has_head_and_shoulder(kps_conf[box_idx]):
+                                    continue
+                            else:
+                                # Pose model returned no keypoints for this detection:
+                                # treat as a non-confirmable bystander and skip.
                                 continue
 
                             # Extract tracking ID if available
@@ -178,27 +274,58 @@ class SocialPresenceDetector:
                                 "confidence": float(box.conf[0])
                             })
                             has_bystander_in_frame = True
-                        
+
                         if has_bystander_in_frame:
                             detected_frames_count += 1
-                        
+
+                            # VLM Early-Exit Verification (Option B from Resolved Issue #22):
+                            # Verify up to MAX_VLM_VERIFY_FRAMES candidate frames against a
+                            # fast VLM. Once `min_consistency` frames are VLM-confirmed, the
+                            # video has passed the gate and we stop spending VLM budget.
+                            if (
+                                self.vlm_verify
+                                and vlm_verified_count < min_consistency
+                                and vlm_attempts < MAX_VLM_VERIFY_FRAMES
+                            ):
+                                vlm_attempts += 1
+                                if self._vlm_confirms_multiple_people(batch_frames[i]):
+                                    vlm_verified_count += 1
+
                         if frame_detections or (return_hands and hand_boxes):
                             all_detections.append(frame_detections)
                             all_hands.append({
                                 "timestamp_sec": timestamp,
                                 "hand_boxes": hand_boxes
                             })
-                    
+
                     batch_frames = []
                     batch_timestamps = []
-                    
-                    # Return early in fast mode
-                    if fast_mode and (detected_frames_count >= min_consistency):
-                        return True
-                
+
+                    # Early-exit in fast_mode: gated on VLM verification when enabled,
+                    # otherwise on raw YOLO-pose frame count as before.
+                    if fast_mode:
+                        if self.vlm_verify:
+                            if vlm_verified_count >= min_consistency:
+                                return True
+                        elif detected_frames_count >= min_consistency:
+                            return True
+
                 if is_end:
                     break
-            
+
+            # Video-level VLM gate: if VLM verification was requested but no
+            # candidate frame ever cleared the confirmation threshold, drop
+            # the whole video. This is the "two-pass" verification the
+            # remediation path called for — YOLO-pose proposes, VLM disposes.
+            if self.vlm_verify and detected_frames_count > 0 and vlm_verified_count < min_consistency:
+                print(
+                    f"[SocialPresenceDetector] VLM gate rejected {video_path.name}: "
+                    f"{vlm_verified_count}/{min_consistency} confirmed across {vlm_attempts} attempts"
+                )
+                if fast_mode:
+                    return False
+                return ([], []) if return_hands else []
+
             if fast_mode:
                 return detected_frames_count >= min_consistency
             if return_hands:
