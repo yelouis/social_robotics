@@ -13,6 +13,11 @@ try:
 except ImportError:
     ULTRALYTICS_AVAILABLE = False
 
+try:
+    from src.models_config import get_model
+except ImportError:
+    from models_config import get_model
+
 
 class MotorResonancePipeline:
     # --- Detection Tuning ---
@@ -64,14 +69,15 @@ class MotorResonancePipeline:
             elif torch.cuda.is_available():
                 device = 'cuda'
 
-            print(f"Initializing YOLOv8 Pose (fallback for MMPose) on {device}...")
+            pose_weights = get_model("layer_03f_pose")
+            print(f"Initializing YOLOv8 Pose ({pose_weights}) on {device}...")
             base_dir = Path(__file__).resolve().parent.parent.parent
-            model_path = base_dir / "yolov8x-pose.pt"
+            model_path = base_dir / pose_weights
 
             if not model_path.exists():
                 print(f"Warning: Model {model_path} not found. Attempting to download via ultralytics...")
 
-            self.model = YOLO(str(model_path) if model_path.exists() else "yolov8x-pose.pt")
+            self.model = YOLO(str(model_path) if model_path.exists() else pose_weights)
             self.device = device
 
         except Exception as e:

@@ -38,11 +38,11 @@ The heart of the project. Independent modules analyze the filtered video chunks 
 | Layer ID | Name | Focus | Model / Technique |
 | :--- | :--- | :--- | :--- |
 | **03a** | **Attention** | Gaze tracking & engagement scores | L2CS-Net |
-| **03b** | **Reasonable Emotion** | Context-aware emotional analysis | Py-Feat / Gemma 4 |
+| **03b** | **Reasonable Emotion** | Context-aware emotional analysis | HSEmotion-PyTorch / Gemma 4 |
 | **03c** | **Acoustic Prosody** | Non-verbal vocal cues & tone | emotion2vec+ / SenseVoice |
-| **03d** | **Proxemic Kinematics** | Relative depth & physical spacing | Depth Anything V2 |
+| **03d** | **Proxemic Kinematics** | Relative depth & physical spacing | Depth Anything V1-Large + SAM ViT-Huge |
 | **03e** | **Affirmation Gesture** | Head nodding & shaking detection | SciPy / Signal Processing |
-| **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | RTMPose / EgoMotion |
+| **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | YOLOv8-pose |
 | **03g** | **Shared Reality** | Social referencing & validation seeking | Saliency / Optical Flow |
 
 ### 4. Dehydrated Export

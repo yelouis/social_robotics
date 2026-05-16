@@ -18,6 +18,11 @@ try:
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
 
+try:
+    from src.models_config import get_model
+except ImportError:
+    from models_config import get_model
+
 class ProxemicKinematicsPipeline:
     # --- Tuning Constants ---
     # All proxemic heuristic thresholds live here so retuning is a single-file
@@ -71,9 +76,10 @@ class ProxemicKinematicsPipeline:
         if not os.path.ismount(ssd_root):
             raise RuntimeError(
                 f"Extreme SSD is not mounted at '{ssd_root}'. The Proxemic Kinematics "
-                f"layer caches Depth Anything V2 + SAM weights (~500MB) on this volume "
-                f"to keep the boot disk clear. Mount the SSD and retry, or override "
-                f"SSD_HF_CACHE in pipeline.py if running on a host without the SSD."
+                f"layer caches depth + SAM weights (~0.5-4 GB depending on tier) on "
+                f"this volume to keep the boot disk clear. Mount the SSD and retry, "
+                f"or override SSD_HF_CACHE in pipeline.py if running on a host "
+                f"without the SSD."
             )
 
         try:
@@ -92,26 +98,30 @@ class ProxemicKinematicsPipeline:
             elif self.device == 'cuda':
                 device_id = 0
 
-            print(f"Initializing Depth Anything V1-Large on {self.device} (Cache: {SSD_HF_CACHE})...")
-            self.depth_estimator = pipeline(task="depth-estimation", model="LiheYoung/depth-anything-large-hf", device=device_id)
+            depth_model_id = get_model("layer_03d_depth")
+            sam_model_id = get_model("layer_03d_sam")
 
-            print(f"Initializing SAM-1 (bbox-prompted) on {self.device}...")
+            print(f"Initializing depth estimator '{depth_model_id}' on {self.device} (Cache: {SSD_HF_CACHE})...")
+            self.depth_estimator = pipeline(task="depth-estimation", model=depth_model_id, device=device_id)
+
+            print(f"Initializing SAM '{sam_model_id}' (bbox-prompted) on {self.device}...")
             # Bbox-prompted SAM via the lower-level SamModel/SamProcessor API.
             # The high-level mask-generation pipeline runs an exhaustive 32x32
             # candidate-point grid (1024 forward passes per crop), which dominates
             # wall-clock cost on the M4 Pro MPS backend and is wasted work given
             # we already have the bystander bbox as a single-mask prompt.
-            self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
+            self.sam_model = SamModel.from_pretrained(sam_model_id).to(self.device)
             self.sam_model.eval()
-            self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+            self.sam_processor = SamProcessor.from_pretrained(sam_model_id)
 
             # Validate download path
-            model_cache_path = Path(SSD_HF_CACHE) / "hub" / "models--LiheYoung--depth-anything-large-hf"
+            cache_slug = "models--" + depth_model_id.replace("/", "--")
+            model_cache_path = Path(SSD_HF_CACHE) / "hub" / cache_slug
             if not model_cache_path.exists():
                 print("Warning: Model does not appear to be saved in the expected Extreme SSD cache location.")
 
         except Exception as e:
-            raise RuntimeError(f"Failed to initialize Depth Anything V2: {e}")
+            raise RuntimeError(f"Failed to initialize depth/SAM stack: {e}")
 
     def _log_error(self, video_id, error):
         error_entry = {

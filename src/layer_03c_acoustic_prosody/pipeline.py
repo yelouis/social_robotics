@@ -10,6 +10,10 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from src.layer_03c_acoustic_prosody.config import Layer03cConfig
+try:
+    from src.models_config import get_model
+except ImportError:
+    from models_config import get_model
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +110,10 @@ class AcousticProsodyPipeline:
         try:
             from funasr import AutoModel
             self._AutoModel = AutoModel
-            logger.info("Initializing emotion2vec+ via FunASR...")
+            ser_model_id = get_model("layer_03c_ser")
+            logger.info(f"Initializing emotion2vec+ via FunASR ({ser_model_id})...")
             # disable_update=True prevents downloading updates on every run if already cached
-            self.model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+            self.model = AutoModel(model=ser_model_id, disable_update=True)
             self.funasr_available = True
             logger.info("emotion2vec+ initialized successfully.")
         except ImportError:
@@ -130,9 +135,10 @@ class AcousticProsodyPipeline:
         # primary SER model its load failure does not warrant a hard fail.
         if self.host_can_eager_load_sensevoice():
             try:
-                logger.info("High-memory host detected; eager-loading SenseVoiceSmall...")
+                aed_model_id = get_model("layer_03c_aed")
+                logger.info(f"High-memory host detected; eager-loading {aed_model_id}...")
                 self.sensevoice_model = self._AutoModel(
-                    model="iic/SenseVoiceSmall", disable_update=True
+                    model=aed_model_id, disable_update=True
                 )
                 logger.info("SenseVoiceSmall eager-loaded successfully.")
             except Exception as e:
@@ -302,9 +308,10 @@ class AcousticProsodyPipeline:
 
         if self.sensevoice_model is None:
             try:
-                logger.info("Lazy-loading SenseVoiceSmall on first low-confidence sample...")
+                aed_model_id = get_model("layer_03c_aed")
+                logger.info(f"Lazy-loading {aed_model_id} on first low-confidence sample...")
                 self.sensevoice_model = self._AutoModel(
-                    model="iic/SenseVoiceSmall", disable_update=True
+                    model=aed_model_id, disable_update=True
                 )
             except Exception as e:
                 logger.error(f"Failed to lazy-load SenseVoiceSmall: {e}")

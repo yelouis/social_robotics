@@ -7,6 +7,11 @@ import mediapipe as mp
 from ultralytics import YOLO
 from pathlib import Path
 
+try:
+    from src.models_config import get_model
+except ImportError:
+    from models_config import get_model
+
 # COCO-17 keypoint indices used by ultralytics YOLO-pose. We gate "real
 # bystander" on visible head (any of nose/eyes/ears) AND at least one
 # shoulder, which is the cheapest geometric proxy for a torso-attached
@@ -24,8 +29,13 @@ MAX_VLM_VERIFY_FRAMES = 5
 
 
 class SocialPresenceDetector:
-    def __init__(self, model_path='yolov8n-pose.pt', vlm_verify=None, vlm_model=None):
-        self.model_path = model_path
+    def __init__(self, model_path=None, vlm_verify=None, vlm_model=None):
+        # Model identifier resolution priority: explicit constructor arg ->
+        # tier-per-host registry (`social_presence_pose`). The registry's
+        # default is yolov8n-pose.pt on every tier today; future tier
+        # variations (e.g. yolov8s-pose at `large`) only need editing
+        # src/models_config.py.
+        self.model_path = model_path or get_model("social_presence_pose")
         self._model = None
         self._mp_hands = None
         self._hands_detector = None
@@ -33,7 +43,12 @@ class SocialPresenceDetector:
         if vlm_verify is None:
             vlm_verify = os.getenv("SAF_VLM_VERIFY_SOCIAL", "").lower() in ("1", "true", "yes")
         self.vlm_verify = vlm_verify
-        self.vlm_model = vlm_model or os.getenv("SAF_VLM_VERIFY_MODEL", "moondream")
+        # SAF_VLM_VERIFY_MODEL retained as the per-detector override; falls
+        # back to the tier-per-host registry's `social_presence_vlm_verify`
+        # entry (defaults to `moondream` on small/medium tiers).
+        self.vlm_model = vlm_model or os.getenv(
+            "SAF_VLM_VERIFY_MODEL", get_model("social_presence_vlm_verify")
+        )
         self._ollama = None
 
     @property

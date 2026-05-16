@@ -11,6 +11,10 @@ from pathlib import Path
 from ultralytics import YOLO
 import ollama
 from shared.social_presence import SocialPresenceDetector
+try:
+    from src.models_config import get_model, get_active_tier
+except ImportError:
+    from models_config import get_model, get_active_tier
 import config
 
 
@@ -29,14 +33,17 @@ class FilteringPipeline:
         # (e.g. throughput-sensitive overnight backfills) opt out via
         # SAF_VLM_VERIFY_SOCIAL=0.
         vlm_verify = os.getenv("SAF_VLM_VERIFY_SOCIAL", "1").lower() in ("1", "true", "yes")
-        self.detector = SocialPresenceDetector('yolov8n-pose.pt', vlm_verify=vlm_verify)
+        self.detector = SocialPresenceDetector(get_model("social_presence_pose"), vlm_verify=vlm_verify)
 
-        # Default the Stage-2 climax-refinement VLM to the 7B tier. 7B fits
-        # alongside YOLO on a 64 GB host and improves fine-grained climax
-        # localization on slow/cognitive tasks. Hosts that need the lighter
-        # 3B model (e.g. 24 GB Mac mini) opt down via SAF_VLM_MODEL_TIER=small.
-        vlm_tier = os.getenv("SAF_VLM_MODEL_TIER", "default").lower()
-        self.vlm_model = "qwen2.5vl:3b" if vlm_tier == "small" else "qwen2.5vl:7b"
+        # Stage-2 climax-refinement VLM is selected from the central tier
+        # registry (`filtering_vlm`): `medium`/`large` -> qwen2.5vl:7b on a
+        # >=48 GB host, `small` -> qwen2.5vl:3b for the 24 GB Mac mini.
+        # SAF_VLM_MODEL_TIER=small is the legacy per-stage override; it still
+        # forces the small tier on this layer alone when set.
+        if os.getenv("SAF_VLM_MODEL_TIER", "").lower() == "small":
+            self.vlm_model = get_model("filtering_vlm", tier="small")
+        else:
+            self.vlm_model = get_model("filtering_vlm")
 
         # Gate the single-pass interleaved architecture on host memory. The
         # two-pass path was built for the 24 GB Mac mini where YOLO and the
