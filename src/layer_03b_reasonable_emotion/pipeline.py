@@ -51,7 +51,11 @@ class TransitionEvalSchema(BaseModel):
 # FER+ vocabulary; we fold it onto the canonical 03b label set the rest of
 # the layer consumes. `contempt` has no 03b analog and is folded onto
 # `disgust` (closest negative-valence label); `happiness` is renamed to `joy`.
-HSEMOTION_MODEL = "enet_b2_8"
+try:
+    from src.models_config import get_model
+except ImportError:
+    from models_config import get_model
+HSEMOTION_MODEL = get_model("layer_03b_face_emotion")
 HSEMOTION_TO_CANONICAL = {
     "anger": "anger",
     "contempt": "disgust",
@@ -76,7 +80,9 @@ DEFAULT_EXPECTATIONS = {
 # Step 3 cumulative-history evaluation) is a multi-step structured-output
 # regime where the 27B-class model measurably reduces JSON drift; the
 # Mac Studio (M4 Max, 64 GB) has ample headroom for its ~15 GB resident set.
-OLLAMA_MODEL = "gemma4:26b"
+# Resolved by the tier-per-host config: `medium`/`large` -> `gemma4:26b`,
+# `small` -> the legacy `gemma4:e4b` for the 24 GB Mac mini fallback.
+OLLAMA_MODEL = get_model("layer_03b_ollama")
 LLM_MAX_RETRIES = 3
 
 

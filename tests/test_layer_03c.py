@@ -369,7 +369,9 @@ def test_sensevoice_eager_loaded_on_high_memory_host():
 def test_sensevoice_stays_lazy_on_standard_memory_host():
     """Issue #1: on hosts below the 48 GB gate, SenseVoice is NOT constructed
     at init — it stays lazy so the Mac mini does not pay resident memory it
-    may never use.
+    may never use. The SER model identifier is resolved by the tier-per-host
+    registry (`ml_dependencies.md` Resolved Issue #1) — on a 24 GB host that
+    means the `small`-tier `iic/emotion2vec_plus_base` variant.
     """
     fake_funasr = MagicMock()
     emotion_model = MagicMock(name="emotion2vec")
@@ -385,7 +387,7 @@ def test_sensevoice_stays_lazy_on_standard_memory_host():
 
     assert pipeline.sensevoice_model is None
     fake_funasr.AutoModel.assert_called_once_with(
-        model="iic/emotion2vec_plus_large", disable_update=True
+        model="iic/emotion2vec_plus_base", disable_update=True
     )
 
 def test_eager_load_failure_falls_back_to_lazy():
