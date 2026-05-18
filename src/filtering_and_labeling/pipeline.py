@@ -3,18 +3,13 @@ import json
 import cv2
 import gc
 import torch
-import numpy as np
-import tempfile
 import traceback
-import re
 from pathlib import Path
-from ultralytics import YOLO
-import ollama
 from shared.social_presence import SocialPresenceDetector
 try:
-    from src.models_config import get_model, get_active_tier
+    from src.models_config import get_model
 except ImportError:
-    from models_config import get_model, get_active_tier
+    from models_config import get_model
 import config
 
 
@@ -73,6 +68,24 @@ class FilteringPipeline:
         
         # Load Ego4D Metadata
         self.metadata = self._load_metadata()
+
+    # Only Ego4D has a metadata-driven task-labeling path implemented today
+    # (see contextual_task_labeling). Other ego datasets like Charades-Ego,
+    # EPIC-KITCHENS, and EgoProceL are deferred until their per-dataset
+    # annotation parsers are written; in the interim we skip them at intake
+    # so they don't burn YOLO time and then silently disappear at the
+    # metadata stage with no entry in filtered_manifest.json.
+    _SUPPORTED_DATASETS = ("ego4d",)
+
+    def _is_supported_dataset(self, entry, video_id) -> bool:
+        dataset = (entry.get('dataset') or '').strip().lower()
+        if dataset in self._SUPPORTED_DATASETS:
+            return True
+        print(
+            f"Skipping {video_id}: dataset '{dataset}' is not yet supported by "
+            f"the metadata-driven labeling path (supported: {self._SUPPORTED_DATASETS})."
+        )
+        return False
 
     def _load_metadata(self):
         """ Load Ego4D metadata and index by video_uid """
@@ -133,6 +146,9 @@ class FilteringPipeline:
             if video_id in self.processed_ids and not self.force:
                 continue
 
+            if not self._is_supported_dataset(entry, video_id):
+                continue
+
             video_path = Path(entry['file_path'])
             if not video_path.exists(): continue
 
@@ -174,6 +190,9 @@ class FilteringPipeline:
         for entry in self.initial_registry:
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
+                continue
+
+            if not self._is_supported_dataset(entry, video_id):
                 continue
 
             video_path = Path(entry['file_path'])
@@ -218,10 +237,13 @@ class FilteringPipeline:
         if not identified_tasks:
             cap.release()
             return None
-            
-        # 3. Temporal Task Climax Identification (Batched VLM)
-        self.temporal_climax_identification(cap, fps, total_frames, identified_tasks, duration_sec)
-        
+
+        # 3. Temporal Task Climax — deferred to Layer 03 (see Resolved Issue
+        # #8). Layer 02 no longer seeks through every frame for the optical
+        # flow pass; whichever Layer 03 runs first calls
+        # `shared.climax_extraction.populate_climax_for_manifest` and fills
+        # the metadata in place.
+
         cap.release()
         
         return {
@@ -342,171 +364,3 @@ class FilteringPipeline:
         return 'medium'
 
 
-    def temporal_climax_identification(self, cap, fps, total_frames, identified_tasks, duration_sec):
-        """ Compute optical flow to find task climax, with VLM refinement for slow tasks """
-        for task in identified_tasks:
-            start_sec = task['task_start_sec']
-            end_sec = task['task_end_sec']
-            
-            start_frame = int(start_sec * fps)
-            end_frame = int(end_sec * fps)
-            
-            # Optical Flow params
-            # Downsample temporal resolution to ~5 FPS for speed
-            step = max(1, int(fps / 5))
-            
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            ret, prev_frame = cap.read()
-            if not ret:
-                continue
-                
-            prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-            # Resize for speed
-            prev_gray = cv2.resize(prev_gray, (0,0), fx=0.5, fy=0.5)
-            
-            max_flow = 0.0
-            climax_frame = start_frame
-            flow_data = [] # Store candidate frames for VLM refinement
-            
-            # PASS 1: Coarse Pass at ~5 FPS
-            for frame_idx in range(start_frame + step, end_frame, step):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, (0,0), fx=0.5, fy=0.5)
-                
-                flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-                mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-                mean_mag = np.mean(mag)
-                
-                flow_data.append((frame_idx, mean_mag))
-                
-                if mean_mag > max_flow:
-                    max_flow = mean_mag
-                    climax_frame = frame_idx
-                    
-                prev_gray = gray
-                
-            # PASS 2: Dense Pass at Native FPS around Coarse Peak
-            window_frames = int(1.0 * fps)
-            dense_start = max(start_frame, climax_frame - window_frames)
-            dense_end = min(end_frame, climax_frame + window_frames)
-            
-            cap.set(cv2.CAP_PROP_POS_FRAMES, dense_start)
-            ret, prev_dense_frame = cap.read()
-            if ret:
-                prev_dense_gray = cv2.cvtColor(prev_dense_frame, cv2.COLOR_BGR2GRAY)
-                prev_dense_gray = cv2.resize(prev_dense_gray, (0,0), fx=0.5, fy=0.5)
-                
-                dense_max_flow = 0.0
-                dense_climax_frame = dense_start
-                
-                for frame_idx in range(dense_start + 1, dense_end):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, dense_frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    dense_gray = cv2.cvtColor(dense_frame, cv2.COLOR_BGR2GRAY)
-                    dense_gray = cv2.resize(dense_gray, (0,0), fx=0.5, fy=0.5)
-                    
-                    flow = cv2.calcOpticalFlowFarneback(prev_dense_gray, dense_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-                    mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-                    mean_mag = np.mean(mag)
-                    
-                    if mean_mag > dense_max_flow:
-                        dense_max_flow = mean_mag
-                        dense_climax_frame = frame_idx
-                        
-                    prev_dense_gray = dense_gray
-                
-                climax_frame = dense_climax_frame
-                max_flow = dense_max_flow if dense_max_flow > 0 else max_flow
-                
-            climax_sec = climax_frame / fps
-            
-            if self.skip_vlm:
-                extraction_method = "optical_flow_peak_only"
-            else:
-                extraction_method = "optical_flow_peak"
-                
-            vlm_confidence = None
-            
-            # Stage 2: Batched VLM Refinement for slow tasks
-            if not self.skip_vlm and task['task_velocity'] == 'slow' and len(flow_data) > 1:
-                # Sort by flow and pick top 3 candidates around the peak
-                candidates = sorted(flow_data, key=lambda x: x[1], reverse=True)[:3]
-                candidates = sorted(candidates, key=lambda x: x[0]) # Chronological
-                
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_path = Path(temp_dir)
-                    img_paths = []
-                    
-                    for i, (cand_frame, _) in enumerate(candidates):
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, cand_frame)
-                        ret, frame = cap.read()
-                        if not ret: continue
-                        
-                        # Resize for VLM memory efficiency (max 1024px)
-                        h, w = frame.shape[:2]
-                        max_dim = 1024
-                        if max(h, w) > max_dim:
-                            scale = max_dim / max(h, w)
-                            frame = cv2.resize(frame, (0,0), fx=scale, fy=scale)
-                        
-                        img_path = temp_path / f"cand_{i+1}.jpg"
-                        cv2.imwrite(str(img_path), frame)
-                        img_paths.append(str(img_path))
-                    
-                    if not img_paths: continue
-
-                    prompt = (
-                        f"The person is performing the task: '{task['task_label']}'. "
-                        f"I have provided {len(img_paths)} images from the video. "
-                        "Which image (respond with just the number 1, 2, or 3) "
-                        "best represents the 'climax' or the most critical moment of this action? "
-                        "If you are unsure, pick the one with the most active motion."
-                    )
-                    
-                    try:
-                        response = ollama.chat(model=self.vlm_model, messages=[
-                            {'role': 'user', 'content': prompt, 'images': img_paths}
-                        ])
-                        content = response['message']['content'].strip()
-                        matches = re.findall(r'[1-3]', content)
-                        if matches:
-                            choice = int(matches[0]) - 1 # 0-indexed
-                            if choice < len(candidates):
-                                climax_frame = candidates[choice][0]
-                                climax_sec = climax_frame / fps
-                                extraction_method = "optical_flow_peak+vlm_refinement"
-                                # We treat the choice as "confidence 1.0" for the selected frame
-                                vlm_confidence = 1.0 
-                    except Exception as e:
-                        print(f"VLM Refinement failed: {e}")
-                        pass
-
-            # Dynamic Reaction Window based on velocity
-            velocity = task['task_velocity']
-            if velocity == 'fast':
-                window = [round(climax_sec + 0.5, 2), round(climax_sec + 2.0, 2)]
-            elif velocity == 'medium':
-                window = [round(climax_sec + 1.0, 2), round(climax_sec + 3.0, 2)]
-            else: # slow
-                window = [round(climax_sec + 2.0, 2), round(climax_sec + 6.0, 2)]
-
-            # Clamp to video duration so downstream layers never seek past EOF.
-            duration_rounded = round(duration_sec, 2)
-            window = [min(window[0], duration_rounded), min(window[1], duration_rounded)]
-                
-            task['task_temporal_metadata'] = {
-                "task_climax_sec": round(climax_sec, 2),
-                "task_reaction_window_sec": window,
-                "climax_extraction_method": extraction_method,
-                "optical_flow_peak_magnitude": round(float(max_flow), 2)
-            }
-            if vlm_confidence is not None:
-                task['task_temporal_metadata']["vlm_climax_confidence"] = vlm_confidence

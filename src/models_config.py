@@ -123,6 +123,59 @@ def get_active_tier() -> str:
     return _auto_tier()
 
 
+_OLLAMA_TAG_PREFIXES = ("qwen2.5vl:", "gemma4:", "moondream:")
+_OLLAMA_LOCAL_TAGS_CACHE: Optional[set] = None
+
+
+def _list_local_ollama_tags() -> set:
+    """Return the set of model tags installed locally in Ollama.
+
+    Cached for the lifetime of the process; on import errors or a missing
+    ollama daemon returns an empty set so the caller can fall back gracefully.
+    """
+    global _OLLAMA_LOCAL_TAGS_CACHE
+    if _OLLAMA_LOCAL_TAGS_CACHE is not None:
+        return _OLLAMA_LOCAL_TAGS_CACHE
+    tags: set = set()
+    try:
+        import ollama
+        response = ollama.list()
+        models = response.get("models", []) if isinstance(response, dict) else getattr(response, "models", [])
+        for m in models:
+            name = m.get("name") if isinstance(m, dict) else getattr(m, "name", None) or getattr(m, "model", None)
+            if name:
+                tags.add(name)
+    except Exception:
+        pass
+    _OLLAMA_LOCAL_TAGS_CACHE = tags
+    return tags
+
+
+def _resolve_ollama_tag(model_id: str) -> str:
+    """If `model_id` looks like an Ollama tag and is not installed locally,
+    substitute `:latest` when that variant is installed. Otherwise return the
+    original id unchanged so genuine missing-model errors still surface at
+    call time."""
+    if ":" not in model_id:
+        return model_id
+    if not any(model_id.startswith(prefix) for prefix in _OLLAMA_TAG_PREFIXES):
+        return model_id
+    local = _list_local_ollama_tags()
+    if not local or model_id in local:
+        return model_id
+    base = model_id.split(":", 1)[0]
+    latest = f"{base}:latest"
+    if latest in local:
+        import sys
+        print(
+            f"[models_config] Ollama tag '{model_id}' not installed; "
+            f"falling back to '{latest}' (found locally).",
+            file=sys.stderr,
+        )
+        return latest
+    return model_id
+
+
 def get_model(layer_key: str, tier: Optional[str] = None) -> str:
     """Return the model identifier this layer should load.
 
@@ -130,6 +183,11 @@ def get_model(layer_key: str, tier: Optional[str] = None) -> str:
     programmer error (raises KeyError) — the registry is meant to be exhaustive
     so a missing entry indicates a layer was added without registering its
     model variants here.
+
+    For Ollama-backed models, the resolved id is checked against the local
+    `ollama list` and falls back to `:latest` when the pinned tag is not
+    installed but the `:latest` variant is. This makes the registry tolerate
+    Ollama tag drift without forcing a manual `ollama pull` on every host.
     """
     if layer_key not in _MODEL_TIERS:
         raise KeyError(
@@ -137,7 +195,7 @@ def get_model(layer_key: str, tier: Optional[str] = None) -> str:
             f"src/models_config.py before calling get_model()."
         )
     tier = tier or get_active_tier()
-    return _MODEL_TIERS[layer_key][tier][0]
+    return _resolve_ollama_tag(_MODEL_TIERS[layer_key][tier][0])
 
 
 def get_model_info(layer_key: str, tier: Optional[str] = None) -> Tuple[str, str]:
