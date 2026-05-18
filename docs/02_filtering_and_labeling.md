@@ -62,6 +62,9 @@ Identify the exact timestamp or narrow temporal window where the "climax" or cor
   - **Medium** (e.g., throwing a ball, standard interaction): Climax + `[1.0s to 3.0s]`.
   - **Slow / Cognitive** (e.g., solving a puzzle, reading a sign): Climax + `[2.0s to 6.0s]`.
 
+> [!IMPORTANT]
+> **Execution Location**: Climax extraction is no longer executed by Layer 02 itself. Per Resolved Issue #8 below, Layer 02 emits `task_temporal_metadata = {}`, and the first Layer 03 pipeline to consume the manifest invokes `shared.climax_extraction.populate_climax_for_manifest()` to fill in the optical-flow peak, dynamic reaction window, and optional VLM refinement in place. Subsequent Layer 03 pipelines find the metadata cached and skip the optical-flow pass entirely.
+
 ---
 
 ## Output
@@ -152,10 +155,10 @@ To ensure the filtering mechanisms are robust and correct:
 
 ## 🚀 Implementation Status
 
-The filtering and labeling pipeline is fully operational within the `src/dataset_acquisition` and `src/filtering_and_labeling` modules. 
-- **Social Presence Filter**: Successfully implemented using YOLOv8-Pose (`yolov8n-pose.pt`) with head+shoulder keypoint validation, the geometric Anti-Wearer Heuristic, and a fast-VLM early-exit verification gate (see Resolved Issue #22).
-- **Contextual Task Labeling**: Shifted from VLM-based labeling to **Ego4D Metadata Extraction** using `ego4d.json`. This provides ground-truth task contexts and significantly reduces computational overhead.
-- **Temporal Climax Identification**: Implemented a hybrid two-stage approach using dense optical flow (`cv2.calcOpticalFlowFarneback`) and VLM-based refinement for slow tasks.
+The filtering and labeling pipeline is fully operational within the `src/dataset_acquisition` and `src/filtering_and_labeling` modules.
+- **Social Presence Filter**: YOLOv8-Pose (`yolov8n-pose.pt`) with head+shoulder keypoint validation, the geometric Anti-Wearer Heuristic, and a screen-aware Moondream verification gate (see Resolved Issue #22 and Resolved Issue #5).
+- **Contextual Task Labeling**: Ego4D Metadata Extraction from `ego4d.json` is the only labeling path; non-Ego4D entries are skipped at intake until per-dataset labelers are written (Resolved Issue #6).
+- **Temporal Climax Identification**: Implementation lives in `src/shared/climax_extraction.py` and is invoked by the first Layer 03 pipeline to consume the manifest, not by Layer 02 itself (Resolved Issue #8).
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
@@ -175,75 +178,23 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
    - **Problem**: `MediaPipe` 0.10.11 failed due to `protobuf` incompatibilities on Apple Silicon.
    - **Solution**: Downgraded to `0.10.9` to restore stability for the wearer occlusion suppression layer.
 
+5. **Screen-Aware VLM Verification Prompt (Resolved - May 17)**:
+   - **Problem**: During the May 16 100-video E2E run, YOLO-pose's head+shoulder gate (`SocialPresenceDetector._has_head_and_shoulder()`, `src/shared/social_presence.py:101`) confidently fired on people rendered on TVs, monitors, and framed photographs because the on-screen faces genuinely satisfy the keypoint criterion. The geometric Anti-Wearer Heuristic only rejects bottom-edge / top-edge limb stubs, leaving no gate for "real 3D body vs pixel-rendered display surface". The single highest-scoring video in the run (Ego4D `002ad105-…`) was the camera wearer alone in a hotel room watching YouTube; all 48 "bystander" tracks were faces on the TV. The pre-existing Moondream YES/NO prompt in `_vlm_confirms_multiple_people` asked only "two or more distinct people" without excluding screens, so even with `SAF_VLM_VERIFY_SOCIAL=1` the VLM would have confirmed.
+   - **Solution**: Tightened the Moondream prompt in `src/shared/social_presence.py` to explicitly require "two or more real, physical people actually present in the scene" and to enumerate the negative classes ("Do NOT count people shown on TVs, monitors, phone screens, photographs, posters, paintings, magazines, or reflections in mirrors"). The pipeline default (`SAF_VLM_VERIFY_SOCIAL=1` in `FilteringPipeline.__init__`) was already on — this resolution fixes the prompt content so that switching it back on actually filters out the on-TV class. Moondream remains the lightweight VLM (no new model weights); per-candidate-frame latency is unchanged from the original verification gate.
+
+6. **Non-Ego4D Datasets Skipped at Intake Pending Per-Dataset Labelers (Resolved - May 17)**:
+   - **Problem**: `FilteringPipeline.contextual_task_labeling` looked every video up in `self.metadata` (loaded from `EGO4D_METADATA_PATH`) and returned `[]` whenever the UID was not an Ego4D `video_uid`. In the May 16 E2E run, 58 of 80 Charades-Ego videos cleared the YOLO social filter and were then silently dropped from `filtered_manifest.json` because `process_video_vlm_pass` returns `None` on empty `identified_tasks`. The acquisition layer continued advertising four "Core Supported Datasets" (Ego4D, Charades-Ego, EPIC-KITCHENS, EgoProceL), masking the gap.
+   - **Solution**: Added a `_SUPPORTED_DATASETS = ("ego4d",)` allowlist plus an `_is_supported_dataset()` gate at the top of `_run_single_pass` and `_run_two_pass` in `src/filtering_and_labeling/pipeline.py`. Non-Ego4D entries are now skipped before YOLO runs (avoiding the wasted social-filter pass) with an explicit per-video log line naming the unsupported dataset. The metadata-only ground-truth path (`task_confidence = 1.0`) is preserved for Ego4D; per-dataset labelers for Charades-Ego / EPIC-KITCHENS / EgoProceL are tracked separately for when their annotation parsers are written.
+
+7. **Lazy Ollama Tag Resolution Against Local `ollama list` (Resolved - May 17)**:
+   - **Problem**: The tier registry pinned the Stage-2 climax-refinement VLM to `qwen2.5vl:7b` on `medium`/`large` hosts (`src/models_config.py`), but the production Mac Studio had only `qwen2.5vl:latest` installed locally. Every slow-velocity VLM refinement call failed with `Error: model 'qwen2.5vl:7b' not found`, was swallowed by the broad `except Exception` in the climax stage, and silently fell back to `optical_flow_peak` without `vlm_climax_confidence`. The same latent bug existed for `layer_03b_ollama` (`gemma4:26b` registered, only `gemma4:latest` installed) and would fail identically once 03b ran end-to-end.
+   - **Solution**: Added `_resolve_ollama_tag()` in `src/models_config.py`. `get_model()` now checks whether the configured tag (`qwen2.5vl:*`, `gemma4:*`, `moondream:*`) is present in `ollama list`; if the exact tag is missing but `<base>:latest` is installed, it substitutes `:latest` and emits a one-shot stderr warning so the fallback is visible without hiding genuine missing-model errors. The local-tag set is cached for the process lifetime so the `ollama.list()` call happens at most once per pipeline run. Hosts without the `ollama` Python client gracefully degrade to the original behavior (no fallback, identical to before).
+
+8. **Climax Extraction Deferred to Layer 03 Co-Resident Pass (Resolved - May 17)**:
+   - **Problem**: `temporal_climax_identification` issued a `cap.set(cv2.CAP_PROP_POS_FRAMES, ...)` for every coarse-pass frame at ~5 FPS over each task range plus a dense pass at native FPS in the ±1 s window around the coarse peak. On Ego4D `full_scale` MP4 files served from the Extreme SSD, each seek triggered a fresh H.264 decoder reset because OpenCV does not retain GOP state across `cap.set` calls. In the May 16 E2E run the first 415 s Ego4D video had not finished its Task Refinement step after 3+ minutes; the 2 758 s videos in the registry projected to >15 minutes of climax extraction per video. With non-Ego4D datasets already skipped (Resolved Issue #6), this throughput limit alone capped the realistic dataset size at hundreds of videos per host-day.
+   - **Solution**: Removed the optical-flow pass from `FilteringPipeline.process_video_vlm_pass` and extracted the two-pass coarse/dense flow + slow-task VLM refinement logic into `src/shared/climax_extraction.py`. Layer 02 now emits `identified_tasks` with `task_temporal_metadata = {}`; any Layer 03 pipeline that needs the reaction window calls `shared.climax_extraction.populate_climax_for_manifest(manifest_path, vlm_model=…)` (or `compute_task_climax_for_video()` when it already holds an open `cv2.VideoCapture`) before its own feature extraction. The shared utility is idempotent — tasks with non-empty metadata are skipped — so only the first Layer 03 to run for a given manifest pays the cost, and subsequent layers consume the cached metadata. The cross-layer schema contract change is acknowledged: `filtered_manifest.json` is a partial record until at least one Layer 03 has been invoked.
+
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: YOLO-Pose Fires on People Displayed on TVs / Monitors / Photos
-**Status**: ⚠️ Confirmed Unresolved — Discovered during the May 16 100-video E2E run. The highest-scoring "best" video in the run was `002ad105-bd9a-4858-953e-54e88dc7587e` (Ego4D, `social_presence_score = 346.67`, 48 bystander tracks, 440 frames-with-detections). Spot-checking the frames at the top three detection timestamps (`462s`, `700s`, `1045s`) shows the camera wearer is alone in a hotel room watching YouTube on a TV — the 48 "bystanders" are all faces and torsos rendered on the TV screen (YouTube thumbnails, a soccer-coach broadcast, a vlog face). `SocialPresenceDetector._has_head_and_shoulder()` (`src/shared/social_presence.py:101`) is satisfied because the on-screen people genuinely have visible head + shoulder keypoints from YOLO-pose's perspective, and the geometric Anti-Wearer Heuristic (`src/shared/social_presence.py:265-269`) only rejects bottom-edge / top-edge limb stubs. There is currently no "is this a real 3D body or a pixel-rendered display surface?" gate, so any egocentric video that lingers on a TV / phone screen / framed photograph / poster will pass the filter with arbitrarily high scores and pollute downstream Layer 03a / 03f training data with non-social signal.
-
-**Option A (recommended)**: **Screen-Detection Pre-Filter via YOLO General Class Set** — Run a second YOLO-bbox pass (or extend the existing one) on the same sampled frames using COCO class `tv` (class id 62) and `laptop` (63). For every confirmed `bystander` person box, compute IoU against the union of `tv` / `laptop` boxes in the same frame; drop any person box whose IoU ≥ 0.5 with a screen box.
-  - *Pros*: Cheap (one extra class set, same model invocation), local fix to `social_presence.py`, no new model dependencies. Eliminates the dominant on-TV false-positive class observed in the E2E run. Composes cleanly with the existing pose-keypoint gate.
-  - *Cons*: Misses framed photographs and small phone screens that COCO doesn't reliably detect. A person standing in front of a TV (their real torso below the screen, the broadcast face above) can be incorrectly dropped if IoU is too lax — requires tuning.
-
-**Option B**: **Re-enable VLM Verification with a Screen-Aware Prompt** — Turn `SAF_VLM_VERIFY_SOCIAL=1` (default) back on and tighten the Moondream prompt to ask *"two or more **real physical** people, not people shown on TVs, phones, photographs, or paintings"*. This was already partially built (Resolved Issue #22) but the current YES/NO prompt does not call out screen content.
-  - *Pros*: Generalizes beyond TVs to phones, photos, posters, magazines, mirrors. Zero new model weights — Moondream is already loaded.
-  - *Cons*: Adds 1–10 s of VLM latency per candidate frame (the reason `SAF_VLM_VERIFY_SOCIAL=0` was used in this E2E run). Moondream's screen-vs-real discrimination has not been quantitatively validated against Ego4D.
-
-**Option C**: **Depth-Anything Sanity Check (Borrow From Layer 03d)** — For each candidate bystander box, sample the median depth inside the box vs. the median depth of the surrounding TV-shaped rectangle; reject the candidate if the inside-vs-outside depth delta is ≤ a small threshold (i.e. the "person" is on the same flat plane as the wall behind them).
-  - *Pros*: Generalizes to all flat-surface displays without needing a fixed class list. Reuses the Depth-Anything model that the production tier already loads for Layer 03d.
-  - *Cons*: Requires sequencing Layer 02 after Layer 03d's depth pass, or duplicating depth inference inside Layer 02. ~300 ms / frame extra latency at the `medium` tier; closer to 2 s at `large`.
-
-Your selection: Proceed with Option B.
-
----
-
-### Issue 2: Non-Ego4D Datasets Silently Dropped at Metadata Stage
-**Status**: ⚠️ Confirmed Unresolved — Verified in `FilteringPipeline.contextual_task_labeling` (`src/filtering_and_labeling/pipeline.py:287-330`) and `process_video_vlm_pass` (`pipeline.py:204-236`). During the May 16 E2E run, 58 of 80 Charades-Ego videos passed the YOLO social-presence filter but were then dropped from `filtered_manifest.json` because `contextual_task_labeling()` looks the video up in `self.metadata` (loaded from `EGO4D_METADATA_PATH`) and returns an empty list when the UID is not an Ego4D `video_uid` — Charades-Ego IDs like `00V9V` / `04DU1EGO` are never present in the Ego4D metadata. With no `identified_tasks`, `process_video_vlm_pass` returns `None` and the entry is never appended to `filtered_manifest.json`. Resolved Issue #9 ("Ego4D Metadata Integration", May 02) replaced the prior VLM-based labeling path with a metadata-only path, which effectively reduced the four "Core Supported Datasets" (Ego4D, Charades-Ego, EPIC-KITCHENS, EgoProceL) listed in `01_dataset_acquisition.md` down to one — Ego4D — for any video that should appear in the dehydrated export. The README and the project overview still advertise the full four-dataset set, so this gap is silent at the docs level too.
-
-**Option A (recommended)**: **Per-Dataset Labeling Strategy Registry** — Add a small `_LABELER_BY_DATASET` table keyed on `entry["dataset"]` that maps Ego4D → existing metadata extractor, Charades-Ego → its action-class CSV (`Charades_Ego_v1_train.csv` / `_test.csv` ship with the dataset), EPIC-KITCHENS → its `EPIC_100_train.csv` verb/noun classes, and EgoProceL → its YAML procedure annotations. `contextual_task_labeling` dispatches on `entry["dataset"]` instead of always hitting `self.metadata`.
-  - *Pros*: Restores the four advertised datasets without re-introducing the slow VLM labeling path. Keeps the `task_confidence = 1.0` ground-truth marker for all four sources, since each native annotation file is authoritative for that dataset.
-  - *Cons*: Three new annotation files must be downloaded and indexed on first run. Velocity heuristic (`_get_velocity_from_label`) needs new keyword mappings for kitchen / procedural verbs.
-
-**Option B**: **Fallback to Lightweight VLM Labeling When Metadata Is Missing** — Keep the metadata-only fast path for Ego4D, but when `video_id not in self.metadata`, dispatch to a one-shot Moondream call asking for a 1-line task label instead of returning `[]`.
-  - *Pros*: Restores all non-Ego4D datasets with zero new dataset files. Naturally extends to any future ego dataset without code changes.
-  - *Cons*: Reverts to a probabilistic labeler for ~50 % of the pipeline output (Charades-Ego alone is the largest source). `task_confidence` semantics get muddied — would need a per-task `task_label_source` field ("metadata" vs "vlm") to keep ground-truth consumers honest. Re-introduces the latency Resolved Issue #9 was designed to eliminate.
-
-Your selection: Do not process Charades-Ego for now. Just do Ego4D.
-
----
-
-### Issue 3: Filtering VLM Pinned to Ollama Tag `qwen2.5vl:7b` That Is Not Locally Installed
-**Status**: ⚠️ Confirmed Unresolved — Verified at `src/models_config.py:73-78` (`"filtering_vlm": {"medium": ("qwen2.5vl:7b", ...)}`) and at `FilteringPipeline.__init__` (`pipeline.py:46`). On the production Mac Studio host (auto-detected tier `medium`), the pipeline resolves `self.vlm_model = "qwen2.5vl:7b"`, but `ollama list` shows only `qwen2.5vl:latest` (which is the same 8.3 B-parameter Qwen2.5-VL weights, just under the default tag). Every Stage-2 VLM climax-refinement call (slow-velocity tasks only) then fails with `Error: model 'qwen2.5vl:7b' not found`, gets caught by the broad `except Exception` in `temporal_climax_identification` (`pipeline.py:488-490`) which prints `"VLM Refinement failed: ..."` and silently falls back to `optical_flow_peak`, never setting `vlm_climax_confidence`. The same tag-mismatch pattern exists for `layer_03b_ollama` (`gemma4:26b` registered, only `gemma4:latest` installed) and will fail the same way once Layer 03b runs end-to-end.
-
-**Option A (recommended)**: **Pull the Pinned Tags Once and Drop the Latent Bug** — Run `ollama pull qwen2.5vl:7b && ollama pull gemma4:26b` on the production host (and document this as a one-time setup step in `ml_dependencies.md`). The tagged versions are byte-identical to `:latest` today, so this is a metadata-only pull; future tag drift then becomes the only failure mode.
-  - *Pros*: Zero code changes. Restores the documented Stage-2 climax-refinement path immediately. Makes `models_config.py` accurate again.
-  - *Cons*: Adds an out-of-band manual setup step that's easy to forget on a new host. Doesn't address future tag mismatches.
-
-**Option B**: **Make `get_model()` Resolve Ollama Tags Lazily Against `ollama list`** — Have `get_model("filtering_vlm")` query `ollama list` (cached for the process lifetime) and substitute `:latest` when the exact tag is missing.
-  - *Pros*: Bulletproof against tag drift. Same code works on any developer machine without manual `ollama pull` choreography.
-  - *Cons*: Adds an Ollama runtime dependency at the module level (currently `models_config.py` has zero runtime deps). Hides genuine tag mismatches that might be intentional (e.g. an A/B test against a specific tag).
-
-**Option C**: **Tighten `except Exception` to Log Loudly Instead of Silently Falling Back** — Keep the current tag, but in `temporal_climax_identification`'s except block, route the error through `self.log_error(video_id, e)` so it lands in `02_filter_errors.json` instead of just printing to stdout. Pair with a startup-time `ollama list` sanity check that emits a hard-stop banner if `self.vlm_model` is missing.
-  - *Pros*: Surfaces the bug instead of letting it silently degrade output quality. Independent of A/B above and can be combined.
-  - *Cons*: Doesn't actually fix the broken VLM path — only makes its failure visible.
-
-Your selection: Proceed with Option B.
-
----
-
-### Issue 4: Optical-Flow Climax Extraction Throughput on Long Ego4D Videos
-**Status**: ⚠️ Confirmed Unresolved — Verified during the May 16 E2E run. With `SAF_VLM_VERIFY_SOCIAL=0` and the full pipeline (`FilteringPipeline.run` → `_run_single_pass` → `temporal_climax_identification`), the first Ego4D video in the registry (`000786a7-…`, 415 s duration, 215 MB, 1 scenario in Ego4D metadata) had not finished its Task Refinement step after **3+ minutes** of wall-clock time, while the comparable YOLO-only social filter on the same video finished in 50.1 s. `temporal_climax_identification` (`pipeline.py:345-427`) issues a `cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)` for every coarse-pass frame at ~5 FPS over the whole task range, plus another `cap.set` per dense-pass frame at native FPS in the ±1 s window around the coarse peak. On Ego4D `full_scale` MP4 files served from the Extreme SSD, each per-frame seek issues a fresh decoder reset; OpenCV does not retain GOP state across `cap.set` calls, so a 415 s video at 30 FPS triggers ~2 100 seeks for the coarse pass and ~60 more for the dense pass — every one of which round-trips through the H.264 decoder. The slowest videos in the run (e.g. `002c3b5c-…`, 2 758 s / 46 minutes / 625 MB) would project to >15 minutes of climax extraction per video. With Ego4D videos comprising 100 % of pipeline-eligible content (per Issue #2), this throughput limit caps the realistic dataset size at hundreds of videos per host-day, not thousands.
-
-**Option A (recommended)**: **Sequential Decode With Frame-Counter, Drop `cap.set` Entirely** — Restructure `temporal_climax_identification` to mirror the pattern already used in `SocialPresenceDetector.detect()` (`shared/social_presence.py:206-217`): one `cap.read()` loop walking frames forward, with a `current_frame_idx` counter that gates whether each decoded frame contributes to the coarse-pass or dense-pass flow computation. The dense pass becomes a second forward walk starting from the coarse-peak frame's position rather than a seek.
-  - *Pros*: Eliminates all per-frame seeks; reduces decoder cost from O(frames × IDR distance) to O(frames). Already proven on the same SSD by the YOLO filter path. No model dependencies.
-  - *Cons*: Coarse pass becomes strictly sequential, so it cannot terminate early on the climax peak — must read every frame in the task range. For short tasks this is a wash; for hour-long Ego4D videos it's a net win because the existing `cap.set` path already touches every frame anyway.
-
-**Option B**: **Down-Sample with FFmpeg `select=isnan(prev_selected_t)+gte(t-prev_selected_t,0.2)` Pipe** — Replace OpenCV's seek-and-decode with an external FFmpeg invocation that emits frames at the desired coarse-pass rate over a pipe, which OpenCV consumes via `cv2.VideoCapture` against a `ffmpeg:` pipe URL.
-  - *Pros*: FFmpeg's `select` filter respects GOP boundaries and is dramatically faster on long videos than `cap.set` round-trips.
-  - *Cons*: Adds an FFmpeg subprocess dependency for the climax stage. Pipe-mode VideoCapture is finicky on macOS and harder to debug than direct file reads.
-
-**Option C**: **Defer Climax Extraction to a Layer-03 Co-Resident Pass** — Move `temporal_climax_identification` out of Layer 02 and into a thin shared utility that runs alongside Layer 03d (Depth) or 03g (Shared Reality), both of which already do a single sequential decode of every frame for their own features. Layer 02 would emit `identified_tasks` without `task_temporal_metadata`, and the climax window would be filled in by whichever 03 layer ran first.
-  - *Pros*: Zero extra disk reads — the climax flow is computed as a free side product of an already-required pass. Reduces Layer 02 to a pure metadata-and-filter stage.
-  - *Cons*: Cross-layer schema contract change — `filtered_manifest.json` becomes a partial record until at least one Layer 03 has run, breaking the current "Layer 02 output is consumable in isolation" invariant.
-
-Your selection: Proceed with Option C.
+_None at this time. New limitations discovered during future E2E runs should be filed here following the [Bug Documentation Style Guide](../.claude/skills/bug-documentation-style-guide/SKILL.md)._

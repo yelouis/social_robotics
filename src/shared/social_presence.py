@@ -133,8 +133,11 @@ class SocialPresenceDetector:
                     messages=[{
                         'role': 'user',
                         'content': (
-                            "Does this image clearly show two or more distinct people, "
-                            "not counting the camera operator's own hands or limbs? "
+                            "Does this image clearly show two or more real, physical people "
+                            "actually present in the scene? "
+                            "Do NOT count people shown on TVs, monitors, phone screens, "
+                            "photographs, posters, paintings, magazines, or reflections in mirrors. "
+                            "Do NOT count the camera operator's own hands or limbs. "
                             "Respond with just YES or NO."
                         ),
                         'images': [tmp_path],
