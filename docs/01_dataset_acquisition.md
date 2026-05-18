@@ -7,29 +7,44 @@ Download and stage large-scale first-person POV (egocentric) videos—such as Eg
 The system is built to parse First-Person POV interactions. While the pipeline is designed to be relatively dataset-agnostic, the following are the primary supported sources:
 
 - **Ego4D**: The primary target standard representing unstructured, daily interaction.
-- **EPIC-KITCHENS-100**: Academic download via University of Bristol.
 - **Charades-Ego**: Open download from Allen AI.
-- **EgoProceL**: Open GitHub repository + links to source datasets.
+- **EPIC-KITCHENS-100**: (Deferred) Academic download via University of Bristol.
+- **EgoProceL**: (Deferred) Open GitHub repository + links to source datasets.
+
+> **Note on Scope**: Focus will exclusively remain on Ego4D and Charades-Ego to reach statistical significance before attempting complex integrations with gated or nested meta-datasets.
 
 ## 🔝 Dataset Download Priority
 Due to storage constraints and project focus, datasets are prioritized in the following order:
 1.  **Ego4D** (Highest Priority: Primary target for unstructured interaction)
 2.  **Charades-Ego** (Second Priority: Large-scale egocentric dataset)
-3.  **EPIC-KITCHENS-100** (Third Priority: Specialized task-based interaction)
-4.  **EgoProceL** (Meta-dataset repository)
+3.  *(Deferred)* **EPIC-KITCHENS-100** (Third Priority: Specialized task-based interaction)
+4.  *(Deferred)* **EgoProceL** (Meta-dataset repository)
 
 ## ⚠️ Critical Action for Hardware Management
 Video datasets are inherently massive (often spanning terabytes). 
 **DO NOT** run these data pipelines directly on strict internal SSD setups if space/wear are concerns. 
 - Ensure your `OUTPUT_DIR` maps out to the external **2TB SSD called "Extreme SSD"**. This is explicitly designated to handle the large size of the Ego4D and other video datasets.
+- **Environment Variables**: PyTorch and HuggingFace default to caching on the internal SSD, which will quickly cause `[Errno 28] No space left on device` OS crashes. **You must export the following environment variables** to point to the external drive before running any scripts:
+  - `export TMPDIR="/Volumes/Extreme SSD/tmp"`
+  - `export TEMP="/Volumes/Extreme SSD/tmp"`
+  - `export TMP="/Volumes/Extreme SSD/tmp"`
+  - `export HF_HOME="/Volumes/Extreme SSD/huggingface_cache"`
 - **Hardware Profile**: As we are running a **Mac Studio (M4 Max, 64 GB unified memory)**, the memory ceiling is more generous than the prior Mac mini M4 Pro (24 GB), but streaming/chunked extraction is still the correct architectural default. Multi-terabyte datasets can still exceed physical RAM during indexing, and other layers (03d, 03f, 03g) co-reside in unified memory during the E2E run.
+- **Dynamic Memory Unloading**: The pipeline avoids unnecessary model load/unload overhead on the 64GB Mac Studio by lazily retaining the YOLOv8 and MediaPipe models in MPS/unified memory between batches. It explicitly unloads models via `self.filterer.detector.unload()` only when system memory pressure exceeds 75%, adapting dynamically to contention.
 
 ## Streaming Filtering Strategy (Storage Optimization)
 To mitigate the massive storage requirements of these datasets, the system employs a **Streaming Filtering** strategy. 
 
-- **Download-Filter-Discard (Batched)**: Videos are processed in small batches (e.g., 50 UIDs at a time). For each batch, the system downloads the raw files, runs the social filter, and then immediately deletes non-compliant videos.
+- **Download-Filter-Discard (Batched)**: Videos are processed in small batches. The system dynamically calculates safe batch sizes (between 10 and 500 UIDs) based on `shutil.disk_usage()` of the "Extreme SSD" at the start of each cycle. It downloads the raw files, runs the social filter, and then immediately deletes non-compliant videos.
 - **Keep Criterion**: Only videos with **more than one person** (excluding the camera wearer) are persisted on the "Extreme SSD".
 - **Resumability**: To avoid re-downloading videos that were previously discarded, the system maintains a `processed_uids.json` file. Once a UID has been evaluated (kept or purged), it is marked as processed and never requested from the downloader again.
+- **Single Source of Truth**: The acquisition filter and the main processing pipeline both utilize `src/shared/social_presence.py` to ensure consistent social presence detection heuristics across the entire lifecycle.
+
+### Filtering Heuristics & Performance
+To optimize filtering accuracy and throughput during the streaming process, the following designs are enforced in `social_presence.py`:
+- **Batched Inference**: The social filter accumulates frames into an internal batch array to leverage YOLO's native GPU batch inference, significantly improving throughput over sequential processing.
+- **Wearer Detection Refinement**: YOLOv8 can incorrectly identify the camera wearer's limbs as external bystanders. This is mitigated by combining a geometric anti-wearer heuristic (bottom-edge exclusion, 0.50 confidence floor, 2-frame consistency) with **MediaPipe Hands**, which filters out YOLO person detections that heavily overlap (>40%) with detected hand bounding boxes.
+- **State Isolation**: ByteTrack tracker state is explicitly reset on a per-video basis (`model.predictor.trackers.reset()`) to prevent `person_id` assignments and trajectory history from bleeding across different videos in the same batch.
 
 ## Recommended Implementation Steps for Agents
 
@@ -64,89 +79,7 @@ The Dataset Acquisition module is fully operational at `src/dataset_acquisition/
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
-1. **Subdirectory Indexing Failure (Resolved - April 21)**:
-   - **Problem**: The `is_already_downloaded()` method in `downloader.py` used `.glob("*.mp4")`, which failed to detect videos nested in subdirectories, causing redundant downloads.
-   - **Solution**: Changed scanning logic to `.rglob("*.mp4")` to search all subfolders recursively.
-
-2. **Missing Extraction Logic (Resolved - April 21)**:
-   - **Problem**: `CharadesEgoDownloader` downloaded large `.zip` files but lacked extraction code, preventing the pipeline from accessing raw `.mp4` chunks.
-   - **Solution**: Integrated the `zipfile` module to automatically extract contents into the `OUTPUT_DIR` upon download completion.
-
-3. **Duplicate Registry Entries & OS Metadata (Resolved - April 21)**:
-   - **Problem**: Overlapping paths in the registry caused nearly 8,000 duplicate entries, and macOS hidden files (`._`) were incorrectly indexed as valid videos.
-   - **Solution**: Implemented a `seen_paths` set to ensure absolute uniqueness and added explicit string filtering to skip files starting with `._`.
-
-4. **Storage Capacity vs. Massive Datasets (Resolved - April 22)**:
-   - **Problem**: Ego4D and EPIC-KITCHENS-100 can exceed the 1.6 TiB available on the SSD if downloaded in full.
-   - **Solution**: Implemented the **Streaming Filtering Strategy**. Videos are evaluated immediately after download and non-social clips are purged on-the-fly, reducing the persisted volume to <20% of the raw dataset.
-
-5. **Download Throughput (Mitigated - April 22)**:
-   - **Problem**: Standard Python-based downloads were inefficient for massive file counts.
-   - **Solution**: Prioritized the download queue (Ego4D > Charades-Ego) and integrated the native `ego4d` CLI for high-throughput AWS-backed transfers.
-
-6. **Streaming Filter Logic Divergence (Resolved - April 22)**:
-   - **Problem**: The acquisition filter and the main processing pipeline used independent, divergent detection logic, leading to inconsistent datasets.
-   - **Solution**: Consolidated all detection heuristics into `src/shared/social_presence.py`, ensuring a "Single Source of Truth" for the entire lifecycle of a video clip.
-
-7. **SSD Storage Overflow & Re-download Loops (Resolved - April 22)**:
-   - **Problem**: Deleting discarded videos caused the Ego4D CLI to re-download them on subsequent runs, leading to infinite download loops and SSD overflow.
-   - **Solution**: Implemented **UID-based Batching** and **Processed UID Tracking**. A persistent `processed_uids.json` ledger ensures that purged videos are never re-requested.
-
-8. **Ego4D Camera Wearer Detection (Resolved - April 22)**:
-   - **Problem**: YOLOv8 incorrectly identified the camera wearer's own limbs or background torso-like artifacts as external bystanders.
-   - **Solution**: Implemented a **Refined Anti-Wearer Heuristic** involving bottom-edge exclusion, a 0.50 confidence floor, and a 2-frame temporal consistency requirement.
-
-9. **Robust Batch Filtering & Error Recovery (Resolved - April 23)**:
-   - **Problem**: Batched acquisition occasionally missed videos if the CLI nested them unexpectedly, and transient network errors would crash multi-hour runs.
-   - **Solution**: Implemented **Tethered UID Mapping** for recursive existence verification and wrapped the batch execution loop in granular exception handling to ensure the pipeline continues to the next set of UIDs after a failure.
-
-10. **Dynamic Batch Sizing (Resolved - May 04)**:
-    - **Problem**: The batch size for dataset downloads was hardcoded to `50` in `run_selective_download.py`, which failed to adapt to varying available SSD space, risking overflow or underutilization.
-    - **Solution**: Implemented Query-Based Dynamic Sizing using `shutil.disk_usage()`. The system now automatically calculates the safe batch size based on available storage at the start of each cycle, clamped between 10 and 200.
-
-11. **Parallel Frame Filtering Latency (Resolved - May 04)**:
-    - **Problem**: The social presence filter processed videos sequentially frame-by-frame, underutilizing compute resources and causing bottlenecks during the YOLO inference phase.
-    - **Solution**: Implemented Batched Frame-Level Parallelism in `social_presence.py`. The system now accumulates frames into an internal batch array and leverages YOLO's native GPU batch inference API, significantly improving throughput without multi-process complexity.
-
-12. **Dataset Support Expansion Scope (Resolved - May 04)**:
-    - **Problem**: EgoProceL and EPIC-KITCHENS-100 downloaders were stubbed out, leaving ambiguity on whether their absence was a bug or intentional.
-    - **Solution**: Deferred non-Ego4D datasets. Documented that the focus will exclusively remain on Ego4D and Charades-Ego to reach statistical significance before attempting complex integrations with gated or nested meta-datasets.
-
-13. **Wearer Detection Refinement (Hand Occlusion False Positives) (Resolved - May 04)**:
-    - **Problem**: The geometric anti-wearer heuristic produced false positives when the wearer's hands occluded or overlapped with bystander bounding boxes, mistakenly identifying hands as bystanders.
-    - **Solution**: Integrated MediaPipe Hands to generate accurate hand localization and filter out YOLO person detections that overlap heavily (>40%) with the detected hand bounding boxes.
-
-14. **ByteTrack Tracker State Bleeding Across Videos (Resolved - May 07)**:
-    - **Problem**: `social_presence.py` invoked `model.track(..., persist=True)` to preserve within-video temporal IDs, but the `SocialPresenceDetector` is reused across many videos via `StreamingFilter`. ByteTrack therefore carried tracker IDs and trajectory history from one video into the next, producing incorrect `person_id` assignments and potentially corrupting the `min_consistency=2` check by counting stale tracked objects from the previous video toward the new video's frame threshold.
-    - **Solution**: Added an explicit per-video tracker reset at the top of `SocialPresenceDetector.detect()`. Before processing a new video, the code walks `self.model.predictor.trackers` (when present) and calls `.reset()` on each tracker, guarded by a try/except so a missing or renamed Ultralytics internal does not crash the pipeline. This preserves within-video temporal consistency while eliminating cross-video state bleed.
-    
-15. **Unused Downloader Imports in Selective Acquisition Script (Resolved - May 07)**:
-    - **Problem**: `run_selective_download.py` imported `EpicKitchensDownloader` and `EgoProceLDownloader` even though both datasets are deferred. The classes only appeared inside triple-quoted string literals (which are not executable code), so the imports triggered lint warnings and pulled in their transitive dependencies (e.g. `pandas`, git tooling) at module load time for no functional benefit.
-    - **Solution**: Reduced the import to `from dataset_acquisition.downloader import Ego4DDownloader`. The disabled EPIC and EgoProceL blocks remain in place as documentation; the imports can be restored alongside them if those datasets are re-enabled in the future.
-
-16. **YOLO + MediaPipe Memory Pressure Across Batches (Resolved - May 07)**:
-    - **Problem**: Inside `Ego4DDownloader.download()`, the `StreamingFilter`'s underlying `SocialPresenceDetector` retained the YOLO model and the MediaPipe Hands graph in MPS / unified memory for the full lifetime of the acquisition process. On the Mac mini M4 Pro with 24 GB unified memory, hundreds of consecutive batches steadily accumulated MPS allocations and risked out-of-memory errors or system swapping during long overnight runs.
-    - **Solution**: After each batch's filtering loop completes (and the UIDs are marked as processed), the downloader now calls `self.filterer.detector.unload()`. This invokes the existing teardown logic — deleting the YOLO model, closing the MediaPipe `Hands` instance, running `gc.collect()`, and clearing the MPS / CUDA cache — and the next batch lazily re-loads both models via the existing property accessors.
-
-17. **Per-Batch Unload Over-Conservative on 64 GB Mac Studio (Resolved - May 13)**:
-    - **Problem**: Resolved Issue #16 unconditionally called `self.filterer.detector.unload()` after every batch in `Ego4DDownloader.download()`. That trade-off was correct for the 24 GB Mac mini M4 Pro, where hundreds of consecutive batches accumulated cached MPS activations from YOLOv8n (~300–500 MB) and the MediaPipe Hands graph (~150 MB resident). On the **Mac Studio (M4 Max, 64 GB unified memory)** the combined steady-state resident set of both models (<1 GB) is a negligible fraction of available memory, so the unconditional unload paid the YOLOv8 model-load + MPS warm-up cost (~1–2 s) at the start of every batch as pure overhead.
-    - **Solution**: Wrapped the unload call in a memory-pressure check in `downloader.py`: the `self.filterer.detector.unload()` invocation now only fires when `psutil.virtual_memory().percent > 75`, so it self-adapts to actual system pressure (e.g. contention from concurrent ffmpeg subprocesses or the E2E orchestrator) regardless of host class. If `psutil` is unavailable, an `ImportError` fallback forces the unload, preserving the operationally-tested teardown path for smaller hosts. Verified that at 42% system memory the unload correctly skips, and the existing `tests/test_dataset_acquisition.py` suite still passes.
-
-18. **Batch Size Upper Clamp Raised for M4 Max SSD Bandwidth (Resolved - May 13)**:
-    - **Problem**: Resolved Issue #10 ("Dynamic Batch Sizing") clamped `run_selective_download.py`'s `shutil.disk_usage()`-derived batch size to `[10, 200]`. The 200-UID ceiling was tuned for the Mac mini M4 Pro's 24 GB memory limit and the throughput of its Thunderbolt 4 controller. The Mac Studio M4 Max has more memory headroom and higher sustained SSD write throughput on the internal SoC bus, so the hard 200 cap under-utilized the new host on disk-rich UID windows.
-    - **Solution**: Raised the upper clamp ceiling in `run_selective_download.py` from 200 to 500 (`batch_size = max(10, min(500, safe_batch))`), better amortizing the Ego4D CLI's per-batch setup cost on the new host. The dynamic disk-usage sizing logic is otherwise unchanged, so disk-constrained UID windows still scale the batch down safely. Empirical throughput benchmarking against the live Extreme SSD and AWS network path remains to be confirmed during the next real acquisition run.
-
-19. **Incorrect Disk Space Checking Partition (Resolved - May 14)**:
-    - **Problem**: The `check_disk_space()` function in `downloader.py` used `self.output_path.anchor`, which on macOS returns `/`. This caused the pipeline to evaluate the remaining disk space on the internal system SSD instead of the external `Extreme SSD`, prematurely halting downloads with a "[CRITICAL] Low Disk Space" error despite terabytes of external capacity.
-    - **Solution**: Updated `check_disk_space()` to pass `self.output_path` (or its parent if the directory does not exist yet) directly to `shutil.disk_usage()`, ensuring the function checks the actual mounted filesystem where the data will be written.
-
-20. **Internal SSD OOM due to PyTorch Temp Directory (Resolved - May 14)**:
-    - **Problem**: PyTorch distributed and initialization components (e.g., `dill` in dataloaders) default to creating temporary caches in `/var/folders/.../T` on the internal SSD. The internal SSD reached 100% capacity during E2E testing, causing the entire python environment (and OS) to crash with `[Errno 28] No space left on device`.
-    - **Solution**: Overrode `TMPDIR`, `TEMP`, and `TMP` environment variables to point to `/Volumes/Extreme SSD/tmp` before running any scripts, ensuring all heavy tensor caches and compilation outputs map to the high-capacity external drive.
-
-21. **Internal SSD OOM due to HuggingFace Cache (Resolved - May 14)**:
-    - **Problem**: High-parameter models (like Depth Anything) fetched via HuggingFace defaulted their cache to `~/.cache/huggingface` on the internal SSD, consuming over 11GB of critical OS space.
-    - **Solution**: Deleted the internal cache and established a workflow rule to explicitly export `HF_HOME="/Volumes/Extreme SSD/huggingface_cache"` to prevent future downloads from filling the primary disk.
+*All past resolved issues have been successfully integrated into the system design documentation above.*
 
 ## ⚠️ Unresolved Issues & Suggestions
 
