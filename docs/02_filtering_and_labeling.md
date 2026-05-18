@@ -197,4 +197,76 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_None at this time. New limitations discovered during future E2E runs should be filed here following the [Bug Documentation Style Guide](../.claude/skills/bug-documentation-style-guide/SKILL.md)._
+### Issue 1: `mediapipe.solutions` AttributeError crashes Node 02 on every video
+**Status**: ⚠️ Confirmed Unresolved — Verified during the May 17 100-video Ego4D E2E run. `src/shared/social_presence.py:66` references `mp.solutions.hands` inside the lazy `mp_hands` property, but the installed `mediapipe==0.10.35` no longer exposes the `solutions` namespace at the top-level module (only `tasks`, `Image`, `ImageFormat`). The first VLM-positive frame for every video raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`, which is caught by `SocialPresenceDetector.detect()`'s outer except and returns empty bystander lists — but `FilteringPipeline.process_video_vlm_pass` (`src/filtering_and_labeling/pipeline.py:285`) hard-wires `return_hands=True`, so the production Node 02 pipeline crashes on every single Ego4D video instead of falling back. Confirmed by running `scratch/run_e2e_social_only_v2.py` with `return_hands=True`: 100/100 videos errored before any pose detections could be saved. The standalone runner only succeeded after I forced `return_hands=False`.
+
+**Option A (recommended)**: **Migrate `mp_hands` to the MediaPipe Tasks API** — Replace the legacy `mp.solutions.hands.Hands(...)` constructor with `mp.tasks.vision.HandLandmarker.create_from_options(...)` and update the per-frame call site (`social_presence.py:240`) to use the Tasks-style `detect()` signature (numpy → `mp.Image` wrapper, `.hand_landmarks` instead of `.multi_hand_landmarks`).
+  - *Pros*: Forward-compatible with all `mediapipe` 0.10.x+ releases; removes the silent-crash hazard for the rest of the project lifetime; no version pinning needed in `ml_dependencies.md`.
+  - *Cons*: Requires downloading the `hand_landmarker.task` model file (~7 MB) once and resolving its path through `models_config.py`; per-frame call signature and landmark coordinate shape both change, so `_extract_hand_boxes()` needs a small rewrite + re-test.
+
+**Option B**: **Pin `mediapipe<0.11` and import-guard the lazy property** — Add `mediapipe<0.11` to `ml_dependencies.md` (the last release that exposes `mp.solutions`) and wrap `mp.solutions.hands` access in a `getattr(mp, 'solutions', None)` check that disables hand detection gracefully when the namespace is missing.
+  - *Pros*: ~5-line patch; no need to download or vendor a new `.task` model.
+  - *Cons*: `mediapipe.solutions` is already on the upstream deprecation path — pinning just delays the fix; silently disabling hand detection makes Layer 03e (affirmation gesture) silently degrade with no operator-visible signal.
+
+**Option C**: **Make `return_hands=True` opt-in and default `FilteringPipeline` to `False`** — Change the `pipeline.py:285` call site to `return_hands=False` and require Layer 03e to call `SocialPresenceDetector` itself when it needs hands. Combine with import-guarding (Option B's guard) for safety.
+  - *Pros*: Decouples the social-presence filter from MediaPipe entirely, restoring Node 02 throughput today; Layer 03e can be migrated to the Tasks API in isolation.
+  - *Cons*: Duplicates YOLO-pose passes (Layer 02 + Layer 03e each run their own); doesn't actually fix the underlying API mismatch, only re-routes it.
+
+Your selection: _____
+
+---
+
+### Issue 2: Side-by-side stereo egocentric videos pass the filter as false positives
+**Status**: ⚠️ Confirmed Unresolved — The highest-scoring video in the May 17 Ego4D run, `0219271c-7641-4e17-a00c-81c42e0d4779` (score `843.32`, 984 frame-detections, 7 "bystanders"), is a side-by-side stereoscopic egocentric capture of a single person doing paper crafts alone at a table. Spot-checked frames at timestamps `955 s`, `664 s`, and `383 s` (`e2e_reports/2026_05_17/frames/best_frame_{1,2,3}.jpg`) all show the same scene rendered twice across the 2880×1080 frame — left half and right half are the stereo pair. YOLO-pose detects the wearer's own arms + black-shirted torso in each stereo half and treats them as **two separate persons**, and the tightened Moondream prompt from Resolved Issue #1 also confirms ("two people visible") because the duplicate visually-distinct humans are not on a screen or in a photograph — they are *literally rendered side-by-side in the frame*. This single video accounts for >93% of the entire run's positive-detection mass (984 / ~1062 total frame-detections across 3 passing videos). Without a stereo-format detector, any Ego4D entry shot with a stereo rig will pump false positives into `filtered_manifest.json`.
+
+**Option A (recommended)**: **Detect 2:1 aspect-ratio stereo at intake and crop to the left half** — In `SocialPresenceDetector.detect()`, after `cap.read()`, check whether `width / height >= 2.0`; if so, crop to `frame[:, :width//2, :]` before passing to YOLO-pose. Cache the stereo flag on the manifest entry so downstream layers (03a Attention, 03d Proxemics) also see the cropped half.
+  - *Pros*: One-line aspect-ratio test + slice catches the entire class deterministically; no extra model, no extra wall-time; preserves the manifest's per-frame bbox contract because all coordinates are already in the cropped half's coordinate system.
+  - *Cons*: A small number of legitimately ultrawide (non-stereo) panoramic GoPro captures may exist in the wider Ego4D corpus; cropping them halves the FOV and may miss bystanders entering from the right. Mitigation: persist `stereo_format: true` on the manifest entry and let operators override per-dataset.
+
+**Option B**: **VLM-side stereo check** — Extend the Moondream verification prompt to first ask "Is this image a side-by-side stereoscopic capture where the left and right halves show the same scene?" before the multi-person YES/NO check; if yes, drop the video.
+  - *Pros*: No coordinate-system changes; works even if the stereo format isn't exactly 2:1.
+  - *Cons*: Adds a Moondream call to every pose-positive frame (≈30% wall-time tax on the 90 min of total VLM time observed in the May 17 run); VLM stereo-recognition reliability is unverified — Moondream may not distinguish a wide-FOV single image from a stereo pair.
+
+**Option C**: **Phash-based duplicate-half detector** — Compute a perceptual hash of `frame[:, :w//2]` and `frame[:, w//2:]` and reject if hamming distance < 8.
+  - *Pros*: Provably catches stereo without an aspect-ratio assumption; cheap (~1 ms per frame).
+  - *Cons*: New dependency (`imagehash`); two stereo halves have slight parallax offset, so the hash threshold needs tuning per camera rig.
+
+Your selection: _____
+
+---
+
+### Issue 3: Wearer's own chin/face at frame bottom passes both YOLO-pose and the VLM gate
+**Status**: ⚠️ Confirmed Unresolved — The lowest-scoring passing video, `0030b1e9-c6a6-4809-a495-8d45791f9775` (score `14.13`, 18 frame-detections across 3 tracked "bystanders"), is a single person trimming a hedge alone outdoors with a head-mounted GoPro. Spot-checked frames at `49 s`, `93 s`, `153 s` (`e2e_reports/2026_05_17/frames/worst_frame_{1,2,3}.jpg`) show the wearer's own chin / lower face peeking into the bottom edge of the frame as they look down at their hands. YOLO-pose detects this lower-jaw + collar region as a separate person (confidence 0.61–0.88 across 18 frames), and the Moondream gate confirms it because there *is* technically a human face visible — Moondream cannot tell from the cropped patch that the face it sees belongs to the camera wearer. The Geometric Anti-Wearer Heuristic in `social_presence.py` (drops detections touching the bottom edge without a head/torso) misses this case because the chin patch *does* contain head keypoints (mouth, jaw) and the bbox does not extend to the literal bottom pixel row.
+
+**Option A (recommended)**: **Extend the Anti-Wearer Heuristic to reject "head-only at bottom edge" patches** — Add a rule that drops detections where (a) the bbox's bottom edge is within the bottom 15% of the frame AND (b) no shoulder keypoints are visible AND (c) the bbox height is < 25% of frame height. This is the geometric signature of a chin-in-frame self-detection: a head with no body, low in the frame.
+  - *Pros*: Pure-geometry rule, no new models, no VLM cost; the three conditions together are specific enough to spare legitimate bystanders whose faces peek into the bottom edge but who also expose shoulders or a larger body region; complements rather than replaces the existing bottom-edge rule.
+  - *Cons*: Could miss a real bystander who is bending down at the bottom of the frame with their head only visible; thresholds (15%, 25%) will likely need tuning on a labeled validation set.
+
+**Option B**: **Gaze-direction VLM check** — When a detection lies in the bottom 20% of the frame, ask Moondream "Is this person's face oriented upward toward the camera (which would indicate the camera wearer's own face peeking into the frame from below)?" — drop if yes.
+  - *Pros*: Robust to any geometric pose; uses the VLM that's already loaded.
+  - *Cons*: Adds another Moondream call per suspicious frame on top of the existing verification calls; Moondream's gaze-direction reliability is unverified and likely noisy on small face patches.
+
+**Option C**: **Persistent-bottom-edge temporal filter** — Track detections across the 1 FPS sample stream and drop any track that stays anchored within the bottom 20% of the frame for ≥80% of its appearances (the camera-wearer's chin stays in roughly the same place across the whole capture, whereas real bystanders move through the frame).
+  - *Pros*: Temporal evidence is harder to spoof than a single-frame heuristic.
+  - *Cons*: Requires changing the per-track aggregation in `social_presence.py:detect()`; only kicks in after enough frames have accumulated, so short clips still slip through.
+
+Your selection: _____
+
+---
+
+### Issue 4: Filter pass-rate on first-100 Ego4D set drops to 3% with VLM verify on
+**Status**: ⚠️ Confirmed Unresolved — In the May 17 100-video Ego4D E2E run, only 3 / 100 videos passed the social-presence filter (and a spot-check shows 2 of those 3 are false positives — see Issues #2 and #3). The May 16 run on the mixed 80-Charades + 20-Ego4D registry reported 62 / 86 passing (72%) with VLM verify *disabled*. The drop is partly explained by the change in dataset composition (Ego4D `full_scale` files are unscripted egocentric activity, predominantly solo) and partly by the tightened Moondream prompt from Resolved Issue #1 doing its job (correctly rejecting the hotel-TV class), but a 3% pass rate is operationally unworkable — at this yield, building a 10k-video social-interaction corpus requires filtering ~330k Ego4D videos through a ~108 s/video pipeline, which is ≈10 host-days on a Mac Studio. Independently verified: of the 97 rejected videos, the 3 longest-running (e.g. `011ee98a-…`, 9314 s duration, 795 s YOLO+VLM time) were spot-checked and confirmed true negatives (single-person paperwork, hedge-trimming, etc.), so the gate is not pathologically over-rejecting — Ego4D's first-100 slice really is dominated by solo activity.
+
+**Option A (recommended)**: **Pre-filter on Ego4D metadata's `num_persons` scenario tag before YOLO** — `ego4d.json` carries scenario annotations that include rough person-count hints. Skip the entire YOLO+VLM pass for any video whose metadata explicitly tags it as "solo" / "individual" / `num_persons=1`, and reserve the expensive multimodal pass for videos the metadata flags as social or ambiguous.
+  - *Pros*: Cuts the per-video cost from 108 s to ~0 s for the obviously-solo majority; raises the *effective* pass rate of the YOLO+VLM stage by removing the easy negatives; uses metadata that's already on disk.
+  - *Cons*: Trusts the Ego4D annotation pipeline (which is incomplete — many videos lack person-count tags); requires writing a small `ego4d_metadata_prefilter.py` that joins on `video_uid → scenarios → person_count`; potentially drops the small number of metadata-mislabeled solo→social videos.
+
+**Option B**: **Sample a smaller per-video frame budget when the first N frames are all solo** — In `SocialPresenceDetector.detect()`, if the first ~30 sampled frames produce zero VLM-confirmed bystanders, early-exit the video as "solo" rather than continuing for the full duration.
+  - *Pros*: Caps per-video wall-time at ~30 s regardless of total duration; recovers most of the 13-min worst-case observed today.
+  - *Cons*: Misses bystanders that only appear in the back half of a long video (e.g. someone walks into the kitchen at the 8-min mark); needs a "minimum coverage" check to avoid false negatives.
+
+**Option C**: **Accept the 3% rate as ground truth and expand the Ego4D download set** — Don't change the filter; instead acquire more raw Ego4D entries up-front so the surviving 3% yields a usable corpus.
+  - *Pros*: Filter quality is preserved; aligns with the "weed out unusable data" mandate of this module's Objective.
+  - *Cons*: 30× more SSD storage; the Extreme SSD is already at 60 GB for 100 videos, so a 10k corpus implies ~6 TB of raw Ego4D before filtering.
+
+Your selection: _____
