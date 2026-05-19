@@ -77,6 +77,35 @@ class FilteringPipeline:
     # metadata stage with no entry in filtered_manifest.json.
     _SUPPORTED_DATASETS = ("ego4d",)
 
+    # Ego4D `scenarios` strings that are overwhelmingly solo activities.
+    # Resolved Issue #12: skipping these at intake removes the easy negatives
+    # from the YOLO+VLM pass, raising the effective pass rate of the
+    # multimodal stage by stopping us from spending ~108 s/video filtering
+    # videos the metadata already says are solo. Kept intentionally
+    # conservative — anything ambiguous (cooking, eating, walking on street,
+    # commuting) is left to YOLO so we don't false-negative metadata-
+    # mislabeled solo→social videos. The match is a case-insensitive
+    # substring check against each tag in the video's scenario list; a video
+    # is filtered out only when ALL its scenarios match a solo keyword.
+    _SOLO_SCENARIO_SUBSTRINGS = (
+        "crafting",
+        "reading books",
+        "watching tv",
+        "listening to music",
+        "sleeping",
+        "daily hygiene",
+        "fixing pc",
+        "on a screen",
+        "play with cellphone",
+        "playing games / video games",
+        "assembling a puzzle",
+        "writing on book",
+        "reviewing flash cards",
+        "crossword puzzle",
+        "potting plants",
+        "talking on the phone",
+    )
+
     def _is_supported_dataset(self, entry, video_id) -> bool:
         dataset = (entry.get('dataset') or '').strip().lower()
         if dataset in self._SUPPORTED_DATASETS:
@@ -86,6 +115,23 @@ class FilteringPipeline:
             f"the metadata-driven labeling path (supported: {self._SUPPORTED_DATASETS})."
         )
         return False
+
+    def _is_likely_solo_by_metadata(self, video_id) -> bool:
+        """Return True iff every scenario tag in the video's Ego4D metadata
+        matches a solo-activity keyword. A miss (no metadata, mixed scenarios,
+        or no scenarios at all) returns False so we fall through to the full
+        YOLO+VLM pass — this gate only short-circuits the obvious solo cases."""
+        meta = self.metadata.get(video_id) or self.metadata.get(video_id.split('.')[0])
+        if not meta:
+            return False
+        scenarios = meta.get("scenarios") or []
+        if not scenarios:
+            return False
+        for s in scenarios:
+            label = " ".join(s.split()).lower()
+            if not any(kw in label for kw in self._SOLO_SCENARIO_SUBSTRINGS):
+                return False
+        return True
 
     def _load_metadata(self):
         """ Load Ego4D metadata and index by video_uid """
@@ -149,6 +195,10 @@ class FilteringPipeline:
             if not self._is_supported_dataset(entry, video_id):
                 continue
 
+            if self._is_likely_solo_by_metadata(video_id):
+                print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
+                continue
+
             video_path = Path(entry['file_path'])
             if not video_path.exists(): continue
 
@@ -193,6 +243,10 @@ class FilteringPipeline:
                 continue
 
             if not self._is_supported_dataset(entry, video_id):
+                continue
+
+            if self._is_likely_solo_by_metadata(video_id):
+                print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
                 continue
 
             video_path = Path(entry['file_path'])
@@ -280,8 +334,9 @@ class FilteringPipeline:
     # No longer needed as we use two-pass
     # def process_video(self, entry): ...
 
-    def social_presence_filter(self, video_path, sample_rate_fps=1):
-        """ Sample frames at sample_rate_fps and detect all persons. """
+    def social_presence_filter(self, video_path, sample_rate_fps=1/3.0):
+        """ Sample frames at sample_rate_fps (default 1 frame per 3 seconds
+        per Resolved Issue #11) and detect all persons. """
         detections_by_frame, hands_by_frame = self.detector.detect(video_path, sample_rate_fps=sample_rate_fps, fast_mode=False, return_hands=True)
         
         if not detections_by_frame:

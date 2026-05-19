@@ -9,6 +9,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 |---|---|---|---|---|
 | **YOLOv8** (`yolov8n` or `yolov8s`) | Social Presence Filter (Bystander Box Detection) | ~6-25 MB | Internal SSD (`~/.cache/ultralytics`) or Local Project | AGPL-3.0 |
 | **YOLOv8-pose** (`yolov8n-pose.pt`) | High-performance pose estimation (Motor Resonance) | ~6.5 MB | Internal SSD or Local Project | AGPL-3.0 |
+| **MediaPipe HandLandmarker** (`hand_landmarker.task`, float16) | Egocentric wearer hand detection for occlusion suppression (Layer 02 → Layer 03a). MediaPipe Tasks API bundle (replaces the legacy `mp.solutions.hands` namespace removed in mediapipe>=0.10.30). | ~7 MB | Local Project (`models/mediapipe/`) | Apache-2.0 |
 | **L2CS-Net** (or CrossGaze) | 3D Gaze / Head Pose Estimation | ~200 MB | Internal SSD or Local Project | MIT |
 | **Qwen2.5-VL** (via Ollama) | Primary VLM for visual classification + Task Climax VLM refinement (Node 02) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **moondream** (via Ollama) | Fast VLM alternative (Lightweight) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
