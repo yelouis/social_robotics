@@ -212,7 +212,7 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
   - *Pros*: Decouples the social-presence filter from MediaPipe entirely, restoring Node 02 throughput today; Layer 03e can be migrated to the Tasks API in isolation.
   - *Cons*: Duplicates YOLO-pose passes (Layer 02 + Layer 03e each run their own); doesn't actually fix the underlying API mismatch, only re-routes it.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -231,7 +231,7 @@ Your selection: _____
   - *Pros*: Provably catches stereo without an aspect-ratio assumption; cheap (~1 ms per frame).
   - *Cons*: New dependency (`imagehash`); two stereo halves have slight parallax offset, so the hash threshold needs tuning per camera rig.
 
-Your selection: _____
+Your selection: Proceed with Option B.
 
 ---
 
@@ -250,7 +250,7 @@ Your selection: _____
   - *Pros*: Temporal evidence is harder to spoof than a single-frame heuristic.
   - *Cons*: Requires changing the per-track aggregation in `social_presence.py:detect()`; only kicks in after enough frames have accumulated, so short clips still slip through.
 
-Your selection: _____
+Your selection: Proceed with Option B. Lets also change from 1 FPS to 1 Frame Per 3 seconds.
 
 ---
 
@@ -269,4 +269,4 @@ Your selection: _____
   - *Pros*: Filter quality is preserved; aligns with the "weed out unusable data" mandate of this module's Objective.
   - *Cons*: 30× more SSD storage; the Extreme SSD is already at 60 GB for 100 videos, so a 10k corpus implies ~6 TB of raw Ego4D before filtering.
 
-Your selection: _____
+Your selection: Proceed with Option A.
