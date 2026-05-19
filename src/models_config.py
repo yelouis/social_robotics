@@ -89,6 +89,16 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
         "medium": ("moondream",     "~1.6 GB", 1_600_000_000),
         "large":  ("qwen2.5vl:7b",  "~7 GB",   None),  # counted under filtering_vlm
     },
+    # MediaPipe Tasks API hand-landmarker bundle. The path is a `.task` asset
+    # on disk (downloaded once into models/mediapipe/), not an Ollama tag.
+    # Same float16 bundle across all tiers — the model is ~7 MB and adding a
+    # larger variant offers no measurable accuracy lift for occlusion
+    # suppression at the FOV/resolutions this pipeline ingests.
+    "social_presence_hand_landmarker": {
+        "small":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
+        "medium": ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
+        "large":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
+    },
 }
 
 

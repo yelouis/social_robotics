@@ -8,8 +8,9 @@ class StreamingFilter:
         # explicit path is passed.
         self.detector = SocialPresenceDetector(model_path)
 
-    def check_social_presence(self, video_path: Path, sample_rate_fps=1) -> bool:
+    def check_social_presence(self, video_path: Path, sample_rate_fps=1/3.0) -> bool:
         """
         Returns True if at least one person (other than POV) is detected.
+        Default sample rate is 1 frame per 3 seconds (Resolved Issue #11).
         """
         return self.detector.detect(video_path, sample_rate_fps=sample_rate_fps, fast_mode=True)
