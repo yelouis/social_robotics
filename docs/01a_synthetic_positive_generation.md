@@ -40,7 +40,7 @@ To exercise different YOLO-pose detection regimes and avoid Moondream gate-class
 | `nod_smile` | Wearer demonstrates something correctly; bystander nods approvingly and smiles. | 03e Affirmation Gesture, 03b Reasonable Emotion |
 | `gaze_check` | Wearer pauses mid-task and the bystander glances up to meet the wearer's gaze. | 03a Attention, 03g Shared Reality |
 
-Each scenario tag must produce at least 1 video per E2E run, with the remainder of the 1-per-50 budget rotated round-robin. A scenario can fail the gate without dragging the whole synthetic-class pass rate down — Layer 02's regression alert fires only when *any* scenario tag's pass rate falls below the run-over-run baseline by more than 1 video.
+Each E2E run uses a small set of 1-3 synthetic validation videos in total (with scenario tags rotated round-robin) to stay comfortably within the Google AI Studio free tier limits. A scenario can fail the gate without dragging the whole synthetic-class pass rate down — Layer 02's regression alert fires only when *any* scenario tag's pass rate falls below the run-over-run baseline by more than 1 video.
 
 ---
 
@@ -85,14 +85,11 @@ Per-scenario prompts are stored as a JSON template in `src/dataset_acquisition/s
 
 ## 4. Generation Ratio and Budget
 
-**Policy**: 1 synthetic video per 50 Ego4D videos in the active test slice, rounded up. Examples:
-- 100-video Ego4D slice → 2 synthetic videos (choose 2 scenario tags)
-- 500-video Ego4D slice → 10 synthetic videos (each scenario tag ≥1, remaining 6 round-robin)
-- 1000-video Ego4D slice → 20 synthetic videos (each tag ≥4, remainder round-robin)
+**Policy**: To ensure video generation calls stay completely free and do not exceed Google AI Studio free tier limits, we generate or include exactly **1 to 3 synthetic videos** in total per E2E run (regardless of the Ego4D slice size), rotating scenario tags round-robin. 
 
-**Free-tier budget check** (must be re-verified against Google AI Studio's current quota docs at implementation time):
-- 500-video E2E runs are weekly at most, so 10 synthetics / week against a typical free-tier daily quota is comfortable.
-- 1000-video E2E runs require 20 synthetics; if a strict daily quota would be exceeded, generations are batched the day before the run.
+**Free-tier budget check**:
+- Maintaining a total budget of 1-3 synthetic videos per run guarantees we operate well within the free tier quota.
+- Caching ensures that we do not make duplicate generation calls when using identical prompts, saving API quota for when prompt templates or scenarios are updated.
 
 **Cache policy**: Generated clips are persisted to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{scenario_tag}/{prompt_hash}.mp4` and re-used across runs. Generation is idempotent per (scenario_tag, prompt_text) hash — a prompt change re-generates, an unchanged prompt reuses the cached clip and consumes no quota. The cache is cleared explicitly only when scenario taxonomy or prompt scaffold changes (tracked via the prompts JSON's `version` field).
 
