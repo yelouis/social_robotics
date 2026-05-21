@@ -48,6 +48,9 @@ Each E2E run uses a small set of 1-3 synthetic validation videos in total (with 
 
 **Primary generator**: **Veo 2** via the Google Gemini API (`google-genai` Python SDK). Veo 2 is the lowest-cost Google video-generation model available through the Gemini API's free experimentation quota on Google AI Studio. Veo 2 produces native 5-8 s clips at 720p with text-only prompt control and is the right tool for short fixture videos.
 
+> [!WARNING]
+> **Active GCP Billing Required**: The Google Gemini API requires **Google Cloud Platform (GCP) billing to be enabled** on your Google AI Studio account to generate videos using `veo-2.0-generate-001`. Direct requests without enabled billing fail with a `400 FAILED_PRECONDITION` error.
+
 **Upgrade path (paid)**: **Veo 3** via Vertex AI when:
 - The free quota is exhausted by a given week's E2E cadence, or
 - A specific scenario tag consistently fails to render under Veo 2's text-only control and needs Veo 3's superior compositional fidelity to produce a recognizable bystander reaction.
