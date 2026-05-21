@@ -58,6 +58,21 @@ Each E2E run uses a small set of 1-3 synthetic validation videos in total (with 
 > [!IMPORTANT]
 > **Verify quota and SDK names at implementation time.** Google's video-generation API surface evolves quickly; the implementer must consult the current `google-genai` SDK reference and the Google AI Studio quota page when wiring Layer 1a up. If Veo 2 is no longer offered on the free tier, the doc's primary-generator selection must be revisited before committing the implementation branch — do not silently fall back to Veo 3 on the paid tier without a code-review checkpoint.
 
+### 3.3 Non-Google Alternative Generators
+If you want to avoid Google/GCP dependency entirely or do not want to configure billing, the following alternatives can be integrated:
+
+1. **Pay-As-You-Go API Providers (e.g., Fal.ai or Replicate)**:
+   - **Models**: Access state-of-the-art open-source video models such as **Wan2.1**, **HunyuanVideo**, or **CogVideoX-5B**.
+   - **Cost**: Both platforms offer free starting credits (typically $5–$10) without upfront billing setup. Pay-as-you-go thereafter (roughly $0.05 per 5–8 second video).
+   - **Integration**: Install `replicate` or `fal-client` libraries and set `REPLICATE_API_TOKEN` or `FAL_KEY` in `.env`.
+
+2. **Local Open-Source Execution (Fully Free)**:
+   - **Models**: Run lightweight text-to-video models like **Wan2.1-T2V-1.3B** or **CogVideoX-2B** locally via Hugging Face `diffusers`.
+   - **Hardware**: Compatible with the Mac Studio (M4 Max, 64 GB) using the Metal Performance Shaders (`mps`) backend.
+   - **Cost**: 100% free with no internet or API key requirements.
+   - **Performance**: High quality, but takes ~2–5 minutes per clip to generate locally on Apple Silicon.
+
+
 ### 3.1 Prompt Template
 Each generated clip uses a single text prompt assembled from a fixed scaffold plus scenario-specific filler. The scaffold enforces the egocentric framing that Layer 02 expects:
 
