@@ -43,6 +43,9 @@ DATASET_PATHS = {
     ],
     "egoprocel": [
         OUTPUT_DIR / "egoprocel"
+    ],
+    "synthetic_validation": [
+        OUTPUT_DIR / "synthetic_validation"
     ]
 }
 

@@ -103,6 +103,8 @@ class SharedRealityPipeline:
                 pass
 
         for entry in registry:
+            if entry.get("synthetic") is True:
+                continue
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
                 continue

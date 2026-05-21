@@ -212,6 +212,8 @@ class DataAggregator:
 
         base_records = []
         for item in manifest_data:
+            if item.get("synthetic") is True:
+                continue
             identified_tasks = item.get('identified_tasks', [])
             task_labels = ", ".join(
                 t.get('task_label', 'Unknown') for t in identified_tasks

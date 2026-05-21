@@ -457,6 +457,8 @@ class AcousticProsodyPipeline:
                 results = json.load(f)
                 
         for video_data in manifest:
+            if video_data.get("synthetic") is True:
+                continue
             video_id = video_data.get("video_id")
             if video_id in self.processed_ids and not self.force:
                 continue

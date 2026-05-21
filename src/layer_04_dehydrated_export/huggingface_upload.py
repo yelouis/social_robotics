@@ -27,6 +27,19 @@ def upload_to_huggingface(output_dir: str, repo_id: str, token: str = None):
     if not parquet_path.exists():
         raise FileNotFoundError(f"Parquet file not found at {parquet_path}")
 
+    # Validate that no synthetic validation videos are included in the Parquet file to upload
+    try:
+        import pandas as pd
+        df = pd.read_parquet(parquet_path)
+        if 'video_id' in df.columns:
+            synthetic_ids = df[df['video_id'].astype(str).str.startswith("synthetic_")]['video_id'].tolist()
+            if synthetic_ids:
+                raise ValueError(f"HF upload validation failed: Parquet file contains synthetic validation video IDs: {synthetic_ids}!")
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise
+        logger.warning(f"Could not read Parquet file for validation before upload: {e}")
+
     api = HfApi()
     
     try:
