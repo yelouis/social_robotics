@@ -99,6 +99,12 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
         "medium": ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
         "large":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
     },
+    # Synthetic video generator (Veo 2 via Gemini API)
+    "synthetic_generator": {
+        "small":  ("veo-2.0-generate-001", "~0 GB (API)", 0),
+        "medium": ("veo-2.0-generate-001", "~0 GB (API)", 0),
+        "large":  ("veo-2.0-generate-001", "~0 GB (API)", 0),
+    },
 }
 
 

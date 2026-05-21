@@ -13,6 +13,12 @@ class DehydratedExporter:
         Also embeds the metadata into a separate JSON since Parquet metadata
         can be tricky to retrieve across different readers.
         """
+        # Validate that no synthetic validation videos are included in the export
+        if 'video_id' in df.columns:
+            synthetic_ids = df[df['video_id'].astype(str).str.startswith("synthetic_")]['video_id'].tolist()
+            if synthetic_ids:
+                raise ValueError(f"Dehydration validation failed: DataFrame contains synthetic validation video IDs: {synthetic_ids}!")
+
         import re
         try:
             import numpy as np

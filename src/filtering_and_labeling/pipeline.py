@@ -75,7 +75,7 @@ class FilteringPipeline:
     # annotation parsers are written; in the interim we skip them at intake
     # so they don't burn YOLO time and then silently disappear at the
     # metadata stage with no entry in filtered_manifest.json.
-    _SUPPORTED_DATASETS = ("ego4d",)
+    _SUPPORTED_DATASETS = ("ego4d", "synthetic_validation")
 
     # Ego4D `scenarios` strings that are overwhelmingly solo activities.
     # Resolved Issue #12: skipping these at intake removes the easy negatives
@@ -195,7 +195,9 @@ class FilteringPipeline:
             if not self._is_supported_dataset(entry, video_id):
                 continue
 
-            if self._is_likely_solo_by_metadata(video_id):
+            if entry.get("synthetic") is True:
+                pass
+            elif self._is_likely_solo_by_metadata(video_id):
                 print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
                 continue
 
@@ -245,7 +247,9 @@ class FilteringPipeline:
             if not self._is_supported_dataset(entry, video_id):
                 continue
 
-            if self._is_likely_solo_by_metadata(video_id):
+            if entry.get("synthetic") is True:
+                pass
+            elif self._is_likely_solo_by_metadata(video_id):
                 print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
                 continue
 
@@ -300,7 +304,7 @@ class FilteringPipeline:
 
         cap.release()
         
-        return {
+        res = {
             "video_id": video_id,
             "source_dataset": entry['dataset'],
             "video_path": str(video_path),
@@ -310,6 +314,13 @@ class FilteringPipeline:
             "bystander_detections": entry['bystander_detections'],
             "hand_detections": entry.get('hand_detections', [])
         }
+        if entry.get("synthetic") is True:
+            res.update({
+                "synthetic": True,
+                "scenario_tag": entry.get("scenario_tag"),
+                "expected_pass": entry.get("expected_pass", True)
+            })
+        return res
 
     def log_error(self, video_id, error):
         error_entry = {
@@ -363,6 +374,20 @@ class FilteringPipeline:
 
     def contextual_task_labeling(self, video_id, duration_sec):
         """ Use Ego4D metadata to identify tasks and map velocities """
+        # Check if video is synthetic
+        entry = next((e for e in self.initial_registry if e.get("id") == video_id or e.get("video_id") == video_id), None)
+        if entry and entry.get("synthetic") is True:
+            scenario_tag = entry.get("scenario_tag", "general")
+            return [{
+                "task_id": "t_01",
+                "task_label": f"Synthetic validation task: {scenario_tag}",
+                "task_confidence": 1.0,
+                "task_velocity": "medium",
+                "task_start_sec": 0.0,
+                "task_end_sec": round(duration_sec, 2),
+                "task_temporal_metadata": {}
+            }]
+
         if video_id not in self.metadata:
             # Try removing extension if present in video_id
             clean_id = video_id.split('.')[0]

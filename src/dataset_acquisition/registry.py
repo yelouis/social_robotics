@@ -43,6 +43,18 @@ def scan_datasets():
                     "file_size": stats.st_size,
                     "created_at": stats.st_ctime
                 }
+                if dataset_name == "synthetic_validation":
+                    scenario_tag = video_file.parent.name
+                    prompt_hash = video_file.stem
+                    entry.update({
+                        "id": f"synthetic_{scenario_tag}_{prompt_hash}",
+                        "synthetic": True,
+                        "scenario_tag": scenario_tag,
+                        "prompt_hash": prompt_hash,
+                        "generator": "veo-2",
+                        "generator_version": "2.0-stable",
+                        "expected_pass": True
+                    })
                 registry.append(entry)
                 
     print(f"Found {len(registry)} total videos across all datasets.")
