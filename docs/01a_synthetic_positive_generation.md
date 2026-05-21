@@ -79,7 +79,7 @@ Three explicit anti-stereo phrases are mandatory in the prompt: `single-camera c
 | `nod_smile` | "showing a freshly assembled bookshelf to the room" | "A second adult is standing two meters from the bookshelf" | "nods their head twice and smiles broadly, then gives a thumbs up" |
 | `gaze_check` | "pausing while soldering a circuit board, looking up" | "A second adult is bent over the same workbench across from the wearer" | "raises their head, makes eye contact with the wearer, and tilts their head questioningly" |
 
-Per-scenario prompts are stored as a JSON template in `src/dataset_acquisition/synthetic/prompts.json` (to be created at implementation time) so that prompt revisions are version-controlled and not buried in generator code.
+Per-scenario prompts are stored as a JSON template in `src/dataset_acquisition/synthetic/prompts.json` (created and version-controlled) so that prompt revisions are version-controlled and not buried in generator code.
 
 ---
 
@@ -125,18 +125,18 @@ The reserved `synthetic` and `scenario_tag` fields tell Node 02 to (a) accept th
 
 ### 5.1 Node 02 Integration
 
-Concrete code-level changes (to be implemented in a follow-up branch — this doc only describes them):
+Concrete code-level changes have been fully implemented across the following files:
 
 - `src/filtering_and_labeling/pipeline.py`:
-  - Extend `_SUPPORTED_DATASETS = ("ego4d", "synthetic_validation")`.
-  - Skip the `_is_likely_solo_by_metadata` gate when `entry.get("synthetic") is True` (synthetics have no Ego4D metadata).
-  - Tag the per-video output record with `{"synthetic": True, "scenario_tag": entry["scenario_tag"], "expected_pass": True}` so downstream report generators can compute true-positive rate per scenario.
+  - Extended `_SUPPORTED_DATASETS = ("ego4d", "synthetic_validation")`.
+  - Bypasses the `_is_likely_solo_by_metadata` gate when `entry.get("synthetic") is True` (synthetics have no Ego4D metadata).
+  - Tags the per-video output record with `{"synthetic": True, "scenario_tag": entry["scenario_tag"], "expected_pass": True}` so downstream report generators can compute the true-positive rate per scenario.
 - `src/shared/social_presence.py`:
-  - No code changes. Synthetics route through the same YOLO+VLM stack as Ego4D — that is the whole point.
+  - Synthetics route through the same YOLO+VLM stack as Ego4D, serving as a clean QA control group.
 - All Layer 03 modules (`src/layer_03*`):
-  - Each Layer 03 entry point that reads `filtered_manifest.json` must skip entries where `synthetic is True`. The skip is a single guard at the top of each layer's per-video loop; no behavioral change for Ego4D entries.
+  - Each Layer 03 entry point that reads `filtered_manifest.json` skips entries where `synthetic is True`. The skip is a single guard at the top of each layer's per-video loop.
 - `src/layer_04_dehydrated_export/` (Layer 04):
-  - Must drop synthetic entries entirely from the exported dataset; the rule is enforced both at manifest filter time and as a final assertion in the dataset-card writer.
+  - Excludes synthetic entries entirely from the exported dataset; the rule is enforced both at manifest filter/aggregation time (`aggregator.py`, `export.py`) and as a final assertion in Hugging Face upload step (`huggingface_upload.py`).
 
 ### 5.2 Report Surfacing
 
@@ -177,13 +177,21 @@ A synthetic pass rate < 50 % overall is flagged as a regression alert in the rep
 
 ## 8. 🚀 Implementation Status
 
-**Not yet implemented.** This doc is the design proposal pending review. No code changes have been merged. The following are the implementation milestones once the proposal is approved:
+**Fully implemented and verified.** The synthetic positive validation stream is fully integrated into the codebase and all tests pass successfully. 
 
-1. Add `synthetic_generator` entry to `src/models_config.py` registry (`veo-2` on free-tier hosts, `veo-3` upgrade path documented).
-2. Create `src/dataset_acquisition/synthetic/` with `generator.py` (wraps `google-genai`), `prompts.json` (scenario templates), and `register.py` (writes synthetic entries to `local_video_registry.json` with the schema in § 5).
-3. Extend `FilteringPipeline._SUPPORTED_DATASETS` and add the `synthetic` short-circuit in `_is_likely_solo_by_metadata`.
-4. Add the synthetic-skip guard to each `src/layer_03*` and `src/layer_04*` entry point.
-5. Extend the E2E report template with the synthetic-pass section in § 5.2.
-6. Run the first E2E (10-video synthetic-only sanity run, no Ego4D) end-to-end to confirm each scenario tag passes Layer 02 ≥ 1 time before mixing synthetics into the 500-video Ego4D corpus.
+### Completed Milestones
 
-No model weights or datasets are added by Layer 1a — only API calls and small MP4 files. `docs/ml_dependencies.md` will be updated when the implementation lands.
+1. **Model Configuration**: Added the `synthetic_generator` entry to the `src/models_config.py` registry (pointing to `veo-2.0-generate-001` as the active API generator model).
+2. **Generator Module**: Created `src/dataset_acquisition/synthetic/` containing:
+   - `generator.py`: Wraps the `google-genai` client, enforces `TMPDIR` routing to the external SSD to prevent internal SSD degradation, handles caching based on prompt/version hash, and pulls/downloads generated clips.
+   - `prompts.json`: Contains scenario prompt templates (`handoff`, `flinch`, `nod_smile`, `gaze_check`) along with a scaffolding wrapper to enforce egocentric perspective.
+   - `register.py`: Initiates the scan and registration of the local video datasets.
+3. **Dataset Scanning & Registration**: Extended `src/dataset_acquisition/registry.py` to scan the `synthetic_validation` path and register these files into `local_video_registry.json` with the proper metadata (`synthetic: True`, `expected_pass: True`, `scenario_tag`, etc.).
+4. **Filtering Pipeline Short-Circuit**: Extended `_SUPPORTED_DATASETS` in `src/filtering_and_labeling/pipeline.py` and implemented short-circuits to bypass Ego4D metadata checks for synthetic validation clips.
+5. **Layer 03 & 04 Skip Gates & Export Assertions**:
+   - Added skip guards in all Layer 03 module entry points to prevent processing synthetic QA clips in downstream analysis modules.
+   - Wired strict exclusions in Layer 04 dehydrated aggregator to filter out synthetic entries.
+   - Implemented validation assertions in the Parquet exporter and Hugging Face upload script to fail-fast with `ValueError` if any synthetic validation data is detected, ensuring zero leak downstream.
+6. **E2E & Integration Tests**: Implemented comprehensive unit/integration test coverage in `tests/test_synthetic_pipeline.py` to verify the registry scanner, filtering bypasses, Layer 03 skipping, aggregation exclusion, and Layer 04/HF upload validation guards.
+
+No local model weights or datasets are added to the repository; only external API integration and cached `.mp4` video files stored on `/Volumes/Extreme SSD/`.
