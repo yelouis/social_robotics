@@ -99,11 +99,15 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
         "medium": ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
         "large":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
     },
-    # Synthetic video generator (Veo 2 via Gemini API)
+    # Synthetic video generator (Wan2.1 T2V, local via diffusers/MPS). Loaded
+    # transiently in the standalone Layer 1a generation pre-step, then released
+    # before the filtering/Layer-03 models load — so its footprint is NOT part
+    # of the steady-state resident set and is excluded from the banner sum (None,
+    # the same convention as social_presence_pose). See docs/01a §3.
     "synthetic_generator": {
-        "small":  ("veo-2.0-generate-001", "~0 GB (API)", 0),
-        "medium": ("veo-2.0-generate-001", "~0 GB (API)", 0),
-        "large":  ("veo-2.0-generate-001", "~0 GB (API)", 0),
+        "small":  ("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", "~17 GB on-disk / ~14 GB peak", None),
+        "medium": ("Wan-AI/Wan2.1-T2V-14B-Diffusers",  "~40 GB on-disk / ~45 GB peak", None),
+        "large":  ("Wan-AI/Wan2.1-T2V-14B-Diffusers",  "~40 GB on-disk / ~45 GB peak", None),
     },
 }
 
