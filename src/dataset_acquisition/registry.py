@@ -46,13 +46,27 @@ def scan_datasets():
                 if dataset_name == "synthetic_validation":
                     scenario_tag = video_file.parent.name
                     prompt_hash = video_file.stem
+                    # Provenance (generator/version) is read from the per-clip
+                    # sidecar written by generator.py, keeping the registry
+                    # generator-agnostic. Fall back to sane defaults if absent.
+                    generator = "wan2.1-t2v"
+                    generator_version = "unknown"
+                    sidecar = video_file.with_suffix(".json")
+                    if sidecar.exists():
+                        try:
+                            with open(sidecar, "r") as sf:
+                                meta = json.load(sf)
+                            generator = meta.get("generator", generator)
+                            generator_version = meta.get("generator_version", generator_version)
+                        except (json.JSONDecodeError, OSError):
+                            pass
                     entry.update({
                         "id": f"synthetic_{scenario_tag}_{prompt_hash}",
                         "synthetic": True,
                         "scenario_tag": scenario_tag,
                         "prompt_hash": prompt_hash,
-                        "generator": "veo-2",
-                        "generator_version": "2.0-stable",
+                        "generator": generator,
+                        "generator_version": generator_version,
                         "expected_pass": True
                     })
                 registry.append(entry)

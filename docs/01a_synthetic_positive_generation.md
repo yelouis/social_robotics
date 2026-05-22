@@ -40,37 +40,40 @@ To exercise different YOLO-pose detection regimes and avoid Moondream gate-class
 | `nod_smile` | Wearer demonstrates something correctly; bystander nods approvingly and smiles. | 03e Affirmation Gesture, 03b Reasonable Emotion |
 | `gaze_check` | Wearer pauses mid-task and the bystander glances up to meet the wearer's gaze. | 03a Attention, 03g Shared Reality |
 
-Each E2E run uses a small set of 1-3 synthetic validation videos in total (with scenario tags rotated round-robin) to stay comfortably within the Google AI Studio free tier limits. A scenario can fail the gate without dragging the whole synthetic-class pass rate down — Layer 02's regression alert fires only when *any* scenario tag's pass rate falls below the run-over-run baseline by more than 1 video.
+Each E2E run uses a small set of 1-3 synthetic validation videos in total (with scenario tags rotated round-robin) to stay within a tractable local generation-time budget (see § 4). A scenario can fail the gate without dragging the whole synthetic-class pass rate down — Layer 02's regression alert fires only when *any* scenario tag's pass rate falls below the run-over-run baseline by more than 1 video.
 
 ---
 
 ## 3. Generator Selection
 
-**Primary generator**: **Veo 2** via the Google Gemini API (`google-genai` Python SDK). Veo 2 is the lowest-cost Google video-generation model available through the Gemini API's free experimentation quota on Google AI Studio. Veo 2 produces native 5-8 s clips at 720p with text-only prompt control and is the right tool for short fixture videos.
+**Primary generator**: **Wan2.1-T2V-14B** (Alibaba Tongyi Wanxiang), run **locally** through the Hugging Face `diffusers` `WanPipeline` on the Mac Studio's MPS backend. Layer 1a generation is infrequent — 1-3 clips per E2E run, cached across runs (§ 4) — so the selection optimizes for **fidelity over speed**: a slow, high-quality local render beats a fast one that produces an unconvincing or stereo-like scene Layer 02 then kills.
 
-> [!WARNING]
-> **Active GCP Billing Required**: The Google Gemini API requires **Google Cloud Platform (GCP) billing to be enabled** on your Google AI Studio account to generate videos using `veo-2.0-generate-001`. Direct requests without enabled billing fail with a `400 FAILED_PRECONDITION` error.
+**Why Wan2.1-T2V-14B over the alternatives:**
 
-**Upgrade path (paid)**: **Veo 3** via Vertex AI when:
-- The free quota is exhausted by a given week's E2E cadence, or
-- A specific scenario tag consistently fails to render under Veo 2's text-only control and needs Veo 3's superior compositional fidelity to produce a recognizable bystander reaction.
+| Candidate | Quality (text-to-video) | License | Verdict |
+|---|---|---|---|
+| **Wan2.1-T2V-14B** | State-of-the-art open T2V; strong prompt adherence + motion coherence | **Apache-2.0** | **Selected** — best license-clean quality |
+| HunyuanVideo (13B) | Comparable to Wan2.1-14B | Tencent Community License (>100M-MAU + regional restrictions) | Rejected — not license-clean |
+| CogVideoX-5B | Below Wan2.1-14B | Custom "CogVideoX License" (non-OSI) | Rejected — license + quality |
+| Wan2.1-T2V-1.3B | Good, noticeably below 14B | Apache-2.0 | Small-tier fallback (24 GB host) |
+
+License cleanliness is a hard requirement: `docs/ml_dependencies.md` § 1 asserts every model in the pipeline is MIT / Apache-2.0 / AGPL-3.0 so the exported artifacts stay freely distributable. Wan2.1's Apache-2.0 license is the only one among the top-tier open T2V models that satisfies this, which makes it the strongest *admissible* choice — not merely the most convenient.
+
+**Tier-per-host mapping** (mirrors the `src/models_config.py` pattern; see `docs/ml_dependencies.md` § 1 tier note):
+
+| Tier | Host | Generator model | Approx. footprint |
+|---|---|---|---|
+| `medium` / `large` | Mac Studio (M4 Max, 64 GB) | `Wan-AI/Wan2.1-T2V-14B-Diffusers` | ~28 GB DiT (bf16) + ~11 GB UMT5-XXL text encoder |
+| `small` | Mac mini (M4 Pro, 24 GB) fallback | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | ~3 GB DiT (bf16) + ~11 GB UMT5-XXL text encoder |
 
 > [!IMPORTANT]
-> **Verify quota and SDK names at implementation time.** Google's video-generation API surface evolves quickly; the implementer must consult the current `google-genai` SDK reference and the Google AI Studio quota page when wiring Layer 1a up. If Veo 2 is no longer offered on the free tier, the doc's primary-generator selection must be revisited before committing the implementation branch — do not silently fall back to Veo 3 on the paid tier without a code-review checkpoint.
+> **The generator is a standalone pre-step, not part of the steady-state resident set.** Layer 1a generation runs *before* the Node 02 filtering models load: the `WanPipeline` is instantiated, the 1-3 clips are rendered, then the pipeline is released (`del pipe; gc.collect(); torch.mps.empty_cache()`) before any YOLO/VLM/Layer-03 weights become resident. Its ~30-45 GB peak therefore never co-resides with the 03 stack, and its `_MODEL_TIERS` entry contributes `None` to the startup-banner resident-set sum (the same convention the shared `social_presence_pose` entry uses).
 
-### 3.3 Non-Google Alternative Generators
-If you want to avoid Google/GCP dependency entirely or do not want to configure billing, the following alternatives can be integrated:
+> [!WARNING]
+> **Slow on MPS — by design.** A single 14B 720p clip (81 frames @ 16 fps, ~50 inference steps) takes on the order of **10-30+ minutes** on the M4 Max. This is acceptable because generation is rare and cached; do **not** swap in a faster low-quality model to save wall-clock time without a code-review checkpoint. While iterating on prompts, pin `SR_MODEL_TIER=small` to render the 1.3B variant at 480p, then regenerate the committed fixtures at 14B.
 
-1. **Pay-As-You-Go API Providers (e.g., Fal.ai or Replicate)**:
-   - **Models**: Access state-of-the-art open-source video models such as **Wan2.1**, **HunyuanVideo**, or **CogVideoX-5B**.
-   - **Cost**: Both platforms offer free starting credits (typically $5–$10) without upfront billing setup. Pay-as-you-go thereafter (roughly $0.05 per 5–8 second video).
-   - **Integration**: Install `replicate` or `fal-client` libraries and set `REPLICATE_API_TOKEN` or `FAL_KEY` in `.env`.
-
-2. **Local Open-Source Execution (Fully Free)**:
-   - **Models**: Run lightweight text-to-video models like **Wan2.1-T2V-1.3B** or **CogVideoX-2B** locally via Hugging Face `diffusers`.
-   - **Hardware**: Compatible with the Mac Studio (M4 Max, 64 GB) using the Metal Performance Shaders (`mps`) backend.
-   - **Cost**: 100% free with no internet or API key requirements.
-   - **Performance**: High quality, but takes ~2–5 minutes per clip to generate locally on Apple Silicon.
+> [!IMPORTANT]
+> **Verify the diffusers API surface and repo ids at implementation time.** `WanPipeline` requires `diffusers >= 0.33`. The implementer must confirm (a) the current `Wan-AI/Wan2.1-T2V-*-Diffusers` repo ids, (b) MPS op coverage for the Wan DiT + `AutoencoderKLWan` — run with `PYTORCH_ENABLE_MPS_FALLBACK=1` so any unsupported op falls back to CPU instead of crashing, and (c) that bf16 is honored on MPS for the active torch build. If the 14B model will not fit or render correctly on MPS, fall back to the 1.3B variant before reaching for a hosted API — do not silently change the committed generator without a review checkpoint.
 
 
 ### 3.1 Prompt Template
@@ -86,7 +89,10 @@ head. Duration: 8 seconds. Aspect ratio: 16:9 (1920×1080) or 4:3
 (1440×1080). Do NOT add letterboxing or split-screen effects.
 ```
 
-Three explicit anti-stereo phrases are mandatory in the prompt: `single-camera capture`, `NOT stereoscopic`, `NOT side-by-side`. The May 19 stereo-gate over-fire (Resolved Issue #10 → Unresolved Issue #1) is sensitive to side-by-side framing; generating any Veo clip that has stereo-like symmetry will produce a Layer-02-killed synthetic and waste API quota.
+Three explicit anti-stereo phrases are mandatory in the prompt: `single-camera capture`, `NOT stereoscopic`, `NOT side-by-side`. The May 19 stereo-gate over-fire (Resolved Issue #10 → Unresolved Issue #1) is sensitive to side-by-side framing; generating any clip with stereo-like symmetry produces a Layer-02-killed synthetic and wastes a costly local render.
+
+> [!NOTE]
+> **Duration and resolution are set by generation arguments, not the prompt.** Wan2.1 does not parse the scaffold's `Duration:` / `Aspect ratio:` line — clip length comes from `num_frames`/`fps` (the committed fixtures render ~5 s at 81 frames @ 16 fps, Wan2.1's trained length) and resolution from `height`/`width` (1280×720 at 14B). Those scaffold lines are retained as harmless advisory text for any hosted generator (§ 3.3) that *does* honor them. Switching the generator to Wan2.1 bumps `prompts.json` `version` to `2`, which invalidates the Veo-era prompt-hash cache so every fixture regenerates once under the new model.
 
 ### 3.2 Scenario-Specific Filler
 
@@ -99,17 +105,28 @@ Three explicit anti-stereo phrases are mandatory in the prompt: `single-camera c
 
 Per-scenario prompts are stored as a JSON template in `src/dataset_acquisition/synthetic/prompts.json` (created and version-controlled) so that prompt revisions are version-controlled and not buried in generator code.
 
+### 3.3 Optional Hosted / Cloud Path (no local GPU)
+If a host has no usable MPS/GPU, or the operator wants to avoid the multi-gigabyte weight download, the same prompt scaffold can drive a hosted generator instead. This is an **opt-in fallback**, not the default:
+- **Pay-as-you-go APIs** (Fal.ai, Replicate): host Wan2.1 / HunyuanVideo / CogVideoX-5B. Free starting credits (~$5-10), then ~$0.05 per 5-8 s clip. Install `replicate` or `fal-client` and set `REPLICATE_API_TOKEN` or `FAL_KEY` in `.env`.
+- **Google Veo** (Veo 2 / Veo 3 via the Gemini API or Vertex AI): requires GCP billing enabled — `veo-2.0-generate-001` returns `400 FAILED_PRECONDITION` without it. This was the previous primary generator; it is retained only as a hosted option.
+
+A hosted clip promoted to a committed fixture must still pass the § 7 per-video sanity check (single-camera, bystander present, reaction matches tag) and records its originating `generator` id in the sidecar metadata (§ 5).
+
+### 3.4 Upgrade Path (higher quality)
+**Wan2.2-T2V-A14B** (mixture-of-experts, ~27B total / ~14B active, Apache-2.0) is the documented quality upgrade when a scenario tag consistently fails to render a recognizable bystander reaction under Wan2.1-14B. It is gated behind a code-review checkpoint: the dual-expert weights are larger (~55 GB on disk) and MPS feasibility on the 64 GB host must be re-validated (the two experts denoise sequentially, so `diffusers` can offload one while the other runs). Verify availability and repo id at adoption time.
+
 ---
 
 ## 4. Generation Ratio and Budget
 
-**Policy**: To ensure video generation calls stay completely free and do not exceed Google AI Studio free tier limits, we generate or include exactly **1 to 3 synthetic videos** in total per E2E run (regardless of the Ego4D slice size), rotating scenario tags round-robin. 
+**Policy**: Generate or include exactly **1 to 3 synthetic videos** in total per E2E run (regardless of the Ego4D slice size), rotating scenario tags round-robin. With local generation the binding constraint is no longer an API quota but **generation wall-clock time** (each Wan2.1-14B clip costs ~10-30 min on the M4 Max) plus the one-time weight download; caching (below) means steady-state runs pay neither. 
 
-**Free-tier budget check**:
-- Maintaining a total budget of 1-3 synthetic videos per run guarantees we operate well within the free tier quota.
-- Caching ensures that we do not make duplicate generation calls when using identical prompts, saving API quota for when prompt templates or scenarios are updated.
+**Cost model (local)**:
+- **One-time**: the Wan2.1 weights (~40 GB for 14B incl. text encoder) download once into `HF_HOME` on the Extreme SSD. No per-clip charge, no key, no quota.
+- **Per-run**: only cache *misses* render; a run with unchanged prompts is 100 % cache hits and consumes ~0 GPU time.
+- **Time budget**: at 1-3 clips/run and ~10-30 min/clip, a full cold regeneration of the round-robin set is bounded to roughly an hour — acceptable as an occasional pre-step, which is why the 1-3 cap is retained even though no quota forces it.
 
-**Cache policy**: Generated clips are persisted to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{scenario_tag}/{prompt_hash}.mp4` and re-used across runs. Generation is idempotent per (scenario_tag, prompt_text) hash — a prompt change re-generates, an unchanged prompt reuses the cached clip and consumes no quota. The cache is cleared explicitly only when scenario taxonomy or prompt scaffold changes (tracked via the prompts JSON's `version` field).
+**Cache policy**: Generated clips are persisted to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{scenario_tag}/{prompt_hash}.mp4` and re-used across runs. Generation is idempotent per (scenario_tag, prompt_text) hash — a prompt change re-generates, an unchanged prompt reuses the cached clip and renders nothing (zero GPU time). The cache is cleared explicitly only when scenario taxonomy or prompt scaffold changes (tracked via the prompts JSON's `version` field).
 
 > [!IMPORTANT]
 > **No videos on the internal SSD.** Per the hardware-management rule in `docs/01_dataset_acquisition.md` § "⚠️ Critical Action for Hardware Management", all synthetic `.mp4` files MUST be written directly to `/Volumes/Extreme SSD/...`. If the generator SDK insists on a temp directory, the runner must set `TMPDIR="/Volumes/Extreme SSD/tmp"` for the synthetic-generation step too, and the post-run cleanup hook (see § 6) is responsible for asserting that no `.mp4` files landed on the internal SSD even transiently.
@@ -130,13 +147,13 @@ Each generated video is registered in `local_video_registry.json` as a normal en
   "synthetic": true,
   "scenario_tag": "handoff",
   "prompt_hash": "a3f9c1e2...",
-  "generator": "veo-2",
-  "generator_version": "2.0-stable",
+  "generator": "wan2.1-t2v",
+  "generator_version": "14b-diffusers",
   "expected_pass": true
 }
 ```
 
-The reserved `synthetic` and `scenario_tag` fields tell Node 02 to (a) accept the entry through `_SUPPORTED_DATASETS` (extended to include `"synthetic_validation"`) and (b) write the pass/fail outcome to a separate report section. The `expected_pass: true` field is the ground-truth label.
+The reserved `synthetic` and `scenario_tag` fields tell Node 02 to (a) accept the entry through `_SUPPORTED_DATASETS` (extended to include `"synthetic_validation"`) and (b) write the pass/fail outcome to a separate report section. The `expected_pass: true` field is the ground-truth label. The `generator`/`generator_version` values are **not** hard-coded in the registry scanner; they are read from a per-clip sidecar `{prompt_hash}.json` that `generator.py` writes at render time (falling back to `wan2.1-t2v` if the sidecar is absent), so swapping generators or tiers needs no registry edit.
 
 ### 5.1 Node 02 Integration
 
@@ -174,10 +191,10 @@ A synthetic pass rate < 50 % overall is flagged as a regression alert in the rep
 
 ## 6. Storage and Hardware Notes
 
-- **Storage location**: `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/`. Veo 2's 8-second 720p clips run ~1.5-3 MB each; 20 clips/week of accumulation is negligible against the 2 TB SSD budget.
-- **Generation host**: API-only. No local GPU/MPS pressure; the `google-genai` SDK uploads the prompt and downloads the rendered MP4. Compatible with both the production Mac Studio (M4 Max, 64 GB) and the 24 GB Mac mini fallback host.
-- **Network**: Generation requires outbound HTTPS to `generativelanguage.googleapis.com`. Each video generation is a single API call that blocks for ~30-120 s while Veo renders.
-- **Auth**: A Google AI Studio API key, persisted as `GOOGLE_API_KEY` in the user's shell profile (matches the existing `ollama` no-key pattern; the key is *not* checked into the repo). The `models_config.py` registry adds a `synthetic_generator` entry mirroring the existing tier-per-host pattern.
+- **Storage location**: `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/`. Wan2.1 720p clips (81 frames @ 16 fps, H.264) run ~2-6 MB each; a handful per week is negligible against the 2 TB SSD budget. The model weights (~40 GB for 14B) also live on the SSD, pulled into `HF_HOME` (`/Volumes/Extreme SSD/huggingface_cache`, per `docs/01_dataset_acquisition.md`).
+- **Generation host**: Local MPS inference — heavy but transient. The `WanPipeline` loads in bf16 with `enable_model_cpu_offload()` + VAE slicing/tiling to cap peak unified-memory use, renders the batch, then is released before the filtering stack loads (§ 3). Runs at 14B on the Mac Studio (M4 Max, 64 GB); the 24 GB Mac mini fallback pins `small` and renders the 1.3B variant (text encoder offloaded between phases).
+- **Network**: Required only once, to download the Wan2.1 weights from Hugging Face. Steady-state generation is fully offline — no outbound request per clip.
+- **Auth**: No API key. Wan2.1 weights are public on Hugging Face (no token needed), matching the existing key-less Ollama pattern. The `models_config.py` registry's `synthetic_generator` entry resolves the per-tier repo id.
 - **Post-run cleanup hook**: The Node 02 runner's existing internal-SSD audit (see `docs/01_dataset_acquisition.md` § "⚠️ Critical Action for Hardware Management") must run after Layer 1a's generation step too. The hook asserts (a) every newly-generated synthetic `.mp4` lives on `/Volumes/Extreme SSD/...` and (b) no `.mp4` has appeared anywhere under `$HOME` or the repo root.
 
 ---
@@ -186,27 +203,188 @@ A synthetic pass rate < 50 % overall is flagged as a regression alert in the rep
 
 - **Per-video sanity check (one-time, per scenario tag)**: After the first synthetic for a given scenario tag is generated, a human reviewer opens the MP4 in QuickTime and confirms (a) the clip is single-camera (not stereo / split-screen), (b) a bystander is visibly present, and (c) the bystander's reaction matches the scenario tag. If any of these fail, the prompt template is revised and the prompts JSON `version` field is bumped to invalidate the cache.
 - **Per-run sanity check (every E2E run)**: The runner asserts that every synthetic entry has `expected_pass: true` and that the reported synthetic-pass rate is ≥ 50 % overall. A run that produces a synthetic-pass rate < 50 % must include an explicit gate-attribution analysis in the Executive Summary, listing which gate (stereo / chin / multi-person / no-pose) dropped each failed synthetic.
-- **Quota verification**: The runner logs the number of cache hits vs cache misses for synthetics. A 100 % cache-miss run means either prompts changed or the cache directory was wiped — either way, the operator should re-check that the Google API key is valid and the free quota is not exhausted before kicking off a long Ego4D pass.
+- **Generation-time, device, and cache verification**: The runner logs cache hits vs misses for synthetics. On a cache miss it asserts the resolved torch device is `mps` (a silent CPU fallback is ~10× slower and signals a missing op or a bad torch build) and logs per-clip wall-clock time. It also asserts the Wan2.1 weights resolved under `HF_HOME` on the Extreme SSD — not the internal SSD — before rendering. A 100 % cache-miss run means prompts changed or the cache was wiped; the operator should budget for the full ~1 h cold render (§ 4) before kicking off a long Ego4D pass.
 
 ---
 
 ## 8. 🚀 Implementation Status
 
-**Fully implemented and verified.** The synthetic positive validation stream is fully integrated into the codebase and all tests pass successfully. 
+**Integration: implemented. Local Wan2.1 backend: implemented in code + unit-tested; pending one live-render validation.** The generator-agnostic plumbing (registry → filtering bypass → Layer 03/04 skip → export guards) and the new local-generator code are in place, the Veo/`google-genai` backend has been removed, and the full suite passes (`tests/test_synthetic_pipeline.py` — 12 tests; 114 across the repo). The one remaining gap — installing the `diffusers` stack and running a real render on the Mac Studio — is tracked in **⚠️ Unresolved Issues & Suggestions** below. 
 
-### Completed Milestones
+### Already implemented (generator-agnostic)
+These pieces do not depend on which generator renders the clips and are in place today:
+1. **Dataset scanning & registration** — `src/dataset_acquisition/registry.py` scans the `synthetic_validation` path and registers each clip in `local_video_registry.json` with `synthetic: True`, `expected_pass: True`, `scenario_tag`, and `prompt_hash`.
+2. **Filtering short-circuit** — `_SUPPORTED_DATASETS` in `src/filtering_and_labeling/pipeline.py` includes `synthetic_validation`, the `_is_likely_solo_by_metadata` gate is bypassed for synthetic entries, and the per-video record is tagged for per-scenario reporting.
+3. **Layer 03 & 04 skip gates** — every Layer 03 entry point skips `synthetic is True`; Layer 04 excludes synthetics at aggregation (`aggregator.py`) and fails fast with `ValueError` in `export.py` / `huggingface_upload.py` if any synthetic id reaches the export.
+4. **Integration tests** — `tests/test_synthetic_pipeline.py` covers the registry scan, filtering bypass, Layer 03 skip, aggregation exclusion, and Layer 04/HF guards.
 
-1. **Model Configuration**: Added the `synthetic_generator` entry to the `src/models_config.py` registry (pointing to `veo-2.0-generate-001` as the active API generator model).
-2. **Generator Module**: Created `src/dataset_acquisition/synthetic/` containing:
-   - `generator.py`: Wraps the `google-genai` client, enforces `TMPDIR` routing to the external SSD to prevent internal SSD degradation, handles caching based on prompt/version hash, and pulls/downloads generated clips.
-   - `prompts.json`: Contains scenario prompt templates (`handoff`, `flinch`, `nod_smile`, `gaze_check`) along with a scaffolding wrapper to enforce egocentric perspective.
-   - `register.py`: Initiates the scan and registration of the local video datasets.
-3. **Dataset Scanning & Registration**: Extended `src/dataset_acquisition/registry.py` to scan the `synthetic_validation` path and register these files into `local_video_registry.json` with the proper metadata (`synthetic: True`, `expected_pass: True`, `scenario_tag`, etc.).
-4. **Filtering Pipeline Short-Circuit**: Extended `_SUPPORTED_DATASETS` in `src/filtering_and_labeling/pipeline.py` and implemented short-circuits to bypass Ego4D metadata checks for synthetic validation clips.
-5. **Layer 03 & 04 Skip Gates & Export Assertions**:
-   - Added skip guards in all Layer 03 module entry points to prevent processing synthetic QA clips in downstream analysis modules.
-   - Wired strict exclusions in Layer 04 dehydrated aggregator to filter out synthetic entries.
-   - Implemented validation assertions in the Parquet exporter and Hugging Face upload script to fail-fast with `ValueError` if any synthetic validation data is detected, ensuring zero leak downstream.
-6. **E2E & Integration Tests**: Implemented comprehensive unit/integration test coverage in `tests/test_synthetic_pipeline.py` to verify the registry scanner, filtering bypasses, Layer 03 skipping, aggregation exclusion, and Layer 04/HF upload validation guards.
+### Implemented — Wan2.1 local backend
+Switching the generator from the hosted Veo backend to local Wan2.1 touched only the generation-specific surface (all changes have landed):
+1. **`src/models_config.py`** — replace the `synthetic_generator` tier entry with the Wan2.1 repo ids (`Wan-AI/Wan2.1-T2V-14B-Diffusers` for `medium`/`large`, `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` for `small`) and set the bytes column to `None` so the transient generator is excluded from the steady-state banner sum (§ 3).
+2. **`src/dataset_acquisition/synthetic/generator.py`** — replace the `google-genai` backend with `diffusers.WanPipeline.from_pretrained(get_model("synthetic_generator"), torch_dtype=torch.bfloat16)` on MPS. Drop the `GOOGLE_API_KEY`/`GEMINI_API_KEY` enforcement. Set `PYTORCH_ENABLE_MPS_FALLBACK=1` and route `HF_HOME`/`TMPDIR` to the Extreme SSD; call `enable_model_cpu_offload()` + `vae.enable_slicing()`/`enable_tiling()`; render with `num_frames=81, num_inference_steps≈50, guidance_scale≈5.0, height=720, width=1280` and a per-seed `torch.Generator`; write the MP4 via `diffusers.utils.export_to_video(frames, dest, fps=16)`; write a `{prompt_hash}.json` sidecar (`generator`, `generator_version`, `prompt`, `seed`, `num_frames`, `fps`, `resolution`); release the pipeline (`del pipe; gc.collect(); torch.mps.empty_cache()`) after the batch. Caching by (scenario_tag, prompt, version) hash is unchanged. See § 9 for the environment setup, weight download, and a reference generation routine.
+3. **`src/dataset_acquisition/synthetic/prompts.json`** — bump `version` to `2` (invalidates the Veo-era cache so fixtures regenerate once under Wan2.1); the scaffold's `Duration:`/`Aspect ratio:` line stays as advisory text (§ 3.1).
+4. **`src/dataset_acquisition/registry.py`** — source `generator`/`generator_version` from the per-clip sidecar (fallback `wan2.1-t2v` / tier variant) instead of the hard-coded `"veo-2"` / `"2.0-stable"`.
+5. **`docs/ml_dependencies.md`** — add the Wan2.1 row to § 1 and the `diffusers` / `imageio-ffmpeg` / `ftfy` rows to § 2 (done alongside this doc).
 
-No local model weights or datasets are added to the repository; only external API integration and cached `.mp4` video files stored on `/Volumes/Extreme SSD/`.
+### Verification tests (implemented, passing)
+All generator tests **mock `WanPipeline.from_pretrained`** so CI never downloads the ~40 GB weights, matching the mock-heavy style already in `tests/test_synthetic_pipeline.py`:
+1. **Update** the two `generator == "veo-2"` / `generator_version == "2.0-stable"` assertions (registry-scan and filtering tests) to `"wan2.1-t2v"` and the new version string.
+2. **`test_generator_cache_hit_skips_pipeline`** — a pre-existing `{prompt_hash}.mp4` short-circuits `generate_video` without instantiating the pipeline (assert `from_pretrained` is never called).
+3. **`test_generator_cache_miss_renders_and_writes_sidecar`** — on a miss, `export_to_video` is called exactly once with `fps=16`, the output path is under `/Volumes/Extreme SSD/...`, and a sidecar `{prompt_hash}.json` carrying `generator`/`generator_version`/`seed` is written next to the clip.
+4. **`test_generator_unknown_scenario_tag_raises`** — an unknown tag raises `ValueError` (existing `get_prompt` guard).
+5. **`test_generator_prefers_mps`** — device resolution prefers MPS when `torch.backends.mps.is_available()`, and `PYTORCH_ENABLE_MPS_FALLBACK` is set in the process environment.
+6. **Retain** the existing generator-agnostic integration tests unchanged; they must still pass after the backend swap.
+
+No model weights or datasets are committed to the repository — only the external Hugging Face cache (on the Extreme SSD) and the cached `.mp4` fixtures under `/Volumes/Extreme SSD/`.
+
+---
+
+## 9. Local Setup & Implementation Guide (Mac Studio + Extreme SSD)
+
+> [!IMPORTANT]
+> This section is the concrete how-to for the § 8 "Planned changes": environment routing to the Extreme SSD, the weight download, a reference generation routine for the M4 Max, and verification. It is written so an implementer can wire up `generator.py` without further research. The goal is **zero API cost** — all weights are downloaded once and run fully offline on local hardware. **Confirm the Wan2.1 `diffusers` API and recommended sampling params against the current model card at implementation time** (§ 3).
+
+### 9.1 One-time environment setup
+Every cache and temp dir must point at the Extreme SSD so neither the multi-gigabyte weights nor any transient render file ever touches the internal SSD (`docs/01_dataset_acquisition.md` § "⚠️ Critical Action for Hardware Management"). Add to the shell profile (`~/.zshrc`):
+
+```bash
+export HF_HOME="/Volumes/Extreme SSD/huggingface_cache"   # weights cache → external SSD
+export TMPDIR="/Volumes/Extreme SSD/tmp"
+export TEMP="/Volumes/Extreme SSD/tmp"
+export TMP="/Volumes/Extreme SSD/tmp"
+export PYTORCH_ENABLE_MPS_FALLBACK=1     # ops without an MPS kernel fall back to CPU instead of crashing
+export HF_HUB_ENABLE_HF_TRANSFER=1       # optional: faster multi-GB pull (needs `pip install hf_transfer`)
+mkdir -p "/Volumes/Extreme SSD/tmp" "/Volumes/Extreme SSD/huggingface_cache"
+```
+
+Install the new dependencies into the project venv (torch/torchvision are already present — see `docs/ml_dependencies.md` § 2):
+
+```bash
+pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg
+pip install hf_transfer   # optional, pairs with HF_HUB_ENABLE_HF_TRANSFER=1
+```
+
+> [!WARNING]
+> **`HF_HOME` must be set before the process imports `diffusers`/`transformers`.** Those libraries resolve the cache root at import time; exporting `HF_HOME` afterward is a no-op and the ~40 GB of weights will silently download to `~/.cache/huggingface` on the **internal** SSD, violating the storage rule. Set it in the shell profile (above), or, if it must be done in-process, assign `os.environ["HF_HOME"]` at the very top of `generator.py` **above** the `import diffusers` line.
+
+### 9.2 Download the weights to the Extreme SSD
+Pre-pull once (or let the first `from_pretrained` lazy-download — both honor `HF_HOME`). Budget **≥ 80 GB free** on the SSD before pulling the 14B repo:
+
+```bash
+HF_HOME="/Volumes/Extreme SSD/huggingface_cache" \
+  huggingface-cli download Wan-AI/Wan2.1-T2V-14B-Diffusers
+# small-tier host (24 GB Mac mini) instead pulls the 1.3B repo:
+# huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+```
+
+Verify the weights landed on the SSD and nothing leaked to the internal disk:
+
+```bash
+du -sh "/Volumes/Extreme SSD/huggingface_cache/hub/models--Wan-AI--Wan2.1-T2V-14B-Diffusers"
+ls "$HOME/.cache/huggingface/hub" 2>/dev/null | grep -i wan \
+  && echo "LEAK: weights on internal SSD" || echo "OK: no weights on internal SSD"
+```
+
+### 9.3 Reference generation routine (Mac Studio, MPS)
+This is the core of the rewritten `generate_video()` (§ 8 item 2) — a **reference, not drop-in production code**. The existing caching, sidecar write, and round-robin batch loop wrap around it unchanged. Env vars from § 9.1 must already be set.
+
+```python
+import torch
+from diffusers import AutoencoderKLWan, WanPipeline
+from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+from diffusers.utils import export_to_video
+from models_config import get_model            # resolves the per-tier repo id
+
+model_id = get_model("synthetic_generator")    # 14B on the Studio, 1.3B on the mini
+is_720p  = "14B" in model_id
+height, width = (720, 1280) if is_720p else (480, 832)
+flow_shift    = 5.0 if is_720p else 3.0        # mirrors the Wan2.1 model card; confirm at impl time
+guide_scale   = 5.0 if is_720p else 6.0
+
+# Wan recommends the VAE in fp32 and the transformer + text encoder in bf16.
+vae  = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
+pipe = WanPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.bfloat16)
+pipe.scheduler = UniPCMultistepScheduler.from_config(
+    pipe.scheduler.config, prediction_type="flow_prediction",
+    use_flow_sigmas=True, flow_shift=flow_shift,
+)
+pipe.to("mps")
+pipe.vae.enable_tiling()        # caps the VAE-decode memory spike on long clips (if available)
+
+negative_prompt = (
+    "split-screen, side-by-side, stereoscopic, picture-in-picture, letterbox, "
+    "third-person, static, blurry, low quality, distorted, watermark, text overlay"
+)
+frames = pipe(
+    prompt=prompt,                                  # from get_prompt(scenario_tag, seed)
+    negative_prompt=negative_prompt,
+    height=height, width=width,
+    num_frames=81, num_inference_steps=50, guidance_scale=guide_scale,
+    generator=torch.Generator(device="cpu").manual_seed(seed),  # cpu generator = portable across MPS/CPU
+).frames[0]
+
+export_to_video(frames, str(dest_path), fps=16)     # dest_path under /Volumes/Extreme SSD/...
+
+del pipe, vae                                       # release before the filtering stack loads (§ 3)
+import gc; gc.collect()
+torch.mps.empty_cache()
+```
+
+The negative prompt reinforces the three anti-stereo phrases in the positive scaffold (§ 3.1) — the single most important quality lever for keeping clips out of Layer 02's stereo gate.
+
+### 9.4 Memory & performance on the M4 Max (64 GB)
+- The 14B model in bf16 is **~40 GB resident** (28 GB transformer + ~11 GB UMT5-XXL text encoder + VAE). It fits on the 64 GB Studio **because Layer 1a runs as a standalone pre-step** — generate before any YOLO/VLM/Layer-03 model loads (§ 3), so the full unified-memory budget is free. Peak (weights + activations + VAE decode) lands in the ~45-55 GB range, within budget but with little headroom, which is why nothing else may be resident during generation.
+- Keep `pipe.vae.enable_tiling()` on — the VAE decode of 81 frames at 720p is the largest single memory spike.
+- If you hit `MPS backend out of memory`: (1) drop to `num_frames=49` (~3 s) or render at 480p (`height/width = 480/832`), (2) try `pipe.enable_model_cpu_offload()` — verify it works on your `diffusers`/`accelerate` build, as it historically targets CUDA and may error or no-op on MPS; if so, skip it, or (3) pin `SR_MODEL_TIER=small` to run the 1.3B model.
+- Expect **~10-30+ min per 14B clip** on the M4 Max (§ 3). Run a `num_inference_steps=10` smoke pass first to validate wiring before committing to a 50-step render.
+
+### 9.5 Verification (wire into the § 7 checks)
+```bash
+# 1. MPS available on this host:
+python -c "import torch; assert torch.backends.mps.is_available(); print('MPS OK')"
+
+# 2. one-clip smoke render (--smoke forces num_inference_steps=10), then open in QuickTime:
+PYTHONPATH=src python -m dataset_acquisition.synthetic.generator --smoke
+
+# 3. confirm the clip + sidecar landed on the SSD and nothing leaked to the internal disk:
+ls "/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/handoff/"   # {hash}.mp4 + {hash}.json
+find "$HOME" -name '*.mp4' -not -path '/Volumes/Extreme SSD/*' -not -path '*/site-packages/gradio/*'   # must print nothing
+```
+
+Then run the § 7 per-video human review (single-camera, bystander present, reaction matches tag) on the smoke clip before scaling to the full round-robin set.
+
+---
+
+## ⚠️ Unresolved Issues & Suggestions
+
+### Issue 1: Local generator stack not installed; Python 3.9 / diffusers compatibility unverified
+**Status**: ⚠️ Confirmed Unresolved — The project venv (`venv/`, Python 3.9.6) has `torch` 2.8.0 (MPS available) and `transformers`, but an import probe confirms `diffusers`, `accelerate`, `ftfy`, and `imageio-ffmpeg` are **not installed**. `generator.py` imports the diffusers stack under a guarded `try/except`, so the module and all 12 unit tests pass with the pipeline mocked, but **no real render can run until the stack is installed**. The stack was not auto-installed because it is a multi-gigabyte download tied to a Python-version decision: `WanPipeline`/`AutoencoderKLWan` need `diffusers >= 0.33`, and recent diffusers releases target Python ≥ 3.10, so `pip` on 3.9 may resolve to an older diffusers that does not expose `WanPipeline`.
+
+**Option A (recommended)**: **Create a Python 3.10+ venv for generation and install the stack there** (`pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg`).
+  - *Pros*: gets the newest diffusers with complete Wan2.1 support and the best MPS op coverage; future-proof against the 3.9 EOL.
+  - *Cons*: a second interpreter to manage; the generator runs as a standalone pre-step (§ 3) so it can use its own env, but the runner must invoke the right Python.
+
+**Option B**: **Install into the existing 3.9 venv and pin a diffusers version that still exposes `WanPipeline` on 3.9.**
+  - *Pros*: single environment; the existing 114-test suite already runs here.
+  - *Cons*: may resolve to an older diffusers lacking recent Wan fixes; must verify `from diffusers import WanPipeline, AutoencoderKLWan` actually imports on 3.9 before relying on it.
+
+**Option C**: **Skip the local install and use the hosted fallback (§ 3.3)** via Fal.ai / Replicate.
+  - *Pros*: zero local setup; no Python/version friction.
+  - *Cons*: reintroduces a per-clip API charge and an API key — defeats the zero-API-cost goal that motivated the local-model switch.
+
+Your selection: _____
+
+---
+
+### Issue 2: Wan2.1 render path not validated against a live run
+**Status**: ⚠️ Confirmed Unresolved — The generation code (fp32 `AutoencoderKLWan` VAE + bf16 `WanPipeline` + `UniPCMultistepScheduler` with `prediction_type="flow_prediction"` + `export_to_video`) is written from the Wan2.1 model-card reference (§ 9.3) but has **not been executed end-to-end**: no weights are downloaded in this environment and a 14B clip is ~10-30 min on MPS. The unit tests mock the pipeline, so they verify wiring, caching, the sidecar, and device selection — **not** that the real diffusers API signatures and sampling params produce a valid MP4. This requires a one-time operator run on the Mac Studio after Issue 1 is resolved.
+
+**Option A (recommended)**: **Smoke-test on the `small` tier first, then promote to 14B** — `PYTHONPATH=src SR_MODEL_TIER=small python -m dataset_acquisition.synthetic.generator --smoke` (1.3B, 480p, 10 steps), then drop `SR_MODEL_TIER` for the full 14B render.
+  - *Pros*: fast, cheap first signal that the diffusers API + scheduler config are correct; isolates API errors from the ~30-min 14B render.
+  - *Cons*: small-tier `flow_shift`/`guidance_scale` differ slightly from 14B, so a 14B-only quirk could still surface on promotion.
+
+**Option B**: **Run the 14B smoke render directly** (`PYTHONPATH=src python -m dataset_acquisition.synthetic.generator --smoke`).
+  - *Pros*: validates the exact production path and params in one step.
+  - *Cons*: ~10-30 min per attempt, so any wrong API name/param costs a slow iteration cycle.
+
+Your selection: _____

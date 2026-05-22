@@ -16,6 +16,8 @@ from layer_03a_attention.pipeline import AttentionLayerPipeline
 from layer_04_dehydrated_export.aggregator import DataAggregator
 from layer_04_dehydrated_export.export import DehydratedExporter
 from layer_04_dehydrated_export.huggingface_upload import upload_to_huggingface
+import dataset_acquisition.synthetic.generator as gen_mod
+from dataset_acquisition.synthetic.generator import SyntheticVideoGenerator
 
 
 @pytest.fixture
@@ -29,7 +31,12 @@ def mock_datasets_dir(tmp_path):
     video_file = scenario_dir / "abc123ef.mp4"
     with open(video_file, "wb") as f:
         f.write(b"fake mp4 video data")
-        
+
+    # Provenance sidecar (written by generator.py in production)
+    sidecar = scenario_dir / "abc123ef.json"
+    with open(sidecar, "w") as f:
+        json.dump({"generator": "wan2.1-t2v", "generator_version": "14b-diffusers"}, f)
+
     return dataset_dir
 
 
@@ -45,8 +52,8 @@ def test_registry_scan_detects_synthetic(mock_datasets_dir, monkeypatch):
     assert synthetic_entry["synthetic"] is True
     assert synthetic_entry["scenario_tag"] == "interaction_3"
     assert synthetic_entry["prompt_hash"] == "abc123ef"
-    assert synthetic_entry["generator"] == "veo-2"
-    assert synthetic_entry["generator_version"] == "2.0-stable"
+    assert synthetic_entry["generator"] == "wan2.1-t2v"
+    assert synthetic_entry["generator_version"] == "14b-diffusers"
     assert synthetic_entry["expected_pass"] is True
 
 
@@ -69,8 +76,8 @@ def test_filtering_pipeline_bypasses_and_labels_synthetic(tmp_path, monkeypatch)
             "synthetic": True,
             "scenario_tag": "interaction_3",
             "prompt_hash": "abc123ef",
-            "generator": "veo-2",
-            "generator_version": "2.0-stable",
+            "generator": "wan2.1-t2v",
+            "generator_version": "14b-diffusers",
             "expected_pass": True,
         }
     ]
@@ -237,3 +244,109 @@ def test_hf_upload_raises_on_synthetic_video_id(tmp_path):
     
     with pytest.raises(ValueError, match="HF upload validation failed: Parquet file contains synthetic validation video IDs"):
         upload_to_huggingface(str(tmp_path), repo_id="dummy/repo", token="dummy")
+
+
+# ---------------------------------------------------------------------------
+# Registry fallback when a synthetic clip has no provenance sidecar
+# ---------------------------------------------------------------------------
+def test_registry_scan_synthetic_without_sidecar_uses_fallback(tmp_path, monkeypatch):
+    dataset_dir = tmp_path / "synthetic_validation"
+    scenario_dir = dataset_dir / "handoff"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    (scenario_dir / "deadbeef.mp4").write_bytes(b"x")
+
+    monkeypatch.setitem(config.DATASET_PATHS, "synthetic_validation", [dataset_dir])
+    registry = scan_datasets()
+
+    entry = next((e for e in registry if e.get("id") == "synthetic_handoff_deadbeef"), None)
+    assert entry is not None
+    assert entry["generator"] == "wan2.1-t2v"
+    assert entry["generator_version"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Wan2.1 local generator backend (diffusers mocked — no weights, no render)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def mock_wan(monkeypatch):
+    """Mock the diffusers WanPipeline stack so tests never download weights or render."""
+    mock_pipe = MagicMock(name="WanPipeline_instance")
+    mock_result = MagicMock()
+    mock_result.frames = [["frame0"]]
+    mock_pipe.return_value = mock_result
+
+    mock_wan_cls = MagicMock(name="WanPipeline")
+    mock_wan_cls.from_pretrained.return_value = mock_pipe
+
+    monkeypatch.setattr(gen_mod, "WanPipeline", mock_wan_cls)
+    monkeypatch.setattr(gen_mod, "AutoencoderKLWan", MagicMock(name="AutoencoderKLWan"))
+    monkeypatch.setattr(gen_mod, "UniPCMultistepScheduler", MagicMock(name="UniPCMultistepScheduler"))
+
+    def _fake_export(frames, dest, fps=None, **kwargs):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(b"fake-rendered-mp4")
+        return dest
+
+    export_mock = MagicMock(name="export_to_video", side_effect=_fake_export)
+    monkeypatch.setattr(gen_mod, "export_to_video", export_mock)
+    return {"pipe": mock_pipe, "cls": mock_wan_cls, "export": export_mock}
+
+
+def test_generator_cache_hit_skips_pipeline(tmp_path, mock_wan):
+    gen = SyntheticVideoGenerator(output_dir=tmp_path)
+    tag = next(iter(gen.scenarios))
+    prompt_hash = gen.get_prompt_hash(gen.get_prompt(tag))
+
+    cached = tmp_path / tag / f"{prompt_hash}.mp4"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"already-here")
+
+    result = gen.generate_video(tag, seed=0)
+
+    assert result == cached
+    mock_wan["cls"].from_pretrained.assert_not_called()
+    mock_wan["export"].assert_not_called()
+
+
+def test_generator_cache_miss_renders_and_writes_sidecar(tmp_path, mock_wan, monkeypatch):
+    gen = SyntheticVideoGenerator(output_dir=tmp_path)
+    monkeypatch.setattr(gen, "resolve_model_id", lambda: "Wan-AI/Wan2.1-T2V-14B-Diffusers")
+    tag = next(iter(gen.scenarios))
+    prompt_hash = gen.get_prompt_hash(gen.get_prompt(tag))
+
+    result = gen.generate_video(tag, seed=0)
+
+    assert result == tmp_path / tag / f"{prompt_hash}.mp4"
+    assert result.exists()
+
+    assert mock_wan["export"].call_count == 1
+    _, kwargs = mock_wan["export"].call_args
+    assert kwargs.get("fps") == 16
+
+    sidecar = tmp_path / tag / f"{prompt_hash}.json"
+    assert sidecar.exists()
+    meta = json.loads(sidecar.read_text())
+    assert meta["generator"] == "wan2.1-t2v"
+    assert meta["generator_version"] == "14b-diffusers"
+    assert meta["seed"] == 0
+    assert meta["fps"] == 16
+
+
+def test_generator_unknown_scenario_tag_raises(tmp_path):
+    gen = SyntheticVideoGenerator(output_dir=tmp_path)
+    with pytest.raises(ValueError, match="Unknown scenario tag"):
+        gen.generate_video("does_not_exist")
+
+
+def test_generator_prefers_mps(tmp_path, monkeypatch):
+    gen = SyntheticVideoGenerator(output_dir=tmp_path)
+    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1"
+    if gen_mod.torch is not None:
+        monkeypatch.setattr(gen_mod.torch.backends.mps, "is_available", lambda: True)
+        assert gen.select_device() == "mps"
+
+
+def test_generator_default_output_dir_is_extreme_ssd():
+    gen = SyntheticVideoGenerator()
+    assert str(gen.output_dir).startswith("/Volumes/Extreme SSD/")

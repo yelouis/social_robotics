@@ -1,9 +1,25 @@
+import argparse
+import gc
+import hashlib
+import json
 import os
 import sys
-import json
-import time
-import hashlib
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Storage routing. Per docs/01a_synthetic_positive_generation.md §9.1 and
+# docs/01_dataset_acquisition.md, model weights and any transient render files
+# MUST live on the external "Extreme SSD", never the internal disk. huggingface
+# resolves these env vars at import time, so they must be set *before* the
+# `import diffusers` below. The shell profile should already set them; the
+# setdefault calls are a defensive backstop that never override an explicit
+# operator setting.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+_SSD_ROOT = Path("/Volumes/Extreme SSD")
+if _SSD_ROOT.exists():
+    os.environ.setdefault("HF_HOME", str(_SSD_ROOT / "huggingface_cache"))
+    os.environ.setdefault("TMPDIR", str(_SSD_ROOT / "tmp"))
 
 try:
     from dotenv import load_dotenv
@@ -11,147 +27,279 @@ try:
 except ImportError:
     pass
 
-# Add src to path if run directly
+# Make `models_config` importable when this file is run directly.
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 try:
-    from google import genai
-    from google.genai import types
+    import torch
 except ImportError:
-    genai = None
-    types = None
+    torch = None
+
+# diffusers is an optional heavy dependency (see docs/ml_dependencies.md §2).
+# The module must import cleanly without it so the registry and tests can run on
+# hosts that have not installed the generator stack; generation then raises a
+# clear, actionable error instead of an import crash.
+try:
+    from diffusers import AutoencoderKLWan, WanPipeline
+    from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+    from diffusers.utils import export_to_video
+except ImportError:
+    AutoencoderKLWan = None
+    WanPipeline = None
+    UniPCMultistepScheduler = None
+    export_to_video = None
+
+
+GENERATOR_NAME = "wan2.1-t2v"
+DEFAULT_MODEL_ID = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
+NUM_FRAMES = 81          # ~5 s at 16 fps — Wan2.1's trained clip length
+FPS = 16
+DEFAULT_STEPS = 50
+SMOKE_STEPS = 10
+
+# Reinforces the three anti-stereo phrases in the positive scaffold
+# (prompts.json). Keeping clips single-camera is the dominant lever for
+# surviving Layer 02's stereo gate — see docs/01a §3.1.
+NEGATIVE_PROMPT = (
+    "split-screen, side-by-side, stereoscopic, picture-in-picture, letterbox, "
+    "third-person, static, blurry, low quality, distorted, watermark, text overlay"
+)
+
+
+def _install_hint():
+    return (
+        "Install the local generator stack into the project venv:\n"
+        '  pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg\n'
+        "See docs/01a_synthetic_positive_generation.md §9 for full setup."
+    )
+
 
 class SyntheticVideoGenerator:
     def __init__(self, output_dir=None):
-        self.output_dir = Path(output_dir) if output_dir else Path("/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation")
-        
+        self.output_dir = (
+            Path(output_dir)
+            if output_dir
+            else Path("/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation")
+        )
+
         # Load prompts configuration
         prompts_path = Path(__file__).parent / "prompts.json"
         with open(prompts_path, "r") as f:
             self.prompts_config = json.load(f)
-            
+
         self.version = self.prompts_config.get("version", 1)
         self.scaffold = self.prompts_config.get("scaffold", "")
         self.scenarios = self.prompts_config.get("scenarios", {})
+        self._pipe = None  # lazily loaded WanPipeline, shared across a batch
 
-    def get_prompt(self, scenario_tag: str, seed: int = 0) -> str:
-        """Construct the prompt using scaffold and scenario description, with optional seed variation."""
+    # --- prompt construction -------------------------------------------------
+    def get_prompt(self, scenario_tag, seed=0):
+        """Construct the prompt from scaffold + scenario filler, with optional seed variation."""
         if scenario_tag not in self.scenarios:
             raise ValueError(f"Unknown scenario tag: {scenario_tag}")
-            
+
         scenario = self.scenarios[scenario_tag]
         prompt = self.scaffold.format(
             task_description=scenario["task_description"],
             bystander_description=scenario["bystander_description"],
-            reaction_description=scenario["reaction_description"]
+            reaction_description=scenario["reaction_description"],
         )
         if seed > 0:
             prompt += f"\nVariation seed: {seed}."
         return prompt
 
-    def get_prompt_hash(self, prompt: str) -> str:
-        """Compute 8-character hash from prompt and prompt config version."""
+    def get_prompt_hash(self, prompt):
+        """8-character hash over the prompt and the prompt-config version."""
         hasher = hashlib.sha256()
         hasher.update(f"v{self.version}:".encode("utf-8"))
         hasher.update(prompt.encode("utf-8"))
         return hasher.hexdigest()[:8]
 
-    def generate_video(self, scenario_tag: str, seed: int = 0, force: bool = False) -> Path:
-        """Generate a video clip for a scenario. Reuses cache unless force is True."""
+    # --- model / device resolution ------------------------------------------
+    def resolve_model_id(self):
+        """Resolve the per-tier Wan2.1 repo id from the central registry."""
+        try:
+            from models_config import get_model
+            return get_model("synthetic_generator")
+        except Exception:
+            return DEFAULT_MODEL_ID
+
+    def select_device(self):
+        if torch is not None and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+
+    @staticmethod
+    def _generator_version(model_id):
+        if "14B" in model_id:
+            return "14b-diffusers"
+        if "1.3B" in model_id:
+            return "1.3b-diffusers"
+        return "diffusers"
+
+    @staticmethod
+    def _render_params(model_id):
+        """Tier-specific sampling params (mirrors the Wan2.1 model card; see docs/01a §9.3)."""
+        is_720p = "14B" in model_id
+        height, width = (720, 1280) if is_720p else (480, 832)
+        flow_shift = 5.0 if is_720p else 3.0
+        guidance_scale = 5.0 if is_720p else 6.0
+        return height, width, flow_shift, guidance_scale
+
+    def _load_pipeline(self, model_id):
+        if torch is None:
+            raise ImportError("PyTorch is required for synthetic generation.\n" + _install_hint())
+        if WanPipeline is None:
+            raise ImportError("`diffusers` (>=0.33) is required for synthetic generation.\n" + _install_hint())
+
+        _, _, flow_shift, _ = self._render_params(model_id)
+        device = self.select_device()
+        print(f"[SyntheticVideoGenerator] Loading {model_id} on device '{device}' (bf16)...", flush=True)
+
+        # Wan recommends the VAE in fp32 and the transformer + text encoder in bf16.
+        vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
+        pipe = WanPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.bfloat16)
+        if UniPCMultistepScheduler is not None:
+            pipe.scheduler = UniPCMultistepScheduler.from_config(
+                pipe.scheduler.config,
+                prediction_type="flow_prediction",
+                use_flow_sigmas=True,
+                flow_shift=flow_shift,
+            )
+        pipe.to(device)
+        try:
+            pipe.vae.enable_tiling()  # caps the VAE-decode memory spike on long clips
+        except Exception:
+            pass  # tiling is a memory optimization; absence is non-fatal
+        return pipe
+
+    # --- generation ----------------------------------------------------------
+    def generate_video(self, scenario_tag, seed=0, force=False, smoke=False):
+        """Generate (or reuse the cached) clip for a scenario.
+
+        The pipeline is loaded lazily on the first cache miss and reused across a
+        batch; call `release()` (or `generate_batch`, which does it for you) to
+        free it before the Node 02 filtering models load.
+        """
         prompt = self.get_prompt(scenario_tag, seed)
         prompt_hash = self.get_prompt_hash(prompt)
-        
+
         scenario_dir = self.output_dir / scenario_tag
         scenario_dir.mkdir(parents=True, exist_ok=True)
         dest_path = scenario_dir / f"{prompt_hash}.mp4"
-        
+
         if dest_path.exists() and not force:
             print(f"[SyntheticVideoGenerator] Cache hit for {scenario_tag} (seed={seed}, hash={prompt_hash}). Using {dest_path}")
             return dest_path
-            
+
         print(f"[SyntheticVideoGenerator] Cache miss for {scenario_tag} (seed={seed}, hash={prompt_hash}). Generating...")
-        
-        # Enforce API Key
-        api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "API key missing! Please set the GOOGLE_API_KEY or GEMINI_API_KEY environment variable. "
-                "Unable to generate new synthetic videos without API credentials."
-            )
-            
-        if genai is None or types is None:
-            raise ImportError(
-                "The `google-genai` package is not installed. "
-                "Run `pip install google-genai` to install it."
-            )
 
-        # Adhere to Hardware Management Rule: force TMPDIR to SSD
-        os.environ["TMPDIR"] = "/Volumes/Extreme SSD/tmp"
-        Path(os.environ["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-        
-        # Initialize Google GenAI client
-        client = genai.Client(api_key=api_key)
-        
-        # We read from models_config.py if possible to resolve model ID
-        try:
-            from models_config import get_model
-            model = get_model("synthetic_generator")
-        except ImportError:
-            model = "veo-2.0-generate-001"
+        model_id = self.resolve_model_id()
+        height, width, _, guidance_scale = self._render_params(model_id)
+        steps = SMOKE_STEPS if smoke else DEFAULT_STEPS
 
-        print(f"[SyntheticVideoGenerator] Submitting video generation request to model '{model}'...")
-        # Submit asynchronous generation request
-        operation = client.models.generate_videos(
-            model=model,
+        if self._pipe is None:
+            self._pipe = self._load_pipeline(model_id)
+
+        # A CPU generator keeps seeding reproducible and portable across MPS/CPU.
+        rng = torch.Generator(device="cpu").manual_seed(int(seed))
+        print(f"[SyntheticVideoGenerator] Rendering {width}x{height}, {NUM_FRAMES} frames, {steps} steps...", flush=True)
+        result = self._pipe(
             prompt=prompt,
-            config=types.GenerateVideosConfig(
-                aspect_ratio="16:9"
-            ),
+            negative_prompt=NEGATIVE_PROMPT,
+            height=height,
+            width=width,
+            num_frames=NUM_FRAMES,
+            num_inference_steps=steps,
+            guidance_scale=guidance_scale,
+            generator=rng,
         )
-        
-        # Poll for completion
-        print("[SyntheticVideoGenerator] Waiting for Veo generation to complete...", flush=True)
-        while not operation.done:
-            time.sleep(15)
-            print(".", end="", flush=True)
-            try:
-                operation = client.operations.get(operation)
-            except Exception as e:
-                print(f"\n[Warning] Failed to refresh operation status: {e}. Retrying...")
-        print()
-        
-        if not operation.response or not operation.response.generated_videos:
-            raise RuntimeError("Video generation completed but no video was returned by the API.")
-            
-        video_data = operation.response.generated_videos[0]
-        
-        # Download video file
-        print(f"[SyntheticVideoGenerator] Downloading generated video file...")
-        downloaded_file_bytes = client.files.download(file=video_data.video)
-        
-        with open(dest_path, "wb") as f:
-            f.write(downloaded_file_bytes)
-            
-        print(f"[SyntheticVideoGenerator] Successfully generated and cached: {dest_path}")
+        frames = result.frames[0]
+        export_to_video(frames, str(dest_path), fps=FPS)
+
+        self._write_sidecar(
+            scenario_dir / f"{prompt_hash}.json",
+            scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps,
+        )
+        print(f"[SyntheticVideoGenerator] Generated and cached: {dest_path}")
         return dest_path
 
-    def generate_batch(self, count: int = 10, force: bool = False):
-        """Generate a batch of videos distributed round-robin across all scenario tags."""
+    def _write_sidecar(self, sidecar_path, scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps):
+        """Write the per-clip provenance sidecar consumed by registry.py."""
+        meta = {
+            "generator": GENERATOR_NAME,
+            "generator_version": self._generator_version(model_id),
+            "model_id": model_id,
+            "scenario_tag": scenario_tag,
+            "prompt_hash": prompt_hash,
+            "prompt": prompt,
+            "seed": int(seed),
+            "num_frames": NUM_FRAMES,
+            "fps": FPS,
+            "num_inference_steps": steps,
+            "resolution": f"{width}x{height}",
+            "prompts_version": self.version,
+        }
+        with open(sidecar_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+    def release(self):
+        """Free the pipeline so its footprint never co-resides with the Node 02
+        filtering / Layer-03 models (docs/01a §3)."""
+        if self._pipe is not None:
+            del self._pipe
+            self._pipe = None
+        gc.collect()
+        if torch is not None and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+    def generate_batch(self, count=3, force=False, smoke=False):
+        """Generate `count` clips round-robin across scenarios, then release the pipeline."""
         tags = list(self.scenarios.keys())
         results = []
-        for idx in range(count):
-            tag = tags[idx % len(tags)]
-            seed = idx // len(tags)
-            path = self.generate_video(tag, seed=seed, force=force)
-            results.append((tag, seed, path))
+        try:
+            for idx in range(count):
+                tag = tags[idx % len(tags)]
+                seed = idx // len(tags)
+                path = self.generate_video(tag, seed=seed, force=force, smoke=smoke)
+                results.append((tag, seed, path))
+        finally:
+            self.release()
         return results
 
-if __name__ == "__main__":
-    # If run as script, perform a dry-run check or generate the baseline set
+
+def _main():
+    parser = argparse.ArgumentParser(description="Wan2.1 synthetic validation video generator (Layer 1a).")
+    parser.add_argument("--smoke", action="store_true", help="Render one clip at reduced steps to validate wiring.")
+    parser.add_argument("--count", type=int, default=None, help="Generate N clips round-robin across scenarios.")
+    parser.add_argument("--force", action="store_true", help="Regenerate even if a cached clip exists.")
+    args = parser.parse_args()
+
     generator = SyntheticVideoGenerator()
-    print("Baseline scenario prompts:")
+
+    if args.smoke:
+        tag = next(iter(generator.scenarios))
+        print(f"[SyntheticVideoGenerator] Smoke render for scenario '{tag}' ({SMOKE_STEPS} steps)...")
+        path = generator.generate_video(tag, seed=0, force=args.force, smoke=True)
+        generator.release()
+        print(f"Smoke clip: {path}")
+        return
+
+    if args.count is not None:
+        results = generator.generate_batch(count=args.count, force=args.force)
+        for tag, seed, path in results:
+            print(f"  {tag} (seed={seed}) -> {path}")
+        return
+
+    # Default: dry-run — print the baseline prompts + hashes, no generation.
+    print("Baseline scenario prompts (dry-run; pass --smoke or --count to generate):")
     for tag in generator.scenarios:
         prompt = generator.get_prompt(tag)
         prompt_hash = generator.get_prompt_hash(prompt)
-        print(f"- {tag} (hash: {prompt_hash}):\n  {prompt.replace(chr(10), '  ' + chr(10))}\n")
+        indented = prompt.replace("\n", "\n  ")
+        print(f"- {tag} (hash: {prompt_hash}):\n  {indented}\n")
+
+
+if __name__ == "__main__":
+    _main()
