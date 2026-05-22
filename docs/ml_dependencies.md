@@ -48,13 +48,13 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **HSEmotion-PyTorch** | SOTA Emotion inference on bystander faces (Layer 03b) | ~50-100 MB (incl. `enet_b2_8` weights) | Python virtual environment | Native MPS acceleration on Apple Silicon; `pip install hsemotion`. Replaced Py-Feat, which was CPU-only on macOS. |
 | **MediaPipe** | Egocentric Hand Detection tracker | ~100 MB | Python virtual environment | |
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
-| **transformers** | Loading Hugging Face models like Depth Anything V2 and the Wan2.1 UMT5-XXL text encoder | ~150 MB | Python virtual environment | |
-| **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment | |
-| **diffusers** | `WanPipeline` for Layer 1a local text-to-video generation (Wan2.1) | ~50 MB | Python virtual environment | `pip install "diffusers>=0.33"`. New dependency introduced by Layer 1a. |
-| **imageio-ffmpeg** | Encodes generated frames to MP4 (`diffusers.utils.export_to_video`) | ~30 MB | Python virtual environment | Bundles an ffmpeg build; the system `ffmpeg` (§ 3) also satisfies this. |
-| **ftfy** | Prompt text normalization for the Wan2.1 UMT5-XXL encoder | ~1 MB | Python virtual environment | Recommended by the Wan2.1 model card. |
-| **accelerate** | Device placement + optional `enable_model_cpu_offload()` for the Wan2.1 pipeline | ~5 MB | Python virtual environment | Required only if CPU-offload is used as an OOM fallback (`docs/01a_synthetic_positive_generation.md` § 9.4). |
-| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, HSEmotion-PyTorch, etc. | ~2-3 GB | Python virtual environment | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
+| **transformers** | Loading Hugging Face models like Depth Anything V2 and the Wan2.1 UMT5-XXL text encoder | ~150 MB | Python virtual environment (`venv` / `gen_env`) | |
+| **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment (`venv` / `gen_env`) | |
+| **diffusers** | `WanPipeline` for Layer 1a local text-to-video generation (Wan2.1) | ~50 MB | `gen_env` virtual environment | `pip install "diffusers>=0.33"`. New dependency introduced by Layer 1a. |
+| **imageio-ffmpeg** | Encodes generated frames to MP4 (`diffusers.utils.export_to_video`) | ~30 MB | `gen_env` virtual environment | Bundles an ffmpeg build; the system `ffmpeg` (§ 3) also satisfies this. |
+| **ftfy** | Prompt text normalization for the Wan2.1 UMT5-XXL encoder | ~1 MB | `gen_env` virtual environment | Recommended by the Wan2.1 model card. |
+| **accelerate** | Device placement + optional `enable_model_cpu_offload()` for the Wan2.1 pipeline | ~5 MB | `gen_env` virtual environment | Required only if CPU-offload is used as an OOM fallback (`docs/01a_synthetic_positive_generation.md` § 9.4). |
+| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, HSEmotion-PyTorch, etc. | ~2-3 GB | Python virtual environment (`venv` / `gen_env`) | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
 | **SciPy** | Signal processing (Affirmation Gestures) | ~150 MB | Python virtual environment | |

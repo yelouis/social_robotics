@@ -36,5 +36,18 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 4. **Dehydrated Export** (`04_dehydrated_export.md`)
    - Merges the extraction schemas, removes any underlying raw data (pixels/audio), and prepares the output `.parquet` and dataset cards for Hugging Face or other platforms.
 
+## 🐍 Virtual Environments System
+
+To prevent dependency conflicts and support hardware-specific accelerators, the project organizes its Python execution environments into three distinct virtual environments:
+
+1. **`venv`** (Python 3.9.6):
+   - *Purpose*: The main project environment. It runs all general feature extraction layers (gaze, prosody, depth, SAM, pose), orchestrates pipeline execution, and runs the test suite.
+2. **`vlm_env`** (Python 3.9.6):
+   - *Purpose*: A dedicated environment for visual-language model (VLM) downloading and ingestion steps, isolating the complex dependencies of the Ego4D CLI tool from the main pipeline.
+3. **`gen_env`** (Python 3.14.3):
+   - *Purpose*: A dedicated modern environment for Layer 1a synthetic true-positive video generation using **Wan2.1-T2V**. It requires Python >= 3.10 to support the latest `diffusers` stack and optimize Apple Silicon MPS memory offloading for local video rendering.
+
+---
+
 ### Supporting Documents
 - **ML Dependencies** (`ml_dependencies.md`): Centralized registry of all model weights, libraries, and system tools required across the pipeline. Must be updated when any layer adds or changes a model dependency.

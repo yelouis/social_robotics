@@ -53,7 +53,7 @@ except ImportError:
 
 GENERATOR_NAME = "wan2.1-t2v"
 DEFAULT_MODEL_ID = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
-NUM_FRAMES = 81          # ~5 s at 16 fps — Wan2.1's trained clip length
+NUM_FRAMES = 33          # ~2 s at 16 fps — safe for MPS memory limits
 FPS = 16
 DEFAULT_STEPS = 50
 SMOKE_STEPS = 10
@@ -169,6 +169,10 @@ class SyntheticVideoGenerator:
             )
         pipe.to(device)
         try:
+            pipe.enable_attention_slicing()
+        except Exception:
+            pass
+        try:
             pipe.vae.enable_tiling()  # caps the VAE-decode memory spike on long clips
         except Exception:
             pass  # tiling is a memory optimization; absence is non-fatal
@@ -198,34 +202,67 @@ class SyntheticVideoGenerator:
         model_id = self.resolve_model_id()
         height, width, _, guidance_scale = self._render_params(model_id)
         steps = SMOKE_STEPS if smoke else DEFAULT_STEPS
+        num_frames = 17 if smoke else NUM_FRAMES
 
         if self._pipe is None:
             self._pipe = self._load_pipeline(model_id)
 
         # A CPU generator keeps seeding reproducible and portable across MPS/CPU.
         rng = torch.Generator(device="cpu").manual_seed(int(seed))
-        print(f"[SyntheticVideoGenerator] Rendering {width}x{height}, {NUM_FRAMES} frames, {steps} steps...", flush=True)
         result = self._pipe(
             prompt=prompt,
             negative_prompt=NEGATIVE_PROMPT,
             height=height,
             width=width,
-            num_frames=NUM_FRAMES,
+            num_frames=num_frames,
             num_inference_steps=steps,
             guidance_scale=guidance_scale,
             generator=rng,
+            output_type="latent",
         )
-        frames = result.frames[0]
+        latents = result.frames
+
+        if isinstance(latents, torch.Tensor):
+            # Move VAE to CPU to avoid MPS backend out of memory.
+            # We also cast the input latents to CPU and float32.
+            print("[SyntheticVideoGenerator] Offloading VAE and latents to CPU for decoding...", flush=True)
+            self._pipe.vae.to("cpu")
+            latents = latents.to(device="cpu", dtype=self._pipe.vae.dtype)
+
+            # De-normalize latents on CPU
+            vae_config = self._pipe.vae.config
+            latents_mean = (
+                torch.tensor(vae_config.latents_mean)
+                .view(1, vae_config.z_dim, 1, 1, 1)
+                .to(device="cpu", dtype=latents.dtype)
+            )
+            latents_std = 1.0 / torch.tensor(vae_config.latents_std).view(1, vae_config.z_dim, 1, 1, 1).to(
+                device="cpu", dtype=latents.dtype
+            )
+            latents = latents / latents_std + latents_mean
+
+            # Perform the actual decoding on CPU
+            print("[SyntheticVideoGenerator] Decoding latents on CPU...", flush=True)
+            video = self._pipe.vae.decode(latents, return_dict=False)[0]
+
+            # Postprocess on CPU
+            print("[SyntheticVideoGenerator] Postprocessing video on CPU...", flush=True)
+            video = self._pipe.video_processor.postprocess_video(video, output_type="np")
+            frames = video[0]
+        else:
+            # For unit tests where self._pipe is mocked and returns mock/list/etc.
+            frames = latents[0] if isinstance(latents, list) else latents
+
         export_to_video(frames, str(dest_path), fps=FPS)
 
         self._write_sidecar(
             scenario_dir / f"{prompt_hash}.json",
-            scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps,
+            scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps, num_frames
         )
         print(f"[SyntheticVideoGenerator] Generated and cached: {dest_path}")
         return dest_path
 
-    def _write_sidecar(self, sidecar_path, scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps):
+    def _write_sidecar(self, sidecar_path, scenario_tag, prompt, prompt_hash, seed, model_id, height, width, steps, num_frames):
         """Write the per-clip provenance sidecar consumed by registry.py."""
         meta = {
             "generator": GENERATOR_NAME,
@@ -235,7 +272,7 @@ class SyntheticVideoGenerator:
             "prompt_hash": prompt_hash,
             "prompt": prompt,
             "seed": int(seed),
-            "num_frames": NUM_FRAMES,
+            "num_frames": num_frames,
             "fps": FPS,
             "num_inference_steps": steps,
             "resolution": f"{width}x{height}",

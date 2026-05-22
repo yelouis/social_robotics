@@ -257,11 +257,12 @@ export HF_HUB_ENABLE_HF_TRANSFER=1       # optional: faster multi-GB pull (needs
 mkdir -p "/Volumes/Extreme SSD/tmp" "/Volumes/Extreme SSD/huggingface_cache"
 ```
 
-Install the new dependencies into the project venv (torch/torchvision are already present — see `docs/ml_dependencies.md` § 2):
+Create the dedicated generation virtual environment `gen_env` using Python 3.10+ (e.g. Python 3.14.3) and install dependencies there (including `torch` and `torchvision` which are required in this environment):
 
 ```bash
-pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg
-pip install hf_transfer   # optional, pairs with HF_HUB_ENABLE_HF_TRANSFER=1
+/opt/homebrew/bin/python3.14 -m venv gen_env
+gen_env/bin/pip install torch torchvision
+gen_env/bin/pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg hf_transfer
 ```
 
 > [!WARNING]
@@ -341,10 +342,10 @@ The negative prompt reinforces the three anti-stereo phrases in the positive sca
 ### 9.5 Verification (wire into the § 7 checks)
 ```bash
 # 1. MPS available on this host:
-python -c "import torch; assert torch.backends.mps.is_available(); print('MPS OK')"
+gen_env/bin/python -c "import torch; assert torch.backends.mps.is_available(); print('MPS OK')"
 
 # 2. one-clip smoke render (--smoke forces num_inference_steps=10), then open in QuickTime:
-PYTHONPATH=src python -m dataset_acquisition.synthetic.generator --smoke
+PYTHONPATH=src gen_env/bin/python -m dataset_acquisition.synthetic.generator --smoke
 
 # 3. confirm the clip + sidecar landed on the SSD and nothing leaked to the internal disk:
 ls "/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/handoff/"   # {hash}.mp4 + {hash}.json
@@ -372,7 +373,7 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
   - *Pros*: zero local setup; no Python/version friction.
   - *Cons*: reintroduces a per-clip API charge and an API key — defeats the zero-API-cost goal that motivated the local-model switch.
 
-Your selection: _____
+Your selection: Proceed with Option A. Also, can it be documented somewhere (maybe in project overview), how many venv we have and why we have that many of them?
 
 ---
 
@@ -386,5 +387,24 @@ Your selection: _____
 **Option B**: **Run the 14B smoke render directly** (`PYTHONPATH=src python -m dataset_acquisition.synthetic.generator --smoke`).
   - *Pros*: validates the exact production path and params in one step.
   - *Cons*: ~10-30 min per attempt, so any wrong API name/param costs a slow iteration cycle.
+
+Your selection: Proceed with Option A.
+
+---
+
+### Issue 3: Smoke test fails to complete due to Out of Memory (OOM) SIGKILL (Exit Code 137) during CPU VAE decoding
+**Status**: ⚠️ Confirmed Unresolved — Executing the smoke test command `PYTHONPATH=src SR_MODEL_TIER=small gen_env/bin/python -m dataset_acquisition.synthetic.generator --smoke` runs the denoising steps on MPS but is terminated with exit code 137 during the `Decoding latents on CPU...` phase. This is caused by unified memory/RAM exhaustion on the host, leading the macOS kernel to issue a SIGKILL to reclaim memory.
+
+**Option A (recommended)**: **Pipeline Memory Reclamation before VAE Decode** — Modify `generator.py` to extract `vae` and `video_processor`, delete the `_pipe` object, and force garbage collection and MPS cache clearing before CPU VAE decoding. This reclaims ~14 GB of system memory, keeping peak usage well within the host's physical constraints.
+  - *Pros*: Completely fixes the OOM crash on memory-constrained local hosts; maintains the zero-API-cost local generation design.
+  - *Cons*: If generating a batch of cache-miss videos, the pipeline will need to reload for each clip, introducing load-time overhead (approx. 48s per clip).
+
+**Option B**: **Reduce Generation Frame Count or Resolution** — Lower the video resolution to `480x832` or reduce the frames to `9` for validation clips to limit active activation size.
+  - *Pros*: Reduces peak activation memory requirements.
+  - *Cons*: Reduces spatial/temporal quality, potentially causing the downstream social presence filter to reject the synthetic positives.
+
+**Option C**: **Transition to a Hosted/Cloud Generation API** — Use Fal.ai or Replicate to run the pipeline, removing the memory footprint from the local host entirely.
+  - *Pros*: Zero local hardware resources required.
+  - *Cons*: Reintroduces API keys, internet dependencies, and per-clip costs.
 
 Your selection: _____
