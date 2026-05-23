@@ -24,6 +24,9 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 1. **Dataset Acquisition** (`01_dataset_acquisition.md`)
    - Initial ingestion point to pull raw video sources (e.g., from Ego4d, EPIC-KITCHENS, Charades-Ego, or EgoProceL) to the local disk.
 
+1a. **Synthetic True-Positive Generation** (`01a_synthetic_positive_generation.md`)
+   - A validation stream generating synthetic egocentric videos with guaranteed bystander reactions locally using **Wan2.1-T2V** to test for Layer 02 filtering regressions.
+
 2. **Filtering & Task Labeling** (`02_filtering_and_labeling.md`)
    - *Social Presence Filter*: We strictly filter the dataset for videos containing *more than one person* (excluding the POV cameraperson). 
    - *Task Labeling*: Analyzes what task the POV person is currently undertaking. The video is discarded if there is no clear task being performed.

@@ -28,7 +28,7 @@ The SAF pipeline is built for scale and extensibility, processing Terabytes of v
 Automated ingestion of raw egocentric video sources. Due to licensing, we maintain a "Download-Filter-Discard" strategy, only persisting what is necessary for metadata extraction.
 
 ### 1a. Synthetic True-Positive Generation
-A small, controlled corpus of synthetic egocentric videos with a guaranteed bystander reaction, generated via Google's Veo API at a 1-per-50 ratio to the Ego4D slice. These videos are filter-QA fixtures only — they are tagged `dataset: "synthetic_validation"`, exercised through Layer 02 to verify the social-presence gates are still detecting true positives, and explicitly gated out of every Layer 03 module and the dehydrated export.
+A small, controlled corpus of synthetic egocentric videos with a guaranteed bystander reaction, generated locally via **Wan2.1-T2V** (or small-tier fallback) running on the host's GPU/MPS backend. We generate or include exactly 1 to 3 synthetic videos in total per E2E run (regardless of the Ego4D slice size). These videos are filter-QA fixtures only — they are tagged `dataset: "synthetic_validation"`, exercised through Layer 02 to verify the social-presence gates are still detecting true positives, and explicitly gated out of every Layer 03 module and the dehydrated export.
 
 ### 2. Filtering & Task Labeling
 We strictly filter for "Socially Relevant" moments:
