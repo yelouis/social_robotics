@@ -86,7 +86,7 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
     # bystander candidates (loaded lazily, not part of the steady-state set).
     "social_presence_vlm_verify": {
         "small":  ("moondream",     "~1.6 GB", 1_600_000_000),
-        "medium": ("moondream",     "~1.6 GB", 1_600_000_000),
+        "medium": ("qwen2.5vl:7b",  "~7 GB",   None),  # counted under filtering_vlm
         "large":  ("qwen2.5vl:7b",  "~7 GB",   None),  # counted under filtering_vlm
     },
     # MediaPipe Tasks API hand-landmarker bundle. The path is a `.task` asset

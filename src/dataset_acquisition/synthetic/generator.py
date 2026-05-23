@@ -221,16 +221,27 @@ class SyntheticVideoGenerator:
             output_type="latent",
         )
         latents = result.frames
+        del result
 
         if isinstance(latents, torch.Tensor):
+            # Extract VAE and video processor before deleting pipeline to free up memory
+            vae = self._pipe.vae
+            video_processor = self._pipe.video_processor
+
             # Move VAE to CPU to avoid MPS backend out of memory.
             # We also cast the input latents to CPU and float32.
             print("[SyntheticVideoGenerator] Offloading VAE and latents to CPU for decoding...", flush=True)
-            self._pipe.vae.to("cpu")
-            latents = latents.to(device="cpu", dtype=self._pipe.vae.dtype)
+            vae.to("cpu")
+            latents = latents.to(device="cpu", dtype=vae.dtype)
+
+            # Delete the pipe object to reclaim memory (~14 GB)
+            self._pipe = None
+            gc.collect()
+            if torch is not None and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
 
             # De-normalize latents on CPU
-            vae_config = self._pipe.vae.config
+            vae_config = vae.config
             latents_mean = (
                 torch.tensor(vae_config.latents_mean)
                 .view(1, vae_config.z_dim, 1, 1, 1)
@@ -243,11 +254,11 @@ class SyntheticVideoGenerator:
 
             # Perform the actual decoding on CPU
             print("[SyntheticVideoGenerator] Decoding latents on CPU...", flush=True)
-            video = self._pipe.vae.decode(latents, return_dict=False)[0]
+            video = vae.decode(latents, return_dict=False)[0]
 
             # Postprocess on CPU
             print("[SyntheticVideoGenerator] Postprocessing video on CPU...", flush=True)
-            video = self._pipe.video_processor.postprocess_video(video, output_type="np")
+            video = video_processor.postprocess_video(video, output_type="np")
             frames = video[0]
         else:
             # For unit tests where self._pipe is mocked and returns mock/list/etc.

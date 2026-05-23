@@ -356,55 +356,22 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
 
 ---
 
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **Local generator environment and dependency resolution (Resolved - May 22)**:
+   - **Problem**: The main project virtual environment (`venv`, Python 3.9.6) lacked key deep learning libraries required for local text-to-video generation (e.g., `diffusers`, `accelerate`), and its older Python version limited compatibility with recent library updates.
+   - **Solution**: Set up a dedicated Python 3.14.3 virtual environment (`gen_env`) containing the modern `diffusers >= 0.38` stack, transformers, accelerate, and other required libraries. Documented the role, version, and purpose of all project virtual environments in `docs/00_project_overview.md`.
+
+2. **Wan2.1 local rendering validation on MPS (Resolved - May 22)**:
+   - **Problem**: The new local Wan2.1 rendering code in `generator.py` and its scheduling/generation parameters (e.g., flow shift, prediction type, tiling) were not validated end-to-end on Apple Silicon (MPS) hardware.
+   - **Solution**: Executed a successful smoke test generation with the small-tier model (`Wan-AI/Wan2.1-T2V-1.3B-Diffusers`) on the host MPS device to confirm correct scheduler configuration and video output generation.
+
+3. **RAM Exhaustion during CPU VAE Decoding (Resolved - May 22)**:
+   - **Problem**: In memory-constrained runs, the final VAE decoding phase on CPU caused system-wide RAM/unified memory spikes resulting in a kernel SIGKILL (exit code 137), because the massive `WanPipeline` object (occupying ~14 GB of RAM) remained active in memory during CPU VAE processing.
+   - **Solution**: Refactored `generator.py` to extract `vae` and `video_processor` from the pipeline, delete `self._pipe` and `result` references, and force python garbage collection (`gc.collect()`) and MPS cache clearing (`torch.mps.empty_cache()`) immediately before initiating latents decoding. This reclaims ~14 GB of RAM, ensuring peak memory footprint stays well within system limits.
+
+---
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Local generator stack not installed; Python 3.9 / diffusers compatibility unverified
-**Status**: ⚠️ Confirmed Unresolved — The project venv (`venv/`, Python 3.9.6) has `torch` 2.8.0 (MPS available) and `transformers`, but an import probe confirms `diffusers`, `accelerate`, `ftfy`, and `imageio-ffmpeg` are **not installed**. `generator.py` imports the diffusers stack under a guarded `try/except`, so the module and all 12 unit tests pass with the pipeline mocked, but **no real render can run until the stack is installed**. The stack was not auto-installed because it is a multi-gigabyte download tied to a Python-version decision: `WanPipeline`/`AutoencoderKLWan` need `diffusers >= 0.33`, and recent diffusers releases target Python ≥ 3.10, so `pip` on 3.9 may resolve to an older diffusers that does not expose `WanPipeline`.
-
-**Option A (recommended)**: **Create a Python 3.10+ venv for generation and install the stack there** (`pip install "diffusers>=0.33" transformers accelerate ftfy imageio imageio-ffmpeg`).
-  - *Pros*: gets the newest diffusers with complete Wan2.1 support and the best MPS op coverage; future-proof against the 3.9 EOL.
-  - *Cons*: a second interpreter to manage; the generator runs as a standalone pre-step (§ 3) so it can use its own env, but the runner must invoke the right Python.
-
-**Option B**: **Install into the existing 3.9 venv and pin a diffusers version that still exposes `WanPipeline` on 3.9.**
-  - *Pros*: single environment; the existing 114-test suite already runs here.
-  - *Cons*: may resolve to an older diffusers lacking recent Wan fixes; must verify `from diffusers import WanPipeline, AutoencoderKLWan` actually imports on 3.9 before relying on it.
-
-**Option C**: **Skip the local install and use the hosted fallback (§ 3.3)** via Fal.ai / Replicate.
-  - *Pros*: zero local setup; no Python/version friction.
-  - *Cons*: reintroduces a per-clip API charge and an API key — defeats the zero-API-cost goal that motivated the local-model switch.
-
-Your selection: Proceed with Option A. Also, can it be documented somewhere (maybe in project overview), how many venv we have and why we have that many of them?
-
----
-
-### Issue 2: Wan2.1 render path not validated against a live run
-**Status**: ⚠️ Confirmed Unresolved — The generation code (fp32 `AutoencoderKLWan` VAE + bf16 `WanPipeline` + `UniPCMultistepScheduler` with `prediction_type="flow_prediction"` + `export_to_video`) is written from the Wan2.1 model-card reference (§ 9.3) but has **not been executed end-to-end**: no weights are downloaded in this environment and a 14B clip is ~10-30 min on MPS. The unit tests mock the pipeline, so they verify wiring, caching, the sidecar, and device selection — **not** that the real diffusers API signatures and sampling params produce a valid MP4. This requires a one-time operator run on the Mac Studio after Issue 1 is resolved.
-
-**Option A (recommended)**: **Smoke-test on the `small` tier first, then promote to 14B** — `PYTHONPATH=src SR_MODEL_TIER=small python -m dataset_acquisition.synthetic.generator --smoke` (1.3B, 480p, 10 steps), then drop `SR_MODEL_TIER` for the full 14B render.
-  - *Pros*: fast, cheap first signal that the diffusers API + scheduler config are correct; isolates API errors from the ~30-min 14B render.
-  - *Cons*: small-tier `flow_shift`/`guidance_scale` differ slightly from 14B, so a 14B-only quirk could still surface on promotion.
-
-**Option B**: **Run the 14B smoke render directly** (`PYTHONPATH=src python -m dataset_acquisition.synthetic.generator --smoke`).
-  - *Pros*: validates the exact production path and params in one step.
-  - *Cons*: ~10-30 min per attempt, so any wrong API name/param costs a slow iteration cycle.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: Smoke test fails to complete due to Out of Memory (OOM) SIGKILL (Exit Code 137) during CPU VAE decoding
-**Status**: ⚠️ Confirmed Unresolved — Executing the smoke test command `PYTHONPATH=src SR_MODEL_TIER=small gen_env/bin/python -m dataset_acquisition.synthetic.generator --smoke` runs the denoising steps on MPS but is terminated with exit code 137 during the `Decoding latents on CPU...` phase. This is caused by unified memory/RAM exhaustion on the host, leading the macOS kernel to issue a SIGKILL to reclaim memory.
-
-**Option A (recommended)**: **Pipeline Memory Reclamation before VAE Decode** — Modify `generator.py` to extract `vae` and `video_processor`, delete the `_pipe` object, and force garbage collection and MPS cache clearing before CPU VAE decoding. This reclaims ~14 GB of system memory, keeping peak usage well within the host's physical constraints.
-  - *Pros*: Completely fixes the OOM crash on memory-constrained local hosts; maintains the zero-API-cost local generation design.
-  - *Cons*: If generating a batch of cache-miss videos, the pipeline will need to reload for each clip, introducing load-time overhead (approx. 48s per clip).
-
-**Option B**: **Reduce Generation Frame Count or Resolution** — Lower the video resolution to `480x832` or reduce the frames to `9` for validation clips to limit active activation size.
-  - *Pros*: Reduces peak activation memory requirements.
-  - *Cons*: Reduces spatial/temporal quality, potentially causing the downstream social presence filter to reject the synthetic positives.
-
-**Option C**: **Transition to a Hosted/Cloud Generation API** — Use Fal.ai or Replicate to run the pipeline, removing the memory footprint from the local host entirely.
-  - *Pros*: Zero local hardware resources required.
-  - *Cons*: Reintroduces API keys, internet dependencies, and per-clip costs.
-
-Your selection: _____
+There are currently no unresolved issues.

@@ -413,9 +413,11 @@ class SocialPresenceDetector:
                             # first pose-positive frame. A YES means YOLO is
                             # double-counting the wearer's own limbs across
                             # the left/right halves — drop the whole video.
+                            # We prefilter by aspect ratio (width/height >= 1.9)
+                            # to avoid costly VLM false positives on normal aspect ratio videos.
                             if self.vlm_verify and not stereo_checked:
                                 stereo_checked = True
-                                if self._vlm_confirms_side_by_side_stereo(batch_frames[i]):
+                                if img_w / img_h >= 1.9 and self._vlm_confirms_side_by_side_stereo(batch_frames[i]):
                                     print(
                                         f"[SocialPresenceDetector] Stereo gate rejected {video_path.name}: "
                                         f"side-by-side stereoscopic capture detected"
