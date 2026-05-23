@@ -53,9 +53,15 @@ except ImportError:
 
 GENERATOR_NAME = "wan2.1-t2v"
 DEFAULT_MODEL_ID = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
-NUM_FRAMES = 33          # ~2 s at 16 fps — safe for MPS memory limits
+# ~5 s at 16 fps (doc §3.1/§9.3 committed-fixture length). 81 frames is the
+# minimum that yields >=2 sampled frames under Layer 02's 1/3-fps sampler
+# (frame_interval=48 -> samples at idx 0 and 48), so the synthetic can clear
+# the detector's min_consistency=2 temporal gate. The prior value (33 -> ~2 s)
+# yielded a single sampled frame and was structurally unable to pass the
+# filter. Overridable via SR_SYNTH_NUM_FRAMES for memory-constrained hosts.
+NUM_FRAMES = int(os.getenv("SR_SYNTH_NUM_FRAMES", "81"))
 FPS = 16
-DEFAULT_STEPS = 50
+DEFAULT_STEPS = int(os.getenv("SR_SYNTH_STEPS", "50"))
 SMOKE_STEPS = 10
 
 # Reinforces the three anti-stereo phrases in the positive scaffold

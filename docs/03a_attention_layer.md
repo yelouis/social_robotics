@@ -112,5 +112,17 @@ _All previously tracked issues have been successfully integrated into the main a
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_None at this time — all tracked issues have transitioned to the Resolved section above._
+### Issue 1: Redundant Video Decoding for Multiple Bystanders
+**Status**: ⚠️ Confirmed Unresolved — Verified in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py#L208-L277): the pipeline loops over each tracked bystander separately, resulting in the video file being opened, decoded, and grabbed from frame 0 multiple times (once per bystander).
+
+**Option A (recommended)**: **Single-Pass Video Decoding with Batched Model Inference** — Modify `_track_and_score` to decode the video file once, extract the cropped face frames for all active bystanders at the current frame index, and pass them as a batch to a single forward pass of L2CS-Net.
+  - *Pros*: Speeds up video I/O and frame decoding overhead by N-times (where N is the number of bystanders in the clip); leverages PyTorch batched tensor execution on Apple Silicon (MPS).
+  - *Cons*: Requires reconciling bystander-specific adaptive sampling strides (e.g., by sampling at the union of required timestamps).
+
+**Option B**: **In-Memory Frame Caching** — Cache decoded video frames or bystander crops in memory or temporary files so subsequent bystander loops read from memory.
+  - *Pros*: Avoids re-decoding the video.
+  - *Cons*: Consumes significant RAM/disk if frames are cached, increasing memory pressure on 24GB hosts.
+
+Your selection: _____
+
 
