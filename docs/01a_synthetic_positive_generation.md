@@ -119,11 +119,11 @@ A hosted clip promoted to a committed fixture must still pass the § 7 per-video
 
 ## 4. Generation Ratio and Budget
 
-**Policy**: Generate or include exactly **1 to 3 synthetic videos** in total per E2E run (regardless of the Ego4D slice size), rotating scenario tags round-robin. With local generation the binding constraint is no longer an API quota but **generation wall-clock time** (each Wan2.1-14B clip costs ~10-30 min on the M4 Max) plus the one-time weight download; caching (below) means steady-state runs pay neither. 
+**Policy**: Maintain a small fixed set of **1 to 3 synthetic videos** in total (regardless of the Ego4D slice size), rotating scenario tags round-robin. These are **generated once, in isolation** (the standalone generator step), saved to the Extreme SSD, and **referenced thereafter**: every subsequent E2E run reads the saved clips from the registry and does **not** invoke the generator. Whether the saved fixtures are exercised through Layer 02 on a given run is controlled by the `run_synthetic_qa` toggle (`SAF_RUN_SYNTHETIC_QA`, default on; see § 5.1). Re-generation happens only when an operator explicitly re-runs the generator — e.g. after a prompt-scaffold change bumps the `prompts.json` `version`, invalidating the hash. With local generation the binding constraint is no longer an API quota but **generation wall-clock time** (each Wan2.1 clip costs ~10-30 min on the M4 Max) plus the one-time weight download — costs the generate-once policy pays exactly once, not per run.
 
 **Cost model (local)**:
 - **One-time**: the Wan2.1 weights (~40 GB for 14B incl. text encoder) download once into `HF_HOME` on the Extreme SSD. No per-clip charge, no key, no quota.
-- **Per-run**: only cache *misses* render; a run with unchanged prompts is 100 % cache hits and consumes ~0 GPU time.
+- **Per E2E run**: zero generation — the run references the saved clips on the SSD via the registry. The generator is invoked only by the explicit one-time generation step, where only cache *misses* render (an unchanged prompt reuses the cached clip and renders nothing).
 - **Time budget**: at 1-3 clips/run and ~10-30 min/clip, a full cold regeneration of the round-robin set is bounded to roughly an hour — acceptable as an occasional pre-step, which is why the 1-3 cap is retained even though no quota forces it.
 
 **Cache policy**: Generated clips are persisted to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{scenario_tag}/{prompt_hash}.mp4` and re-used across runs. Generation is idempotent per (scenario_tag, prompt_text) hash — a prompt change re-generates, an unchanged prompt reuses the cached clip and renders nothing (zero GPU time). The cache is cleared explicitly only when scenario taxonomy or prompt scaffold changes (tracked via the prompts JSON's `version` field).
@@ -163,6 +163,7 @@ Concrete code-level changes have been fully implemented across the following fil
   - Extended `_SUPPORTED_DATASETS = ("ego4d", "synthetic_validation")`.
   - Bypasses the `_is_likely_solo_by_metadata` gate when `entry.get("synthetic") is True` (synthetics have no Ego4D metadata).
   - Tags the per-video output record with `{"synthetic": True, "scenario_tag": entry["scenario_tag"], "expected_pass": True}` so downstream report generators can compute the true-positive rate per scenario.
+  - Gated by the `run_synthetic_qa` toggle (constructor arg, backed by `SAF_RUN_SYNTHETIC_QA`, default on). The saved synthetic fixtures are referenced from the Extreme SSD and exercised through the filter only when the toggle is enabled; when off, `_is_supported_dataset` excludes `synthetic_validation` entries so the run reflects the raw corpus only. Generation itself is a separate one-time step (§4) and is never invoked by the E2E run.
 - `src/shared/social_presence.py`:
   - Synthetics route through the same YOLO+VLM stack as Ego4D, serving as a clean QA control group.
 - All Layer 03 modules (`src/layer_03*`):
@@ -370,8 +371,47 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
    - **Problem**: In memory-constrained runs, the final VAE decoding phase on CPU caused system-wide RAM/unified memory spikes resulting in a kernel SIGKILL (exit code 137), because the massive `WanPipeline` object (occupying ~14 GB of RAM) remained active in memory during CPU VAE processing.
    - **Solution**: Refactored `generator.py` to extract `vae` and `video_processor` from the pipeline, delete `self._pipe` and `result` references, and force python garbage collection (`gc.collect()`) and MPS cache clearing (`torch.mps.empty_cache()`) immediately before initiating latents decoding. This reclaims ~14 GB of RAM, ensuring peak memory footprint stays well within system limits.
 
+4. **Synthetic QA decoupled from the E2E run + opt-out toggle (Resolved - May 22)**:
+   - **Problem**: Layer 1a was specified to run as part of every E2E pass (rendering on a prompt-hash cache miss, no-op on a hit). This coupled slow, memory-heavy local Wan2.1 generation (~30 min/clip on the M4 Max MPS backend, and mutually exclusive with the Node 02 qwen2.5vl/YOLO resident set) to every E2E run, and there was no first-class switch to run the corpus filter *without* the synthetic QA fixtures. Re-rendering the known-positive fixtures on each run is wasted work — they are deterministic QA assets, not corpus data.
+   - **Solution**: Decoupled generation from filtering. Generation is now an explicit one-time isolated step (`python -m dataset_acquisition.synthetic.generator --count N`) that persists clips to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{tag}/{hash}.mp4`; the E2E run *references* those saved clips via the registry and never invokes the generator. Added a `run_synthetic_qa` constructor flag to `FilteringPipeline` (backed by the `SAF_RUN_SYNTHETIC_QA` env var, default on); when disabled, `_is_supported_dataset` excludes `synthetic_validation` entries so the pass reflects the raw corpus only, while Ego4D intake is unaffected. Verified: default includes the saved fixtures, `SAF_RUN_SYNTHETIC_QA=0` / `run_synthetic_qa=False` skips them.
+
 ---
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-There are currently no unresolved issues.
+### Issue 1: Wan2.1-14B generation OOMs at the first denoise step on the 64 GB MPS host
+**Status**: ⚠️ Confirmed Unresolved — Verified in the May 22 E2E run (`e2e_reports/2026_05_22/`): the first-ever live 14B render aborted at denoise step 0 with the Metal assertion `Failed to allocate private MTLBuffer for size 51840000000` (~48 GiB), exit 134/SIGABRT. The 14B path was never live-validated before this — Resolved Issue #2 only exercised the 1.3B smoke — so the doc's "fits on the 64 GB Studio with little headroom" (§ 9.4) is empirically false on this host. Root cause: the Wan DiT materializes the full self-attention score matrix and MPS has no memory-efficient/flash-attention kernel, so the buffer (O(seq²), seq ∝ latent-frames × patched spatial tokens) at 720p exceeds the Metal working-set limit regardless of `enable_attention_slicing()` (which the Wan attention processor ignores).
+
+**Option A (recommended)**: **Pin the small tier (1.3B / 480p) as the only supported generator on this host and mark 14B unsupported on 64 GB MPS** until a memory-efficient attention path exists. Update `_MODEL_TIERS["synthetic_generator"]` so `medium` resolves to the 1.3B repo on Apple-Silicon hosts (or gate by a capability probe).
+  - *Pros*: Deterministic, no further OOM aborts; matches the only configuration that reaches the decode stage today.
+  - *Cons*: Lower fidelity than the 14B fixtures the doc specifies; deviates from the documented tier mapping.
+
+**Option B**: **Force 14B to render at 480p** by overriding the 720p branch in `_render_params` so the attention buffer shrinks ~5×.
+  - *Pros*: Keeps the higher-capacity 14B weights; smaller attention buffer may clear the Metal limit at low frame counts.
+  - *Cons*: Still collides with Issue 2's decode wall; loses the 720p fidelity that motivated 14B; unvalidated.
+
+**Option C**: **Install a memory-efficient attention processor for the Wan DiT on MPS** (sliced / SDPA-backed) so the score matrix is never fully materialized.
+  - *Pros*: Addresses the root cause; would also relax Issue 2.
+  - *Cons*: Requires diffusers/attention-processor work and MPS-kernel verification; highest engineering effort.
+
+Your selection: _____
+
+---
+
+### Issue 2: CPU VAE decode OOM-kills (SIGKILL 137) at every filter-viable clip length — Resolved Issue #3 is a false resolution
+**Status**: ⚠️ Confirmed Unresolved — Verified across four May 22 render attempts (`e2e_reports/2026_05_22/`): 1.3B/480p at 81 frames OOMs the MPS attention buffer at denoise step 0 (~48 GiB MTLBuffer); at 49 frames the process is SIGKILL-137'd at the end of denoise / start of decode; at 33 frames (the value the `NUM_FRAMES` comment calls "safe for MPS memory limits") it completes all denoise steps and is then SIGKILL-137'd **during** `"Decoding latents on CPU..."` in `generator.py`. **No clip rendered end-to-end this session.** Resolved Issue #3 claims the CPU-decode OOM was fixed by deleting `self._pipe` + `gc.collect()` + `torch.mps.empty_cache()` before decode, but it was only validated on a 17-frame smoke; at ≥33 frames the decode still exhausts memory. The binding consequence: Layer 02's `min_consistency=2` gate needs ≥2 sampled frames, which at 1/3 fps requires a ≥49-frame clip (or a lower export fps — see below), and every clip at or above the decode wall is killed — so the synthetic true-positive QA stream could not be produced on this host.
+Root cause: the Wan VAE decoder materializes large full-resolution conv3d intermediate activations across all decoded frames; on unified memory the MPS denoise buffers are not promptly returned to the OS by `empty_cache()`, so they compound with the CPU-side decode allocation and cross the jetsam threshold even with ~50 GB nominally free at process start.
+
+**Option A (recommended)**: **Temporal-chunked VAE decode** — decode the latent sequence in small overlapping windows (e.g. 3–4 latent frames with 1-frame receptive-field overlap, blended at the seams) and concatenate, so decode peak memory is bounded by the window size, independent of total clip length.
+  - *Pros*: Fixes the binding blocker for any clip length; keeps 480p fidelity; the only option that makes ≥49-frame clips renderable.
+  - *Cons*: Non-trivial: must handle the Wan VAE's temporal receptive-field overlap to avoid visible seams; needs validation that chunk boundaries don't corrupt motion.
+
+**Option B**: **Render at lower spatial resolution** (e.g. 320×576 or 256×448) so decode activations shrink ~2–4×.
+  - *Pros*: One-line change; may let a short clip decode without chunking.
+  - *Cons*: Lower resolution degrades the bystander rendering the gate must detect; may still OOM at longer (filter-viable) lengths; unverified.
+
+**Option C**: **Decode-then-sample mismatch workaround (export fps)** — render the decode-safe 33-frame clip and export at 8 fps (implemented: `SR_SYNTH_FPS`), so a ~4 s clip yields the 2 frames the 1/3-fps sampler needs. This addresses only the *length/sampler* tension, not the decode OOM, so it must be paired with A or B.
+  - *Pros*: Already implemented; lets a successfully-decoded short clip clear the temporal gate without a longer render.
+  - *Cons*: Does nothing for the decode OOM on its own; produces slow-motion fixtures (8 fps vs Wan's trained 16 fps).
+
+Your selection: _____

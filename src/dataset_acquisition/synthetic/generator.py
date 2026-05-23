@@ -60,7 +60,13 @@ DEFAULT_MODEL_ID = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
 # yielded a single sampled frame and was structurally unable to pass the
 # filter. Overridable via SR_SYNTH_NUM_FRAMES for memory-constrained hosts.
 NUM_FRAMES = int(os.getenv("SR_SYNTH_NUM_FRAMES", "81"))
-FPS = 16
+# Export fps. Wan2.1 is trained at 16 fps, but on memory-constrained MPS hosts
+# the renderable clip length is capped (the CPU VAE decode of >~33 frames
+# OOM-kills, and the MPS attention buffer OOMs at >~49 frames). Exporting a
+# safe-length 33-frame clip at a lower fps lengthens its *video-time* duration
+# so Layer 02's 1/3-fps sampler still picks >=2 frames (the min_consistency
+# gate) without a longer — un-renderable — clip. Overridable via SR_SYNTH_FPS.
+FPS = int(os.getenv("SR_SYNTH_FPS", "16"))
 DEFAULT_STEPS = int(os.getenv("SR_SYNTH_STEPS", "50"))
 SMOKE_STEPS = 10
 

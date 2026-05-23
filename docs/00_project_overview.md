@@ -25,7 +25,8 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
    - Initial ingestion point to pull raw video sources (e.g., from Ego4d, EPIC-KITCHENS, Charades-Ego, or EgoProceL) to the local disk.
 
 1a. **Synthetic True-Positive Generation** (`01a_synthetic_positive_generation.md`)
-   - A validation stream generating synthetic egocentric videos with guaranteed bystander reactions locally using **Wan2.1-T2V** to test for Layer 02 filtering regressions.
+   - A validation stream of synthetic egocentric videos with guaranteed bystander reactions, generated locally with **Wan2.1-T2V**, used to catch Layer 02 filtering regressions on known true positives (the canonical "more than one person in frame" case).
+   - **Generate once, reference thereafter**: the clips are rendered a single time in a standalone step and saved to the Extreme SSD; each E2E run *references* the saved clips via the registry rather than regenerating them. A toggle (`SAF_RUN_SYNTHETIC_QA`, default on) selects whether the Layer 1a QA check is included on a given run.
 
 2. **Filtering & Task Labeling** (`02_filtering_and_labeling.md`)
    - *Social Presence Filter*: We strictly filter the dataset for videos containing *more than one person* (excluding the POV cameraperson). 
