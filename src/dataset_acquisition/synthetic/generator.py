@@ -264,13 +264,63 @@ class SyntheticVideoGenerator:
             )
             latents = latents / latents_std + latents_mean
 
-            # Perform the actual decoding on CPU
-            print("[SyntheticVideoGenerator] Decoding latents on CPU...", flush=True)
-            video = vae.decode(latents, return_dict=False)[0]
+            # Perform the actual decoding on CPU in temporal chunks to avoid OOM
+            print("[SyntheticVideoGenerator] Decoding latents on CPU in temporal chunks...", flush=True)
+            F = latents.shape[2]
+            chunk_size = 4
+            overlap_latents = 1
+            overlap_frames = 4 * (overlap_latents - 1) + 1 if overlap_latents > 1 else 1
+
+            F_video_total = 4 * (F - 1) + 1
+            H_video = latents.shape[3] * 8
+            W_video = latents.shape[4] * 8
+
+            reconstructed_video = torch.zeros((1, 3, F_video_total, H_video, W_video), dtype=torch.float32, device="cpu")
+            weight_accumulator = torch.zeros((F_video_total,), dtype=torch.float32, device="cpu")
+
+            start = 0
+            while start < F:
+                end = min(start + chunk_size, F)
+                if F - start < chunk_size and start > 0:
+                    start = max(0, F - chunk_size)
+                    end = F
+
+                latent_chunk = latents[:, :, start:end]
+                with torch.no_grad():
+                    video_chunk = vae.decode(latent_chunk, return_dict=False)[0]
+
+                F_chunk = video_chunk.shape[2]
+                weights = torch.ones((F_chunk,), dtype=torch.float32, device="cpu")
+                if start > 0 and overlap_frames > 0:
+                    for v in range(overlap_frames):
+                        if overlap_frames == 1:
+                            weights[v] = 0.5
+                        else:
+                            weights[v] = v / (overlap_frames - 1)
+                if end < F and overlap_frames > 0:
+                    for v in range(overlap_frames):
+                        idx = F_chunk - 1 - v
+                        if overlap_frames == 1:
+                            weights[idx] = 0.5
+                        else:
+                            weights[idx] = v / (overlap_frames - 1)
+
+                for v in range(F_chunk):
+                    abs_idx = 4 * start + v
+                    w = weights[v]
+                    reconstructed_video[0, :, abs_idx] += w * video_chunk[0, :, v].to(device="cpu", dtype=torch.float32)
+                    weight_accumulator[abs_idx] += w
+
+                if end == F:
+                    break
+                start += chunk_size - overlap_latents
+
+            weight_accumulator = torch.clamp(weight_accumulator, min=1e-5)
+            reconstructed_video = reconstructed_video / weight_accumulator.view(1, 1, -1, 1, 1)
 
             # Postprocess on CPU
             print("[SyntheticVideoGenerator] Postprocessing video on CPU...", flush=True)
-            video = video_processor.postprocess_video(video, output_type="np")
+            video = video_processor.postprocess_video(reconstructed_video, output_type="np")
             frames = video[0]
         else:
             # For unit tests where self._pipe is mocked and returns mock/list/etc.

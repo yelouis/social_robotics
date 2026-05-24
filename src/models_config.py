@@ -215,7 +215,18 @@ def get_model(layer_key: str, tier: Optional[str] = None) -> str:
             f"src/models_config.py before calling get_model()."
         )
     tier = tier or get_active_tier()
-    return _resolve_ollama_tag(_MODEL_TIERS[layer_key][tier][0])
+    model_id = _MODEL_TIERS[layer_key][tier][0]
+    if layer_key == "synthetic_generator" and tier in ("medium", "large"):
+        is_mps = False
+        try:
+            import torch
+            is_mps = torch.backends.mps.is_available()
+        except ImportError:
+            import platform
+            is_mps = platform.system() == "Darwin" and platform.machine() == "arm64"
+        if is_mps:
+            model_id = _MODEL_TIERS[layer_key]["small"][0]
+    return _resolve_ollama_tag(model_id)
 
 
 def get_model_info(layer_key: str, tier: Optional[str] = None) -> Tuple[str, str]:

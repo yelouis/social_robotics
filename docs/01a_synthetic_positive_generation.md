@@ -375,43 +375,16 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
    - **Problem**: Layer 1a was specified to run as part of every E2E pass (rendering on a prompt-hash cache miss, no-op on a hit). This coupled slow, memory-heavy local Wan2.1 generation (~30 min/clip on the M4 Max MPS backend, and mutually exclusive with the Node 02 qwen2.5vl/YOLO resident set) to every E2E run, and there was no first-class switch to run the corpus filter *without* the synthetic QA fixtures. Re-rendering the known-positive fixtures on each run is wasted work — they are deterministic QA assets, not corpus data.
    - **Solution**: Decoupled generation from filtering. Generation is now an explicit one-time isolated step (`python -m dataset_acquisition.synthetic.generator --count N`) that persists clips to `/Volumes/Extreme SSD/social_robotics/raw_videos/synthetic_validation/{tag}/{hash}.mp4`; the E2E run *references* those saved clips via the registry and never invokes the generator. Added a `run_synthetic_qa` constructor flag to `FilteringPipeline` (backed by the `SAF_RUN_SYNTHETIC_QA` env var, default on); when disabled, `_is_supported_dataset` excludes `synthetic_validation` entries so the pass reflects the raw corpus only, while Ego4D intake is unaffected. Verified: default includes the saved fixtures, `SAF_RUN_SYNTHETIC_QA=0` / `run_synthetic_qa=False` skips them.
 
+5. **Wan2.1-14B generation OOM on Apple Silicon (Resolved - May 23)**:
+   - **Problem**: Running the 14B parameter generator on Mac Studio (64 GB unified memory) using the Apple Silicon MPS backend caused out-of-memory errors and SIGABRT during the first denoising step because the MPS backend lacks memory-efficient/flash-attention kernels, leading to a massive `MTLBuffer` allocation (~48 GiB) for self-attention.
+   - **Solution**: Modified `get_model` in [models_config.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/models_config.py) to dynamically override the `medium` and `large` generator configurations to resolve to the lightweight 1.3B model (`Wan-AI/Wan2.1-T2V-1.3B-Diffusers`) on Apple Silicon (MPS) hosts, avoiding allocation of the oversized attention buffers.
+
+6. **CPU VAE decode OOM-kills on filter-viable clips (Resolved - May 23)**:
+   - **Problem**: Standard CPU VAE decoding of latents for videos of filter-viable lengths (≥33 frames) triggered SIGKILL 137 OOMs. The Wan VAE decoder materializes large intermediate 3D convolutional activations which, combined with the unreleased PyTorch MPS cache buffers, exceeded the macOS jetsam memory threshold.
+   - **Solution**: Implemented a temporal-chunked VAE decoding loop in [generator.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/dataset_acquisition/synthetic/generator.py) that decodes the latent sequence in small overlapping windows (4 latent frames with 1 latent frame overlap). The overlapping frames are combined on CPU using a partition-of-unity weight array (50/50 blend for boundaries), bounding peak decoding memory usage regardless of total clip length.
+
 ---
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Wan2.1-14B generation OOMs at the first denoise step on the 64 GB MPS host
-**Status**: ⚠️ Confirmed Unresolved — Verified in the May 22 E2E run (`e2e_reports/2026_05_22/`): the first-ever live 14B render aborted at denoise step 0 with the Metal assertion `Failed to allocate private MTLBuffer for size 51840000000` (~48 GiB), exit 134/SIGABRT. The 14B path was never live-validated before this — Resolved Issue #2 only exercised the 1.3B smoke — so the doc's "fits on the 64 GB Studio with little headroom" (§ 9.4) is empirically false on this host. Root cause: the Wan DiT materializes the full self-attention score matrix and MPS has no memory-efficient/flash-attention kernel, so the buffer (O(seq²), seq ∝ latent-frames × patched spatial tokens) at 720p exceeds the Metal working-set limit regardless of `enable_attention_slicing()` (which the Wan attention processor ignores).
-
-**Option A (recommended)**: **Pin the small tier (1.3B / 480p) as the only supported generator on this host and mark 14B unsupported on 64 GB MPS** until a memory-efficient attention path exists. Update `_MODEL_TIERS["synthetic_generator"]` so `medium` resolves to the 1.3B repo on Apple-Silicon hosts (or gate by a capability probe).
-  - *Pros*: Deterministic, no further OOM aborts; matches the only configuration that reaches the decode stage today.
-  - *Cons*: Lower fidelity than the 14B fixtures the doc specifies; deviates from the documented tier mapping.
-
-**Option B**: **Force 14B to render at 480p** by overriding the 720p branch in `_render_params` so the attention buffer shrinks ~5×.
-  - *Pros*: Keeps the higher-capacity 14B weights; smaller attention buffer may clear the Metal limit at low frame counts.
-  - *Cons*: Still collides with Issue 2's decode wall; loses the 720p fidelity that motivated 14B; unvalidated.
-
-**Option C**: **Install a memory-efficient attention processor for the Wan DiT on MPS** (sliced / SDPA-backed) so the score matrix is never fully materialized.
-  - *Pros*: Addresses the root cause; would also relax Issue 2.
-  - *Cons*: Requires diffusers/attention-processor work and MPS-kernel verification; highest engineering effort.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: CPU VAE decode OOM-kills (SIGKILL 137) at every filter-viable clip length — Resolved Issue #3 is a false resolution
-**Status**: ⚠️ Confirmed Unresolved — Verified across four May 22 render attempts (`e2e_reports/2026_05_22/`): 1.3B/480p at 81 frames OOMs the MPS attention buffer at denoise step 0 (~48 GiB MTLBuffer); at 49 frames the process is SIGKILL-137'd at the end of denoise / start of decode; at 33 frames (the value the `NUM_FRAMES` comment calls "safe for MPS memory limits") it completes all denoise steps and is then SIGKILL-137'd **during** `"Decoding latents on CPU..."` in `generator.py`. **No clip rendered end-to-end this session.** Resolved Issue #3 claims the CPU-decode OOM was fixed by deleting `self._pipe` + `gc.collect()` + `torch.mps.empty_cache()` before decode, but it was only validated on a 17-frame smoke; at ≥33 frames the decode still exhausts memory. The binding consequence: Layer 02's `min_consistency=2` gate needs ≥2 sampled frames, which at 1/3 fps requires a ≥49-frame clip (or a lower export fps — see below), and every clip at or above the decode wall is killed — so the synthetic true-positive QA stream could not be produced on this host.
-Root cause: the Wan VAE decoder materializes large full-resolution conv3d intermediate activations across all decoded frames; on unified memory the MPS denoise buffers are not promptly returned to the OS by `empty_cache()`, so they compound with the CPU-side decode allocation and cross the jetsam threshold even with ~50 GB nominally free at process start.
-
-**Option A (recommended)**: **Temporal-chunked VAE decode** — decode the latent sequence in small overlapping windows (e.g. 3–4 latent frames with 1-frame receptive-field overlap, blended at the seams) and concatenate, so decode peak memory is bounded by the window size, independent of total clip length.
-  - *Pros*: Fixes the binding blocker for any clip length; keeps 480p fidelity; the only option that makes ≥49-frame clips renderable.
-  - *Cons*: Non-trivial: must handle the Wan VAE's temporal receptive-field overlap to avoid visible seams; needs validation that chunk boundaries don't corrupt motion.
-
-**Option B**: **Render at lower spatial resolution** (e.g. 320×576 or 256×448) so decode activations shrink ~2–4×.
-  - *Pros*: One-line change; may let a short clip decode without chunking.
-  - *Cons*: Lower resolution degrades the bystander rendering the gate must detect; may still OOM at longer (filter-viable) lengths; unverified.
-
-**Option C**: **Decode-then-sample mismatch workaround (export fps)** — render the decode-safe 33-frame clip and export at 8 fps (implemented: `SR_SYNTH_FPS`), so a ~4 s clip yields the 2 frames the 1/3-fps sampler needs. This addresses only the *length/sampler* tension, not the decode OOM, so it must be paired with A or B.
-  - *Pros*: Already implemented; lets a successfully-decoded short clip clear the temporal gate without a longer render.
-  - *Cons*: Does nothing for the decode OOM on its own; produces slow-motion fixtures (8 fps vs Wan's trained 16 fps).
-
-Your selection: Proceed with Option A.
+There are currently no unresolved issues.

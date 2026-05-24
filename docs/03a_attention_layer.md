@@ -108,21 +108,12 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
-_All previously tracked issues have been successfully integrated into the main architecture documentation or remediated in code._
+1. **Redundant Video Decoding for Multiple Bystanders (Resolved - May 23)**:
+   - **Problem**: In multi-bystander videos, the Attention pipeline looped over each bystander sequentially. This caused the video file to be opened and decoded from frame 0 multiple times (once per bystander), introducing massive video I/O bottlenecks and preventing parallel tensor operations.
+   - **Solution**: Refactored `process_video` and replaced `_track_and_score` with `_track_and_score_batched` in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py) to perform single-pass video decoding. At each sampling timestamp (reconciled as the union of active bystanders' strides), the frame is decoded once, cropped and resized to `(448, 448)` for all active bystanders, stacked into a single `[N, 448, 448, 3]` batch, and processed in a single forward pass of L2CS-Net. This significantly speeds up I/O and leverages Apple Silicon (MPS) batched tensor acceleration.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Redundant Video Decoding for Multiple Bystanders
-**Status**: ⚠️ Confirmed Unresolved — Verified in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py#L208-L277): the pipeline loops over each tracked bystander separately, resulting in the video file being opened, decoded, and grabbed from frame 0 multiple times (once per bystander).
-
-**Option A (recommended)**: **Single-Pass Video Decoding with Batched Model Inference** — Modify `_track_and_score` to decode the video file once, extract the cropped face frames for all active bystanders at the current frame index, and pass them as a batch to a single forward pass of L2CS-Net.
-  - *Pros*: Speeds up video I/O and frame decoding overhead by N-times (where N is the number of bystanders in the clip); leverages PyTorch batched tensor execution on Apple Silicon (MPS).
-  - *Cons*: Requires reconciling bystander-specific adaptive sampling strides (e.g., by sampling at the union of required timestamps).
-
-**Option B**: **In-Memory Frame Caching** — Cache decoded video frames or bystander crops in memory or temporary files so subsequent bystander loops read from memory.
-  - *Pros*: Avoids re-decoding the video.
-  - *Cons*: Consumes significant RAM/disk if frames are cached, increasing memory pressure on 24GB hosts.
-
-Your selection: Proceed with Option A.
+There are currently no unresolved issues.
 
 

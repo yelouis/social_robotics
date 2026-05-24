@@ -156,7 +156,9 @@ The initial implementation of the Reasonable Emotion Layer is complete:
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
-*(Cleaned up - historical issues and design refinements have been integrated into the design documentation above)*
+1. **Transition Evaluation Concurrency (Resolved - May 23)**:
+   - **Problem**: The emotion layer sequentially calls the local Gemma 4 LLM to evaluate every emotional transition for each bystander. This created a severe processing bottleneck, adding 3-5 seconds of latency per transition sequentially.
+   - **Solution**: Implemented sequential evaluation with cross-bystander parallelization in `_process_task` in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03b_reasonable_emotion/pipeline.py) using a `ThreadPoolExecutor`. Emotion frames are still sampled sequentially to avoid thread-safety violations on `cv2.VideoCapture`. Once sampled, the chronological history evaluations for each bystander's emotional journey are submitted as concurrent tasks. This maintains sequential context within each bystander's chain while overlapping the I/O-heavy local LLM calls across different bystanders, tasks, and videos.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
@@ -172,23 +174,4 @@ The initial implementation of the Reasonable Emotion Layer is complete:
   - *Cons*: Consumes significant RAM/disk if frames are cached, increasing memory pressure on 24GB hosts.
 
 Your selection: _____
-
----
-
-### Issue 2: Transition Evaluation Concurrency & Quality Trade-off
-**Status**: ⚠️ Confirmed Unresolved — Verified in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03b_reasonable_emotion/pipeline.py#L395-L455): the system sequentially calls `_llm_evaluate_transition` for every emotional transition in the timeseries, introducing a sequential bottleneck of 3-5 seconds per LLM call on local Gemma 4.
-
-**Option A (recommended)**: **Maintain Sequential Processing with Cross-Bystander Parallelization** — Keep the sequential history evaluation for a single bystander's transition sequence to preserve chronological context quality, but parallelize the execution *across* different bystanders, tasks, and videos using a thread pool.
-  - *Pros*: Zero degradation in analysis quality since `accumulated_history` context remains intact; multi-bystander or multi-task videos are processed in parallel, cutting wall-clock LLM latency.
-  - *Cons*: Concurrent LLM requests to local Ollama could lead to queueing/serialization inside Ollama or cause local GPU (MPS) resource contention.
-
-**Option B**: **Batch/Joint Transition Evaluation (Single LLM Call)** — Send all emotional transitions for a bystander to the LLM in a single, large prompt, asking it to evaluate the entire sequence and assign classified directions at once.
-  - *Pros*: Reduces total LLM API calls to exactly 1 per bystander task, cutting latency by 3-5x.
-  - *Cons*: Loses the step-by-step reasoning quality where the LLM is anchored by evaluating one transition at a time; increases the risk of JSON parser failures or model hallucination when handling long timeseries.
-
-**Option C**: **Rule-Based Pre-Classification for Simple Transitions** — Pre-classify simple transitions (e.g. transitioning to/from baseline/neutral) using deterministic rules based on the expectations dictionary, bypassing the LLM entirely for these cases.
-  - *Pros*: Dramatically reduces the number of LLM calls, saving time.
-  - *Cons*: Loses the contextual nuance that Gemma 4 brings to task-specific transitions.
-
-Your selection: Proceed with Option A.
 

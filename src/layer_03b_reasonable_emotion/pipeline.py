@@ -3,6 +3,7 @@ import cv2
 import traceback
 import random
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import List, Literal, Optional
@@ -360,7 +361,6 @@ class ReasonableEmotionPipeline:
 
         if not tasks_analyzed:
             return None
-
         return {
             "video_id": video_id,
             "layer": "03b_reasonable_emotion",
@@ -382,102 +382,33 @@ class ReasonableEmotionPipeline:
         # Step 1: Expectation Generation — LLM with pydantic validation + retry
         expectations = self._llm_generate_expectations(task_label)
 
-        per_person = []
+        # Step 2: Sample emotions sequentially to avoid cv2.VideoCapture thread-safety issues
+        bystander_timeseries = {}
         for bystander in bystanders:
             person_id = bystander.get('person_id')
-
-            # Step 2: Temporal Sampling & Pairwise Chunking
             timeseries = self._sample_emotions(cap, fps, start_sec, end_sec, bystander)
-            if not timeseries or len(timeseries) < 2:
-                continue
+            if timeseries and len(timeseries) >= 2:
+                bystander_timeseries[person_id] = timeseries
 
-            # Step 3: Accumulated History Evaluation
-            slices = []
-            accumulated_history = ""
-            for i in range(len(timeseries) - 1):
-                start_emotion = timeseries[i]
-                end_emotion = timeseries[i + 1]
-
-                if start_emotion['emotion'] == end_emotion['emotion']:
-                    if slices:
-                        slices[-1]['window_sec'][1] = end_emotion['t']
-                        slices[-1]['terminal_magnitude'] = round(end_emotion['magnitude'], 2)
-                        scalar = end_emotion['magnitude']
-                        if slices[-1]['classified_direction'] == "negative":
-                            scalar = -scalar
-                        elif slices[-1]['classified_direction'] == "neutral":
-                            scalar = 0.0
-                        slices[-1]['slice_success_scalar'] = round(scalar, 2)
-                    else:
-                        direction = self._rule_based_classify(end_emotion['emotion'], expectations)['classified_direction']
-                        scalar = end_emotion['magnitude']
-                        if direction == "negative":
-                            scalar = -scalar
-                        elif direction == "neutral":
-                            scalar = 0.0
-                        slices.append({
-                            "slice_id": len(slices) + 1,
-                            "window_sec": [start_emotion['t'], end_emotion['t']],
-                            "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
-                            "terminal_magnitude": round(end_emotion['magnitude'], 2),
-                            "classified_direction": direction,
-                            "slice_success_scalar": round(scalar, 2)
-                        })
-                    continue
-
-                # Use LLM with pydantic validation + retry, or rule-based fallback
-                eval_result = self._llm_evaluate_transition(
-                    task_label, expectations, accumulated_history,
-                    start_emotion['emotion'], end_emotion['emotion']
-                )
-                direction = eval_result['classified_direction']
-
-                # Build accumulated history string for next iteration
-                accumulated_history += (
-                    f"{len(slices) + 1}. {start_emotion['emotion']} -> {end_emotion['emotion']} "
-                    f"(Classified: {direction})\n"
-                )
-
-                scalar = end_emotion['magnitude']
-                if direction == "negative":
-                    scalar = -scalar
-                elif direction == "neutral":
-                    scalar = 0.0
-
-                slices.append({
-                    "slice_id": len(slices) + 1,
-                    "window_sec": [start_emotion['t'], end_emotion['t']],
-                    "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
-                    "terminal_magnitude": round(end_emotion['magnitude'], 2),
-                    "classified_direction": direction,
-                    "slice_success_scalar": round(scalar, 2)
-                })
-
-            # Step 4: Late-Stage Weighted Average Task Success Score
-            # Formula: Sum(S_i * D_i * W_i) / Sum(D_i * W_i)
-            # W_i = max(0.1, start_i - climax)
-
-            numerator = 0.0
-            denominator = 0.0
-
-            for s in slices:
-                s_val = s['slice_success_scalar']
-                d_val = s['window_sec'][1] - s['window_sec'][0]
-                t_start_i = s['window_sec'][0]
-                w_val = max(0.1, t_start_i - climax_sec)
-
-                numerator += (s_val * d_val * w_val)
-                denominator += (d_val * w_val)
-
-            person_score = 0.0
-            if denominator > 0:
-                person_score = numerator / denominator
-
-            per_person.append({
-                "person_id": person_id,
-                "temporal_slices": slices,
-                "late_stage_weighted_success_score": round(person_score, 2)
-            })
+        per_person = []
+        if bystander_timeseries:
+            # Step 3: Run accumulated history evaluations in parallel across bystanders
+            with ThreadPoolExecutor() as executor:
+                futures = {
+                    executor.submit(
+                        self._evaluate_bystander_transitions,
+                        pid, ts, task_label, expectations, climax_sec
+                    ): pid
+                    for pid, ts in bystander_timeseries.items()
+                }
+                for future in futures:
+                    try:
+                        res = future.result()
+                        if res and res.get("temporal_slices"):
+                            per_person.append(res)
+                    except Exception as e:
+                        pid = futures[future]
+                        print(f"[03b] Failed to evaluate transitions for person {pid}: {e}")
 
         if not per_person:
             return None
@@ -503,6 +434,89 @@ class ReasonableEmotionPipeline:
             "task_reaction_window_sec": window_sec,
             "per_person": per_person,
             "task_aggregate_score": round(task_aggregate, 2)
+        }
+
+    def _evaluate_bystander_transitions(self, person_id, timeseries, task_label, expectations, climax_sec):
+        slices = []
+        accumulated_history = ""
+        for i in range(len(timeseries) - 1):
+            start_emotion = timeseries[i]
+            end_emotion = timeseries[i + 1]
+
+            if start_emotion['emotion'] == end_emotion['emotion']:
+                if slices:
+                    slices[-1]['window_sec'][1] = end_emotion['t']
+                    slices[-1]['terminal_magnitude'] = round(end_emotion['magnitude'], 2)
+                    scalar = end_emotion['magnitude']
+                    if slices[-1]['classified_direction'] == "negative":
+                        scalar = -scalar
+                    elif slices[-1]['classified_direction'] == "neutral":
+                        scalar = 0.0
+                    slices[-1]['slice_success_scalar'] = round(scalar, 2)
+                else:
+                    direction = self._rule_based_classify(end_emotion['emotion'], expectations)['classified_direction']
+                    scalar = end_emotion['magnitude']
+                    if direction == "negative":
+                        scalar = -scalar
+                    elif direction == "neutral":
+                        scalar = 0.0
+                    slices.append({
+                        "slice_id": len(slices) + 1,
+                        "window_sec": [start_emotion['t'], end_emotion['t']],
+                        "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
+                        "terminal_magnitude": round(end_emotion['magnitude'], 2),
+                        "classified_direction": direction,
+                        "slice_success_scalar": round(scalar, 2)
+                    })
+                continue
+
+            # Use LLM with pydantic validation + retry, or rule-based fallback
+            eval_result = self._llm_evaluate_transition(
+                task_label, expectations, accumulated_history,
+                start_emotion['emotion'], end_emotion['emotion']
+            )
+            direction = eval_result['classified_direction']
+
+            # Build accumulated history string for next iteration
+            accumulated_history += (
+                f"{len(slices) + 1}. {start_emotion['emotion']} -> {end_emotion['emotion']} "
+                f"(Classified: {direction})\n"
+            )
+
+            scalar = end_emotion['magnitude']
+            if direction == "negative":
+                scalar = -scalar
+            elif direction == "neutral":
+                scalar = 0.0
+
+            slices.append({
+                "slice_id": len(slices) + 1,
+                "window_sec": [start_emotion['t'], end_emotion['t']],
+                "transition_pair": [start_emotion['emotion'], end_emotion['emotion']],
+                "terminal_magnitude": round(end_emotion['magnitude'], 2),
+                "classified_direction": direction,
+                "slice_success_scalar": round(scalar, 2)
+            })
+
+        # Calculate late-stage weighted success score
+        numerator = 0.0
+        denominator = 0.0
+        for s in slices:
+            s_val = s['slice_success_scalar']
+            d_val = s['window_sec'][1] - s['window_sec'][0]
+            t_start_i = s['window_sec'][0]
+            w_val = max(0.1, t_start_i - climax_sec)
+            numerator += (s_val * d_val * w_val)
+            denominator += (d_val * w_val)
+
+        person_score = 0.0
+        if denominator > 0:
+            person_score = numerator / denominator
+
+        return {
+            "person_id": person_id,
+            "temporal_slices": slices,
+            "late_stage_weighted_success_score": round(person_score, 2)
         }
 
     # ------------------------------------------------------------------

@@ -221,6 +221,9 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 15. **VLM Gate Context-Window Footprint (`num_ctx`) (Resolved - May 23)**:
     - **Problem**: The single-image YES/NO VLM gate calls (`_vlm_ask_yes_no` in `src/shared/social_presence.py`) inherited the model's default context window — `ollama ps` showed `CONTEXT 128000` and ~52 GB resident for `qwen2.5vl`. Each call sends one ≤768px frame plus a one-line prompt and expects a one-word answer, so the 128k-token KV cache was almost entirely unused. The oversized allocation inflated resident memory (blocking co-residence with the synthetic generator and other stages) and per-call latency — a dominant factor in the ~141 s/video, ~5 h/150-video run cost.
     - **Solution**: Added a `VLM_NUM_CTX = 4096` constant and passed `options={"num_ctx": VLM_NUM_CTX}` to the `ollama.chat()` call in `_vlm_ask_yes_no`. 4096 tokens sits safely above the image (≤ ~1k visual tokens for a 768px frame) plus the short prompt, so accuracy is unchanged for this single-turn, single-image workload while the KV-cache allocation — and thus resident footprint and per-call latency — drops sharply. Tunable up to 8192 for additional margin.
+16. **Multi-Person False Positives and Egocentric Framing (Resolved - May 23)**:
+    - **Problem**: In 150-video E2E runs, fixed-camera clips containing a single occupant (non-egocentric POVs) were occasionally accepted by `qwen2.5vl` as containing multiple people, leading to a small number of false positives. Attempting to filter these via a minimum confidence score floor (`social_presence_score >= 10`) or a one-shot egocentric framing classifier over-rejected genuine distant/intermittent bystander true positives, demonstrating that standard VLM framing judgments and score floors reduce recall for negligible precision gains.
+    - **Solution**: Accepted the rare non-egocentric / over-confirmation false-positive as a known minor limitation. Avoided adding a blunt confidence floor or frame-level POV gate to preserve recall of weak-band bystander true positives (e.g. distant pedestrians or brief crew interactions) which downstream layers can still successfully process. If needed, structural non-egocentric sources will be filtered at intake via dataset metadata rather than per-frame VLM classification.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
@@ -240,26 +243,3 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
   - *Cons*: Larger architectural change; requires a segment schema in `filtered_manifest.json`.
 
 Your selection: _____
-
----
-
-### Issue 2: Multi-person false-positive — `qwen2.5vl` over-confirms on single-person / non-egocentric framing
-**Status**: ⚠️ Confirmed Unresolved — **two remediation attempts have now failed live validation; the FP class is rarer than first feared.** Origin: `0a01978c-…`, a wall-mounted fixed-camera clip with a single seated occupant (no egocentric POV, no real bystander), was kept (score 8.5) because `qwen2.5vl` answered "yes, multiple people."
-- **Option B (egocentric-framing gate) — implemented and reverted (May 23).** On a 3-video qwen check the single-frame gate got both cases *backwards*: it kept the fixed-camera `0a01978c` ("egocentric = YES") and wrongly rejected the genuine egocentric street-walk `0c190d90` ("egocentric = NO"). `qwen2.5vl` cannot distinguish head-mounted from fixed / wide-FOV framing from a single frame — it both missed the target FP and introduced a new false-negative.
-- **Option A (summed-score KEEP floor) — implemented, simulated, and reverted (May 23).** A floor of `social_presence_score >= 10` on the 150-video run dropped 9 weak-band passes; **5 of 5 spot-checked were genuine multi-person true positives** (car-wash helper `04f9cc5e`, renovation crew `000786a7`, sidewalk + café patrons `03f5b0be`, tree-work crew `01d32889`, street pedestrian `0c190d90`) and **0 were false positives**. The weak-score band is dominated by *genuine* bystanders that are distant / edge-of-frame / intermittent (few high-confidence detections → low summed score), not FPs. Moreover the kitchen FP (8.5) outscores genuine TPs (4.2), so summed confidence **cannot separate FP from TP at any threshold**. The floor sacrifices real social videos for no reliable precision gain.
-
-The empirical reframe: in the representative 150-video sample the false-positive class is **rare** (0 FPs among the 9 weak-band passes spot-checked), while the weak band holds many genuine edge-bystander TPs worth keeping. A blunt per-video precision gate costs more recall than the FPs it removes.
-
-**Option A′ (recommended)**: **Accept the rare over-confirm FP as a known minor limitation** — do not add a per-video precision gate (both the score floor and the framing gate are net-negative), and keep the weak-score band, which is mostly genuine TPs. Re-open only if corpus-scale sampling shows the FP class is actually common.
-  - *Pros*: No recall loss; preserves the genuine edge/distant-bystander TPs that the social layers (esp. 03d Proxemics, 03a Attention) can still use; zero added cost.
-  - *Cons*: A small number of non-egocentric / over-confirm FPs reach Layer 03, which must tolerate the occasional low-signal clip.
-
-**Option B′**: **Intake-level non-egocentric source filtering** — the `0a01978c` FP is a non-egocentric video inside an egocentric corpus (a data-quality issue). Filter such sources at acquisition via dataset/source metadata rather than per-frame VLM.
-  - *Pros*: Removes the structural non-egocentric class at the cheapest point, with no per-video VLM cost and no recall risk to real egocentric video.
-  - *Cons*: Only helps where source metadata flags framing; does nothing for in-egocentric over-confirmation.
-
-**Option C**: **Multi-frame egocentric voting** — only if non-egocentric FPs prove common at corpus scale: sample 3–5 frames and reject on a strong majority "non-egocentric" vote.
-  - *Pros*: POV/motion cues are clearer across frames than in one; tolerant of one ambiguous frame.
-  - *Cons*: Several extra VLM calls per video; the single-frame failure suggests `qwen2.5vl`'s framing judgment may be too weak even with voting — needs its own live validation before shipping.
-
-Your selection: Proceed with Option A.

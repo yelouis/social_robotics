@@ -5,6 +5,7 @@ import traceback
 import math
 import sys
 import torch
+import numpy as np
 from pathlib import Path
 
 # Try to import config for EGO4D_METADATA_PATH
@@ -202,19 +203,13 @@ class AttentionLayerPipeline:
             return None
             
         duration_sec = total_frames / fps
+        intrinsics = self.camera_intrinsics.get(video_id)
+        all_traces = self._track_and_score_batched(cap, fps, duration_sec, bystanders, intrinsics, hand_detections)
         
         per_person_results = []
-        
         for bystander in bystanders:
             person_id = bystander.get('person_id')
-            timestamps_sec = bystander.get('timestamps_sec', [])
-            bounding_boxes = bystander.get('bounding_boxes', [])
-            
-            if not timestamps_sec or not bounding_boxes:
-                continue
-                
-            intrinsics = self.camera_intrinsics.get(video_id)
-            trace = self._track_and_score(cap, fps, duration_sec, timestamps_sec, bounding_boxes, intrinsics, hand_detections)
+            trace = all_traces.get(person_id, [])
             
             if not trace:
                 continue
@@ -308,20 +303,35 @@ class AttentionLayerPipeline:
     BURST_DURATION_SEC = 2.0
     BURST_DELTA_THRESHOLD = 0.3
 
-    def _track_and_score(self, cap, fps, duration_sec, b_timestamps, b_bboxes, intrinsics=None, hand_detections=None):
-        trace = []
-        current_t = 0.0
-        last_score = -1.0
-        burst_until_t = -1.0  # adaptive sampling boost timer
+    def _track_and_score_batched(self, cap, fps, duration_sec, bystanders, intrinsics=None, hand_detections=None):
+        traces = {}
+        next_t = {}
+        last_scores = {}
+        burst_until_t = {}
+        
+        for bystander in bystanders:
+            pid = bystander.get('person_id')
+            timestamps_sec = bystander.get('timestamps_sec', [])
+            bounding_boxes = bystander.get('bounding_boxes', [])
+            if not timestamps_sec or not bounding_boxes:
+                continue
+            traces[pid] = []
+            next_t[pid] = 0.0
+            last_scores[pid] = -1.0
+            burst_until_t[pid] = -1.0
+
+        if not next_t:
+            return {}
 
         # Prime the capture so the first cap.retrieve() has a valid buffer (Issue 5).
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         ret = cap.grab()
         if not ret:
-            return trace
+            return {}
         current_frame_idx = 1
 
-        while current_t <= duration_sec:
+        while any(next_t[pid] <= duration_sec for pid in next_t):
+            current_t = min(next_t[pid] for pid in next_t if next_t[pid] <= duration_sec)
             target_frame_idx = int(current_t * fps)
 
             # Sequential skip with grab() to reach the target frame without random seeking.
@@ -332,7 +342,6 @@ class AttentionLayerPipeline:
                 current_frame_idx += 1
 
             if current_frame_idx < target_frame_idx:
-                # Stream ended before we could reach the target; stop cleanly.
                 break
 
             ret, frame = cap.retrieve()
@@ -341,123 +350,154 @@ class AttentionLayerPipeline:
             if not ret:
                 break
 
-            # Find closest bbox
-            diffs = [abs(t - current_t) for t in b_timestamps]
-            closest_idx = diffs.index(min(diffs))
-
-            # If the closest bbox is too far away (e.g. > 2 seconds), skip
-            if diffs[closest_idx] > 2.0:
-                current_t += self.BASELINE_STRIDE_SEC
-                continue
-
-            bbox = b_bboxes[closest_idx]
-            x1, y1, x2, y2 = bbox
-
-            # Crop bounding box with some padding
             h, w = frame.shape[:2]
-            px1 = max(0, int(x1) - 20)
-            py1 = max(0, int(y1) - 20)
-            px2 = min(w, int(x2) + 20)
-            py2 = min(h, int(y2) + 20)
+            batch_pids = []
+            batch_crops = []
+            batch_info = []
 
-            crop = frame[py1:py2, px1:px2]
-            if crop.size == 0:
-                current_t += self.BASELINE_STRIDE_SEC
+            for bystander in bystanders:
+                pid = bystander.get('person_id')
+                if pid not in next_t:
+                    continue
+                if next_t[pid] > duration_sec:
+                    continue
+
+                if abs(next_t[pid] - current_t) < 1e-4:
+                    b_timestamps = bystander.get('timestamps_sec', [])
+                    b_bboxes = bystander.get('bounding_boxes', [])
+                    
+                    diffs = [abs(t - current_t) for t in b_timestamps]
+                    closest_idx = diffs.index(min(diffs))
+
+                    if diffs[closest_idx] > 2.0:
+                        next_t[pid] += self.BASELINE_STRIDE_SEC
+                        continue
+
+                    bbox = b_bboxes[closest_idx]
+                    x1, y1, x2, y2 = bbox
+                    
+                    px1 = max(0, int(x1) - 20)
+                    py1 = max(0, int(y1) - 20)
+                    px2 = min(w, int(x2) + 20)
+                    py2 = min(h, int(y2) + 20)
+
+                    crop = frame[py1:py2, px1:px2]
+                    if crop.size == 0:
+                        next_t[pid] += self.BASELINE_STRIDE_SEC
+                        continue
+
+                    resized_crop = cv2.resize(crop, (448, 448))
+                    batch_pids.append(pid)
+                    batch_crops.append(resized_crop)
+                    batch_info.append((pid, (x1 + x2) / 2.0, (y1 + y2) / 2.0, x1, y1, x2, y2))
+
+            if not batch_crops:
                 continue
 
-            score = 0.0
-            pitch_rad = 0.0
-            yaw_rad = 0.0
-            target_label = "Unknown"
-
-            if self.gaze_pipeline:
-                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            batch_results = []
+            if self.gaze_pipeline and batch_crops:
                 try:
-                    results = self.gaze_pipeline.step(crop_rgb)
-                    pitch_rad = float(results.pitch[0]) if results.pitch.size > 0 else 0.0
-                    yaw_rad = float(results.yaw[0]) if results.yaw.size > 0 else 0.0
+                    batch_input = np.stack([cv2.cvtColor(c, cv2.COLOR_BGR2RGB) for c in batch_crops])
+                    results = self.gaze_pipeline.step(batch_input)
+                    
+                    def to_float(val):
+                        if hasattr(val, "item"):
+                            return float(val.item())
+                        if isinstance(val, (list, np.ndarray)) and len(val) > 0:
+                            return float(val[0])
+                        return float(val)
 
-                    # L2CS gazeto3d convention
-                    v_look_x = -math.cos(yaw_rad) * math.sin(pitch_rad)
-                    v_look_y = -math.sin(yaw_rad)
-                    v_look_z = -math.cos(yaw_rad) * math.cos(pitch_rad)
-
-                    cx = (x1 + x2) / 2.0
-                    cy = (y1 + y2) / 2.0
-
-                    if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
-                        fx, fy = intrinsics['focal_length'] if isinstance(intrinsics['focal_length'], (list, tuple)) else (intrinsics['focal_length'], intrinsics['focal_length'])
-                        px, py = intrinsics['principal_point']
-                        v_cam_x = px - cx
-                        v_cam_y = py - cy
-                        v_cam_z = -float(fx)
-                    else:
-                        v_cam_x = (w / 2.0) - cx
-                        v_cam_y = (h / 2.0) - cy
-                        v_cam_z = -float(w)
-
-                    norm_cam = math.sqrt(v_cam_x**2 + v_cam_y**2 + v_cam_z**2)
-                    if norm_cam > 0:
-                        v_cam_x /= norm_cam
-                        v_cam_y /= norm_cam
-                        v_cam_z /= norm_cam
-
-                    dot_prod_cam = (v_look_x * v_cam_x) + (v_look_y * v_cam_y) + (v_look_z * v_cam_z)
-                    max_dot_prod = dot_prod_cam
-                    target_label = "Camera"
-
-                    # Hand intersection check
-                    if hand_detections:
-                        h_diffs = [abs(t['timestamp_sec'] - current_t) for t in hand_detections]
-                        if h_diffs:
-                            closest_h_idx = h_diffs.index(min(h_diffs))
-                            if h_diffs[closest_h_idx] <= 2.0:
-                                hands = hand_detections[closest_h_idx].get('hand_boxes', [])
-                                for h_box in hands:
-                                    hx1, hy1, hx2, hy2 = h_box
-                                    hcx = (hx1 + hx2) / 2.0
-                                    hcy = (hy1 + hy2) / 2.0
-
-                                    if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
-                                        v_hand_x = px - hcx
-                                        v_hand_y = py - hcy
-                                        v_hand_z = -float(fx)
-                                    else:
-                                        v_hand_x = (w / 2.0) - hcx
-                                        v_hand_y = (h / 2.0) - hcy
-                                        v_hand_z = -float(w)
-
-                                    norm_hand = math.sqrt(v_hand_x**2 + v_hand_y**2 + v_hand_z**2)
-                                    if norm_hand > 0:
-                                        v_hand_x /= norm_hand
-                                        v_hand_y /= norm_hand
-                                        v_hand_z /= norm_hand
-
-                                    dot_prod_hand = (v_look_x * v_hand_x) + (v_look_y * v_hand_y) + (v_look_z * v_hand_z)
-                                    if dot_prod_hand > max_dot_prod:
-                                        max_dot_prod = dot_prod_hand
-                                        target_label = "POV_Actor_Hands"
-
-                    mapped_score = max(0.0, (max_dot_prod - 0.5) * 2.0)
-                    score = round(min(1.0, mapped_score), 2)
+                    for idx in range(len(batch_crops)):
+                        pitch_rad = to_float(results.pitch[idx]) if results.pitch.size > idx else 0.0
+                        yaw_rad = to_float(results.yaw[idx]) if results.yaw.size > idx else 0.0
+                        batch_results.append((pitch_rad, yaw_rad))
                 except Exception as e:
-                    print(f"[03a] Gaze inference failed at t={current_t:.2f}s: {e}")
+                    print(f"[03a] Batched gaze inference failed at t={current_t:.2f}s: {e}")
+                    batch_results = [(0.0, 0.0)] * len(batch_crops)
+            else:
+                batch_results = [(0.0, 0.0)] * len(batch_crops)
 
-            trace.append({
-                "t": round(current_t, 2),
-                "score": score,
-                "pitch_rad": round(pitch_rad, 4),
-                "yaw_rad": round(yaw_rad, 4),
-                "target": target_label
-            })
+            for idx, (pid, cx, cy, x1, y1, x2, y2) in enumerate(batch_info):
+                pitch_rad, yaw_rad = batch_results[idx]
+                score = 0.0
+                target_label = "Unknown"
 
-            # Adaptive stride: trigger a 16 FPS burst when score changes sharply,
-            # then decay back to the 8 FPS baseline after BURST_DURATION_SEC.
-            if last_score >= 0.0 and abs(score - last_score) > self.BURST_DELTA_THRESHOLD:
-                burst_until_t = current_t + self.BURST_DURATION_SEC
+                if self.gaze_pipeline:
+                    try:
+                        v_look_x = -math.cos(yaw_rad) * math.sin(pitch_rad)
+                        v_look_y = -math.sin(yaw_rad)
+                        v_look_z = -math.cos(yaw_rad) * math.cos(pitch_rad)
 
-            stride = self.burst_stride_sec if current_t < burst_until_t else self.BASELINE_STRIDE_SEC
-            current_t += stride
-            last_score = score
+                        if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
+                            fx, fy = intrinsics['focal_length'] if isinstance(intrinsics['focal_length'], (list, tuple)) else (intrinsics['focal_length'], intrinsics['focal_length'])
+                            px, py = intrinsics['principal_point']
+                            v_cam_x = px - cx
+                            v_cam_y = py - cy
+                            v_cam_z = -float(fx)
+                        else:
+                            v_cam_x = (w / 2.0) - cx
+                            v_cam_y = (h / 2.0) - cy
+                            v_cam_z = -float(w)
 
-        return trace
+                        norm_cam = math.sqrt(v_cam_x**2 + v_cam_y**2 + v_cam_z**2)
+                        if norm_cam > 0:
+                            v_cam_x /= norm_cam
+                            v_cam_y /= norm_cam
+                            v_cam_z /= norm_cam
+
+                        dot_prod_cam = (v_look_x * v_cam_x) + (v_look_y * v_cam_y) + (v_look_z * v_cam_z)
+                        max_dot_prod = dot_prod_cam
+                        target_label = "Camera"
+
+                        if hand_detections:
+                            h_diffs = [abs(t['timestamp_sec'] - current_t) for t in hand_detections]
+                            if h_diffs:
+                                closest_h_idx = h_diffs.index(min(h_diffs))
+                                if h_diffs[closest_h_idx] <= 2.0:
+                                    hands = hand_detections[closest_h_idx].get('hand_boxes', [])
+                                    for h_box in hands:
+                                        hx1, hy1, hx2, hy2 = h_box
+                                        hcx = (hx1 + hx2) / 2.0
+                                        hcy = (hy1 + hy2) / 2.0
+
+                                        if intrinsics and 'focal_length' in intrinsics and 'principal_point' in intrinsics:
+                                            v_hand_x = px - hcx
+                                            v_hand_y = py - hcy
+                                            v_hand_z = -float(fx)
+                                        else:
+                                            v_hand_x = (w / 2.0) - hcx
+                                            v_hand_y = (h / 2.0) - hcy
+                                            v_hand_z = -float(w)
+
+                                        norm_hand = math.sqrt(v_hand_x**2 + v_hand_y**2 + v_hand_z**2)
+                                        if norm_hand > 0:
+                                            v_hand_x /= norm_hand
+                                            v_hand_y /= norm_hand
+                                            v_hand_z /= norm_hand
+
+                                        dot_prod_hand = (v_look_x * v_hand_x) + (v_look_y * v_hand_y) + (v_look_z * v_hand_z)
+                                        if dot_prod_hand > max_dot_prod:
+                                            max_dot_prod = dot_prod_hand
+                                            target_label = "POV_Actor_Hands"
+
+                        mapped_score = max(0.0, (max_dot_prod - 0.5) * 2.0)
+                        score = round(min(1.0, mapped_score), 2)
+                    except Exception as e:
+                        print(f"[03a] Gaze processing failed for person {pid} at t={current_t:.2f}s: {e}")
+
+                traces[pid].append({
+                    "t": round(current_t, 2),
+                    "score": score,
+                    "pitch_rad": round(pitch_rad, 4),
+                    "yaw_rad": round(yaw_rad, 4),
+                    "target": target_label
+                })
+
+                if last_scores[pid] >= 0.0 and abs(score - last_scores[pid]) > self.BURST_DELTA_THRESHOLD:
+                    burst_until_t[pid] = current_t + self.BURST_DURATION_SEC
+
+                stride = self.burst_stride_sec if current_t < burst_until_t[pid] else self.BASELINE_STRIDE_SEC
+                next_t[pid] += stride
+                last_scores[pid] = score
+
+        return traces
