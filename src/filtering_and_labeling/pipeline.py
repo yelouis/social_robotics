@@ -14,12 +14,26 @@ import config
 
 
 class FilteringPipeline:
-    def __init__(self, input_manifest_path, output_manifest_path, force=False, skip_vlm=False):
+    def __init__(self, input_manifest_path, output_manifest_path, force=False, skip_vlm=False,
+                 run_synthetic_qa=None):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_manifest_path = Path(output_manifest_path)
         self.error_log_path = self.output_manifest_path.parent / "02_filter_errors.json"
         self.force = force
         self.skip_vlm = skip_vlm
+
+        # Layer 1a synthetic QA toggle. The synthetic true-positive fixtures are
+        # generated ONCE in isolation (`python -m dataset_acquisition.synthetic.
+        # generator`) and persisted on the Extreme SSD; the E2E run *references*
+        # those saved clips via the registry rather than regenerating per run
+        # (docs/01a §4). This flag controls whether the saved fixtures are
+        # exercised through the filter as a known-positive QA check: default on,
+        # set SAF_RUN_SYNTHETIC_QA=0 (or pass run_synthetic_qa=False) to run a
+        # pure-corpus pass that skips them.
+        self.run_synthetic_qa = (
+            run_synthetic_qa if run_synthetic_qa is not None
+            else os.getenv("SAF_RUN_SYNTHETIC_QA", "1").lower() in ("1", "true", "yes")
+        )
         
         # Shared components. Default to YOLO-pose + VLM-gated verification
         # (Resolved Issue #22) so the filtering stage rejects the wearer's own
@@ -108,6 +122,13 @@ class FilteringPipeline:
 
     def _is_supported_dataset(self, entry, video_id) -> bool:
         dataset = (entry.get('dataset') or '').strip().lower()
+        # Layer 1a QA toggle: when synthetic QA is disabled, the pre-generated
+        # synthetic_validation fixtures are excluded from the run so it reflects
+        # the raw corpus only (docs/01a §4). Generation is unaffected — it is a
+        # separate one-time isolated step that writes the clips to the SSD.
+        if dataset == "synthetic_validation" and not self.run_synthetic_qa:
+            print(f"Skipping {video_id}: Layer 1a synthetic QA disabled (SAF_RUN_SYNTHETIC_QA=0).")
+            return False
         if dataset in self._SUPPORTED_DATASETS:
             return True
         print(

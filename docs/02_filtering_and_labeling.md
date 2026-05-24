@@ -220,4 +220,38 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-There are currently no unresolved issues.
+### Issue 1: Residual multi-person false-negative on long/mixed videos with intermittently-framed bystanders
+**Status**: ⚠️ Confirmed Unresolved — Verified in the May 22–23 150-video E2E run (`e2e_reports/2026_05_22/`): `025c24db-…` (a ~53-min video containing an unambiguous 2–3 person Rummikub game, spot-checked frame-by-frame) was rejected with `VLM gate rejected … 1/2 confirmed across 5 attempts`. The `qwen2.5vl` swap (Resolved Issue #14) recovered the gross false-negatives, but the gate still drops long mixed-content videos where the social segment is a *minority* of sampled frames: `MAX_VLM_VERIFY_FRAMES=5` caps the VLM to the first 5 pose-positive frames, `min_consistency=2` requires two confirmations, and the 1/3-fps sampling thins a short social segment inside a long solo-dominated clip below that threshold.
+
+**Option A (recommended)**: **Confirm-anywhere accounting** — track VLM confirmations across the whole video (every pose-positive sampled frame) rather than only the first `MAX_VLM_VERIFY_FRAMES`, and/or raise that cap, so a clearly-social segment late in a long video still reaches two confirmations.
+  - *Pros*: Directly addresses the under-sampling false-negative; bounded because it still only fires on YOLO-pose-positive frames.
+  - *Cons*: More `qwen2.5vl` calls on long videos, which already dominate per-video cost (~52 GB resident, ~141 s/video mean).
+
+**Option B**: **Duration/pose-density-gated `min_consistency=1`** — drop the consistency requirement to one confirmation for videos above a length or pose-density threshold.
+  - *Pros*: Trivial; recovers single-clear-frame social videos immediately.
+  - *Cons*: Raises the false-positive rate — a single `qwen2.5vl` blip would pass the whole video (see Issue 2).
+
+**Option C**: **Segment long videos and filter per-segment** so a solo stretch and a social stretch are evaluated independently.
+  - *Pros*: Matches the real structure of long Ego4D clips; yields per-segment social windows useful to Layer 03.
+  - *Cons*: Larger architectural change; requires a segment schema in `filtered_manifest.json`.
+
+Your selection: _____
+
+---
+
+### Issue 2: Multi-person false-positive — `qwen2.5vl` over-confirms on single-person / non-egocentric framing
+**Status**: ⚠️ Confirmed Unresolved — Verified in the May 22 8-video smoke: `0a6d…`-style recovery came at the cost of a false-positive class. `0a01978c-…` — a **fixed wide-angle room camera with a single occupant** at a table (not an egocentric POV) — was passed (score 8.5) because `qwen2.5vl` answered "yes, multiple people." The weak-score pass band (9 of 43 passes in the 150-video run scored < 10) concentrates this risk: the `qwen2.5vl` swap traded Moondream's false-negatives for a smaller, lower-confidence false-positive class.
+
+**Option A (recommended)**: **Score / temporal-consistency threshold on KEEP** — require a minimum summed `social_presence_score` or ≥ N distinct pose-confirmed frames before marking KEEP, pruning the weak-score band where false positives empirically concentrate.
+  - *Pros*: Cheap post-filter, no extra model calls; the weak band is where the FPs live.
+  - *Cons*: May drop genuine brief-bystander videos (e.g. a single distant pedestrian); threshold needs tuning against the pass-score distribution.
+
+**Option B**: **Egocentric-framing sanity gate** — a one-shot VLM check ("is this a head-mounted first-person view?") that rejects fixed-camera / third-person framing at intake, removing the `0a01978c` non-egocentric class.
+  - *Pros*: Eliminates a whole structural FP class the social gate isn't designed for.
+  - *Cons*: One extra VLM call per video; risk of mislabeling legitimate wide-FOV egocentric captures.
+
+**Option C**: **Tighten the multi-person prompt** to demand two spatially-separated, distinct bodies (not just "two or more people").
+  - *Pros*: No new stage.
+  - *Cons*: Prompt tuning is brittle and risks re-introducing the false-negatives Issue #14 just fixed.
+
+Your selection: _____
