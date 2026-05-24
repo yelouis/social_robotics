@@ -40,8 +40,9 @@ Video datasets are inherently massive (often spanning terabytes).
 To mitigate the massive storage requirements of these datasets, the system employs a **Streaming Filtering** strategy. 
 
 - **Download-Filter-Discard (Batched)**: Videos are processed in small batches. The system dynamically calculates safe batch sizes (between 10 and 500 UIDs) based on `shutil.disk_usage()` of the "Extreme SSD" at the start of each cycle. It downloads the raw files, runs the social filter, and then immediately deletes non-compliant videos.
-- **Keep Criterion**: Only videos with **more than one person** (excluding the camera wearer) are persisted on the "Extreme SSD".
-- **Resumability**: To avoid re-downloading videos that were previously discarded, the system maintains a `processed_uids.json` file. Once a UID has been evaluated (kept or purged), it is marked as processed and never requested from the downloader again.
+- **Keep Criterion**: A video is retained only if it has **more than one person** (excluding the camera wearer) *and* survives the bounded reservoir below. Non-social videos — and reservoir-evicted ones — are deleted from the "Extreme SSD".
+- **Bounded Top-K Reservoir (`reservoir.py`)**: The social-passing subset of the full Ego4D corpus (~5 TB) still far exceeds the working SSD, so acquisition retains only the **top-K videos by `social_presence_score`** (the summed bystander detection confidence — docs/02 § "filtered_manifest.json Schema") within a hard disk budget. When a new passer arrives and either the **count cap** (default **1,000**) or the **disk budget** (default **~950 GiB**) is exceeded, the **lowest-scored** retained video is evicted and its file deleted. Because the score is *total* social presence, a longer clip is retained over a shorter one only when it carries more bystander-detection mass. Orchestrated by `run_reservoir_acquisition.py` (Layer 1a disabled for corpus acquisition).
+- **Resumability & Save Points**: Three JSON state files make acquisition resumable and incremental: `processed_uids.json` (every UID evaluated — kept *or* purged — so re-runs never re-download or re-process it), `reservoir_state.json` (the retained set: uid → score → path), and `filtered_manifest.json` (the retained set in full Layer 03 schema — the save-state Node 03 picks up **without re-running Node 02**).
 - **Single Source of Truth**: The acquisition filter and the main processing pipeline both utilize `src/shared/social_presence.py` to ensure consistent social presence detection heuristics across the entire lifecycle.
 
 ### Filtering Heuristics & Performance
@@ -78,6 +79,7 @@ To ensure data ingestion was successful without relying on blind trust, perform 
 The Dataset Acquisition module is fully operational at `src/dataset_acquisition/`.
 - **SSD Integration**: Fully mapped to the **Extreme SSD** (`/Volumes/Extreme SSD`).
 - **Streaming Filter**: Implemented "Download-Filter-Discard" batching logic in `run_selective_download.py` to manage multi-terabyte datasets within a 2TB limit.
+- **Bounded Top-K Reservoir**: `reservoir.py` + `run_reservoir_acquisition.py` retain only the highest-`social_presence_score` videos (top-K within a disk budget), evicting the lowest-scored as new passers arrive, and export `filtered_manifest.json` as the Layer 03 save-state. Resumable via `processed_uids.json`.
 - **Smart Registry**: Automated indexing of 7,861 unique videos via `registry.py`, with explicit filtering for macOS metadata.
 - **Requirement-Aware Downloader**: `downloader.py` handles authentication-gated datasets (Ego4D) and open-source datasets (Charades-Ego) with integrated extraction logic.
 
