@@ -394,7 +394,7 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
   - *Pros*: Addresses the root cause; would also relax Issue 2.
   - *Cons*: Requires diffusers/attention-processor work and MPS-kernel verification; highest engineering effort.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -414,4 +414,4 @@ Root cause: the Wan VAE decoder materializes large full-resolution conv3d interm
   - *Pros*: Already implemented; lets a successfully-decoded short clip clear the temporal gate without a longer render.
   - *Cons*: Does nothing for the decode OOM on its own; produces slow-motion fixtures (8 fps vs Wan's trained 16 fps).
 
-Your selection: _____
+Your selection: Proceed with Option A.

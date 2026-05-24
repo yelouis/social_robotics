@@ -28,6 +28,13 @@ KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6
 KEYPOINT_CONF_THRESHOLD = 0.3
 MAX_VLM_VERIFY_FRAMES = 5
+# Context window for the single-image YES/NO VLM gate calls. Each gate sends one
+# <=768px frame + a one-line prompt and wants a one-word answer (~a few hundred
+# image tokens + a short prompt), so the model's default 128k context allocates
+# a large unused KV cache (observed ~52 GB resident for qwen2.5vl at 128k). Pin
+# num_ctx safely above the image+prompt size to cut resident memory and per-call
+# latency with no accuracy loss for this single-turn, single-image workload.
+VLM_NUM_CTX = 4096
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -156,6 +163,7 @@ class SocialPresenceDetector:
                         'content': prompt,
                         'images': [tmp_path],
                     }],
+                    options={"num_ctx": VLM_NUM_CTX},
                 )
                 content = response['message']['content'].strip().upper()
                 return content.startswith("YES")

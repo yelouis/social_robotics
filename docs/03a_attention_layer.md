@@ -123,6 +123,6 @@ _All previously tracked issues have been successfully integrated into the main a
   - *Pros*: Avoids re-decoding the video.
   - *Cons*: Consumes significant RAM/disk if frames are cached, increasing memory pressure on 24GB hosts.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 
