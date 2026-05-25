@@ -203,6 +203,12 @@ def main():
             print(f"[{idx}/{len(work)}] SKIP solo {uid}", flush=True)
             _save_set(processed_path, processed)
             continue
+        # Mark processed BEFORE download/scoring. A native crash (cv2/ffmpeg/MPS)
+        # or an OOM SIGKILL bypasses the try/except below, so recording the UID
+        # first means a resume skips this clip instead of retry-looping on it —
+        # at worst we drop one problematic video, never the whole run.
+        processed.add(uid)
+        _save_set(processed_path, processed)
         path = find_local_path(dl.output_path, uid)
         if path is None and not args.no_download:
             try:
@@ -245,9 +251,13 @@ def main():
             print(f"[{idx}/{len(work)}] {msg} t={dt:.0f}s | kept={len(reservoir.entries)} "
                   f"disk={reservoir.total_bytes()/2**30:.1f}GiB", flush=True)
 
-        processed.add(uid)
-        if idx % 5 == 0 or idx == len(work):
-            _save_set(processed_path, processed)
+        # Persist the reservoir + manifest immediately after a KEEP so a passer
+        # can't be lost to a later crash; periodic cadence otherwise. (The UID's
+        # processed_uids entry was already saved before scoring, above.)
+        if passed and status == "kept":
+            reservoir.save()
+            reservoir.export_manifest(manifest_path)
+        elif idx % 5 == 0 or idx == len(work):
             reservoir.save()
             reservoir.export_manifest(manifest_path)
 
