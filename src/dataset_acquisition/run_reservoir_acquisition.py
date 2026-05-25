@@ -114,6 +114,12 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="Hard cap on UIDs processed (smoke).")
     ap.add_argument("--smoke", action="store_true",
                     help="Isolated dry-run on local videos: --no-download --dry-run, temp state, small cap/limit.")
+    ap.add_argument("--skip-local", action="store_true",
+                    help="Score only newly-downloaded UIDs; never consider already-local videos "
+                         "(protects local data when validating download + real deletion).")
+    ap.add_argument("--state-dir", default=None,
+                    help="Override directory for processed/state/manifest files (isolates a real "
+                         "smoke from production state).")
     args = ap.parse_args()
 
     if args.smoke:
@@ -130,6 +136,14 @@ def main():
     else:
         processed_path, state_path, manifest_path = PROD_PROCESSED, PROD_STATE, PROD_MANIFEST
 
+    if args.state_dir:
+        d = Path(args.state_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        processed_path = d / "reservoir_processed_uids.json"
+        state_path = d / "reservoir_state.json"
+        manifest_path = d / "filtered_manifest.json"
+        print(f"[reservoir] state-dir override -> {d} (isolated from production)")
+
     dl = Ego4DDownloader()  # download only; we run our own full filter + scoring + reservoir
     dl.filter_on_the_fly = False  # skip the StreamingFilter purge inside download()
     dl.filterer = None
@@ -144,17 +158,30 @@ def main():
 
     # Build the work list: local-already-downloaded first (no download cost),
     # then new corpus UIDs (download), excluding anything already processed.
-    local_uids = [u for u in list_local_uids(dl.output_path) if u not in processed]
+    # `all_local` is the real set of already-downloaded UIDs. It ALWAYS gates
+    # new_uids so that local clips can never leak into the download/score path
+    # (a local UID reaching the loop would be purged if it failed — the bug that
+    # deleted 4 local videos in the first real smoke). `--skip-local` controls
+    # only whether local clips are *scored* into the reservoir, not the exclusion.
+    all_local = set(list_local_uids(dl.output_path))
+    local_uids = [] if args.skip_local else [u for u in sorted(all_local) if u not in processed]
     if args.no_download:
         work = local_uids
     else:
-        local_set = set(local_uids)
-        new_uids = [u for u in dl.get_all_uids() if u not in processed and u not in local_set]
+        new_uids = [u for u in dl.get_all_uids() if u not in processed and u not in all_local]
         remaining = max(0, args.target - len(processed))
         work = (local_uids + new_uids)[:remaining]
     if args.limit is not None:
         work = work[: args.limit]
-    print(f"[reservoir] work list: {len(work)} UIDs ({len(local_uids)} local available)")
+    print(f"[reservoir] work list: {len(work)} UIDs "
+          f"({len(local_uids)} local to score, {len(all_local)} local on disk)")
+
+    if args.skip_local:
+        leaked = set(work) & all_local
+        assert not leaked, (
+            f"--skip-local safety violation: {len(leaked)} local UID(s) leaked into the "
+            f"work list and would risk deletion: {sorted(leaked)[:5]}"
+        )
 
     def purge(path):
         if args.dry_run or path is None:
