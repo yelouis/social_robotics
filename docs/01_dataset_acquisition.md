@@ -45,6 +45,13 @@ To mitigate the massive storage requirements of these datasets, the system emplo
 - **Resumability & Save Points**: Three JSON state files make acquisition resumable and incremental: `processed_uids.json` (every UID evaluated — kept *or* purged — so re-runs never re-download or re-process it), `reservoir_state.json` (the retained set: uid → score → path), and `filtered_manifest.json` (the retained set in full Layer 03 schema — the save-state Node 03 picks up **without re-running Node 02**).
 - **Single Source of Truth**: The acquisition filter and the main processing pipeline both utilize `src/shared/social_presence.py` to ensure consistent social presence detection heuristics across the entire lifecycle.
 
+> [!IMPORTANT]
+> **Operating the long reservoir run — do NOT manually restart Python on a crash.** A full-corpus acquisition is a multi-day job and is launched under an **auto-restart wrapper** (a `bash` loop that re-invokes the resumable orchestrator). Individual videos occasionally trigger a **native Python crash** (an MPS / OpenCV / ffmpeg fault on a particular clip), which on macOS pops a *"Python quit unexpectedly"* dialog.
+>
+> **When you see that dialog, just dismiss it — do not quit or restart Python.** The wrapper automatically relaunches the run, which resumes from `processed_uids.json` and **skips the crashing clip** (each UID is marked processed *before* scoring, so a crash can never retry-loop or lose progress). If you manually kill/restart Python you risk killing the `bash` wrapper too, which stops the entire acquisition.
+>
+> To stop the dialogs from interrupting you (crashes still log to `~/Library/Logs/DiagnosticReports/`): `defaults write com.apple.CrashReporter DialogType none` — restore later with `defaults write com.apple.CrashReporter DialogType crashreport`.
+
 ### Filtering Heuristics & Performance
 To optimize filtering accuracy and throughput during the streaming process, the following designs are enforced in `social_presence.py`:
 - **Batched Inference**: The social filter accumulates frames into an internal batch array to leverage YOLO's native GPU batch inference, significantly improving throughput over sequential processing.
