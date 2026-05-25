@@ -7,8 +7,11 @@ or no task labels) and reservoir-evicted clips are purged, so the working set
 stays bounded to the highest-social-presence videos.
 
 Save points make it resumable and incremental:
-  - `processed_uids.json` — every UID seen (pass or fail); re-runs never
-    re-download or re-process these.
+  - `reservoir_processed_uids.json` — every UID this reservoir run has evaluated
+    (kept or purged); re-runs never re-download or re-score these. Kept separate
+    from the legacy streaming `processed_uids.json` so the reservoir scores every
+    candidate (including already-downloaded videos) into the top-K instead of
+    inheriting an unrelated flow's "seen" set.
   - `reservoir_state.json` — the retained set (uid -> score -> path).
   - `filtered_manifest.json` — the retained set in full Layer 03 schema (the
     03 save-state), refreshed as the reservoir changes.
@@ -39,7 +42,13 @@ from dataset_acquisition.reservoir import ScoreReservoir, DEFAULT_CAP, DEFAULT_D
 from filtering_and_labeling.pipeline import FilteringPipeline  # noqa: E402
 
 SSD_ROOT = config.OUTPUT_DIR.parent  # /Volumes/Extreme SSD/social_robotics
-PROD_PROCESSED = config.OUTPUT_DIR / "ego4d" / "processed_uids.json"
+# The reservoir keeps its OWN processed-UID save-point, deliberately separate
+# from the legacy streaming-download `processed_uids.json`. That legacy file
+# marks videos the old keep/purge flow already saw — but it scored none of them
+# into a reservoir, so inheriting it would silently exclude already-downloaded
+# kept-social videos from the top-K. A fresh file lets the reservoir score every
+# candidate (local + new) while still being resumable across its own re-runs.
+PROD_PROCESSED = SSD_ROOT / "reservoir_processed_uids.json"
 PROD_STATE = SSD_ROOT / "reservoir_state.json"
 PROD_MANIFEST = SSD_ROOT / "filtered_manifest.json"
 
