@@ -80,6 +80,7 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
   "video_path": "/Volumes/Extreme SSD/raw_videos/ego4d_clip_10293.mp4",
   "fps": 30.0,
   "duration_sec": 45.0,
+  "social_presence_score": 12.34,
   "identified_tasks": [
     {
       "task_id": "t_01",
@@ -141,6 +142,8 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
   ]
 }
 ```
+
+> **`social_presence_score`**: The total social-presence signal for the clip — the sum of every `bystander_detections[*].detection_confidence` value across all sampled frames. It is the canonical "02 passing score" used to rank videos for retention (the acquisition layer's top-K reservoir keeps the highest-scoring clips). Because it sums only frames that contain a confirmed bystander, it measures *total social presence*: a longer clip outranks a shorter one only when it actually contains more bystander-detection mass, not merely more duration. Additive, video-level — never remove or rename it.
 
 > **Co-indexing rule**: Within each `bystander_detections` entry, `timestamps_sec[i]`, `bounding_boxes[i]`, and `detection_confidence[i]` are strictly co-indexed. The i-th element of each array describes the same sampled frame.
 

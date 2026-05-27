@@ -324,13 +324,26 @@ class FilteringPipeline:
         # the metadata in place.
 
         cap.release()
-        
+
+        # Total social-presence signal: the summed bystander detection
+        # confidence across all sampled frames. This is the canonical "02
+        # passing score" used to rank videos for retention (e.g. the top-K
+        # reservoir in the acquisition layer). It credits only frames with a
+        # confirmed bystander, so it measures *total social presence* — a longer
+        # clip outranks a shorter one only when it actually contains more
+        # bystander-detection mass, not merely more duration.
+        social_presence_score = round(
+            sum(sum(b.get("detection_confidence", [])) for b in entry.get('bystander_detections', [])),
+            3,
+        )
+
         res = {
             "video_id": video_id,
             "source_dataset": entry['dataset'],
             "video_path": str(video_path),
             "fps": fps,
             "duration_sec": duration_sec,
+            "social_presence_score": social_presence_score,
             "identified_tasks": identified_tasks,
             "bystander_detections": entry['bystander_detections'],
             "hand_detections": entry.get('hand_detections', [])
