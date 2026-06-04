@@ -22,6 +22,40 @@ try:
     from l2cs.utils import select_device
 except ImportError:
     Pipeline = None
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Face-presence gate (Resolved Issue 1) and bbox re-detection (Resolved Issue 2)
+# dependencies. Imported defensively so the module still loads on hosts without
+# them (the gates then degrade to no-op, logged at init).
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
+except ImportError:
+    mp = None
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
+try:
+    from src.models_config import get_model
+except ImportError:
+    try:
+        from models_config import get_model
+    except ImportError:
+        get_model = None
+
+# Face gate tunables (env-overridable). A crop is "valid" for gaze only if a
+# human face is detected with confidence >= MIN_FACE_CONF; otherwise the sample
+# is scored 0.0 with target "NoFace" (rejects dogs, empty/occluded crops, and
+# faces too degraded for reliable gaze — see Resolved Issue 1).
+import os as _os
+FACE_DETECTOR_PATH = _PROJECT_ROOT / "models" / "mediapipe" / "blaze_face_short_range.tflite"
+MIN_FACE_CONF = float(_os.getenv("SR_03A_MIN_FACE_CONF", "0.5"))
+REDETECT_IOU_THRESH = float(_os.getenv("SR_03A_REDETECT_IOU", "0.1"))
+ENABLE_FACE_GATE = _os.getenv("SR_03A_FACE_GATE", "1").lower() in ("1", "true", "yes")
+ENABLE_BBOX_REDETECT = _os.getenv("SR_03A_BBOX_REDETECT", "1").lower() in ("1", "true", "yes")
 class AttentionLayerPipeline:
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -64,7 +98,17 @@ class AttentionLayerPipeline:
         except Exception as e:
             print(f"Failed to load L2CS-Net: {e}")
             self.gaze_pipeline = None
-        
+
+        # Lazy-loaded crop-validation models (Resolved Issues 1 & 2).
+        self._face_detector = None
+        self._pose_model = None
+        self.enable_face_gate = ENABLE_FACE_GATE and mp is not None and FACE_DETECTOR_PATH.exists()
+        self.enable_bbox_redetect = ENABLE_BBOX_REDETECT and YOLO is not None and get_model is not None
+        if ENABLE_FACE_GATE and not self.enable_face_gate:
+            print("[03a] Face gate requested but unavailable (mediapipe/model missing); scoring all crops.")
+        if ENABLE_BBOX_REDETECT and not self.enable_bbox_redetect:
+            print("[03a] Bbox re-detect requested but unavailable (ultralytics/registry missing); using manifest boxes.")
+
         self.processed_ids = set()
         if self.output_result_path.exists() and not self.force:
             try:
@@ -101,12 +145,83 @@ class AttentionLayerPipeline:
             return False
         return psutil.virtual_memory().total >= AttentionLayerPipeline.HIGH_MEMORY_HOST_BYTES
 
+    @property
+    def face_detector(self):
+        """ Lazy MediaPipe Tasks BlazeFace detector (Resolved Issue 1). IMAGE mode
+        so one instance is reused across crops without timestamp constraints. """
+        if self._face_detector is None:
+            opts = mp_vision.FaceDetectorOptions(
+                base_options=mp_python.BaseOptions(model_asset_path=str(FACE_DETECTOR_PATH)),
+                running_mode=mp_vision.RunningMode.IMAGE,
+                min_detection_confidence=MIN_FACE_CONF,
+            )
+            self._face_detector = mp_vision.FaceDetector.create_from_options(opts)
+        return self._face_detector
+
+    @property
+    def pose_model(self):
+        """ Lazy YOLO-pose for per-frame bystander re-detection (Resolved Issue 2).
+        Same yolov8n-pose.pt the Node-02 social filter uses. """
+        if self._pose_model is None:
+            self._pose_model = YOLO(get_model("social_presence_pose"))
+        return self._pose_model
+
+    def _crop_has_face(self, crop_bgr):
+        """ True iff a human face is detected in the crop at >= MIN_FACE_CONF.
+        Gate for Resolved Issue 1 — rejects dogs/empty/occluded/unresolvable crops. """
+        if not self.enable_face_gate or crop_bgr.size == 0:
+            return True  # gate disabled -> preserve legacy behavior (score all crops)
+        try:
+            rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+            det = self.face_detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            return len(det.detections) > 0
+        except Exception as e:
+            print(f"[03a] Face gate error (passing crop through): {e}")
+            return True  # an outage must not silently zero out every bystander
+
+    @staticmethod
+    def _iou(a, b):
+        ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        ua = max(0.0, (ax2-ax1)*(ay2-ay1)) + max(0.0, (bx2-bx1)*(by2-by1)) - inter
+        return inter / ua if ua > 0 else 0.0
+
+    def _detect_pose_boxes(self, frame_bgr):
+        """ Run YOLO-pose once on a frame; return list of person [x1,y1,x2,y2]
+        (Resolved Issue 2). Empty list on error / when disabled. """
+        if not self.enable_bbox_redetect:
+            return []
+        try:
+            results = self.pose_model(frame_bgr, classes=[0], verbose=False, conf=0.5)
+            boxes = []
+            for r in results:
+                if r.boxes is None:
+                    continue
+                for bx in r.boxes:
+                    boxes.append([int(v) for v in bx.xyxy[0].tolist()])
+            return boxes
+        except Exception as e:
+            print(f"[03a] Pose re-detect error (using manifest box): {e}")
+            return []
+
     def unload(self):
-        """ Free the L2CS-Net model from MPS / GPU memory for downstream layers. """
+        """ Free the L2CS-Net + crop-validation models from MPS / GPU memory. """
         if getattr(self, 'gaze_pipeline', None) is not None:
             print("[AttentionLayerPipeline] Unloading L2CS-Net...")
             del self.gaze_pipeline
             self.gaze_pipeline = None
+        if getattr(self, '_face_detector', None) is not None:
+            try:
+                self._face_detector.close()
+            except Exception:
+                pass
+            self._face_detector = None
+        if getattr(self, '_pose_model', None) is not None:
+            del self._pose_model
+            self._pose_model = None
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
@@ -134,6 +249,12 @@ class AttentionLayerPipeline:
 
         for entry in registry:
             if entry.get("synthetic") is True:
+                continue
+            # Skip clips flagged as invalid social positives (e.g. a non-human
+            # bystander track) during spot-check — Node 02 Issue 2 remediation.
+            if entry.get("flagged_invalid") is True:
+                print(f"Skipping {entry.get('video_id', entry.get('id'))}: flagged_invalid "
+                      f"({entry.get('flag_reason', 'unspecified')})")
                 continue
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
@@ -258,9 +379,20 @@ class AttentionLayerPipeline:
             else:
                 gaze_target = "Unknown"
 
+            # Resolved Issue 3: length-invariant engagement metrics. `average_
+            # attention_score` averages over the whole trace (incl. NoFace/0.0
+            # samples), so it tracks clip length, not engagement. `attended_
+            # fraction` = how often the bystander looked; `engaged_attention_
+            # score` = how intently when they did (mean over score>0 samples).
+            attended_fraction = round(sum(1 for s in scores if s >= 0.5) / len(scores), 3) if scores else 0.0
+            _nonzero = [s for s in scores if s > 0.0]
+            engaged_attention_score = round(sum(_nonzero) / len(_nonzero), 2) if _nonzero else 0.0
+
             per_person_results.append({
                 "person_id": person_id,
                 "average_attention_score": round(avg_score, 2),
+                "attended_fraction": attended_fraction,
+                "engaged_attention_score": engaged_attention_score,
                 "peak_engagement_timestamp_sec": peak_timestamp,
                 "attention_variance": round(variance, 4),
                 "sustained_engagement_sec": round(sustained_sec, 2),
@@ -355,6 +487,10 @@ class AttentionLayerPipeline:
             batch_crops = []
             batch_info = []
 
+            # Re-detect bystander boxes on THIS frame once (Resolved Issue 2);
+            # shared across all bystanders active at current_t.
+            pose_boxes = self._detect_pose_boxes(frame)
+
             for bystander in bystanders:
                 pid = bystander.get('person_id')
                 if pid not in next_t:
@@ -365,7 +501,7 @@ class AttentionLayerPipeline:
                 if abs(next_t[pid] - current_t) < 1e-4:
                     b_timestamps = bystander.get('timestamps_sec', [])
                     b_bboxes = bystander.get('bounding_boxes', [])
-                    
+
                     diffs = [abs(t - current_t) for t in b_timestamps]
                     closest_idx = diffs.index(min(diffs))
 
@@ -374,8 +510,14 @@ class AttentionLayerPipeline:
                         continue
 
                     bbox = b_bboxes[closest_idx]
+                    # Resolved Issue 2: replace the (up to 2 s) stale manifest box
+                    # with the best-IoU fresh YOLO-pose detection on this frame.
+                    if pose_boxes:
+                        best = max(pose_boxes, key=lambda pb: self._iou(pb, bbox))
+                        if self._iou(best, bbox) >= REDETECT_IOU_THRESH:
+                            bbox = best
                     x1, y1, x2, y2 = bbox
-                    
+
                     px1 = max(0, int(x1) - 20)
                     py1 = max(0, int(y1) - 20)
                     px2 = min(w, int(x2) + 20)
@@ -384,6 +526,21 @@ class AttentionLayerPipeline:
                     crop = frame[py1:py2, px1:px2]
                     if crop.size == 0:
                         next_t[pid] += self.BASELINE_STRIDE_SEC
+                        continue
+
+                    # Resolved Issue 1: face-presence gate. Crops without a
+                    # detectable human face (dog, empty, occluded, unresolvable)
+                    # get a NoFace/0.0 sample instead of a bogus gaze score.
+                    if not self._crop_has_face(crop):
+                        traces[pid].append({
+                            "t": round(current_t, 2), "score": 0.0,
+                            "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"
+                        })
+                        if last_scores[pid] >= 0.0 and abs(0.0 - last_scores[pid]) > self.BURST_DELTA_THRESHOLD:
+                            burst_until_t[pid] = current_t + self.BURST_DURATION_SEC
+                        stride = self.burst_stride_sec if current_t < burst_until_t[pid] else self.BASELINE_STRIDE_SEC
+                        next_t[pid] += stride
+                        last_scores[pid] = 0.0
                         continue
 
                     resized_crop = cv2.resize(crop, (448, 448))

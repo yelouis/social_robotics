@@ -112,6 +112,10 @@ def main():
     ap.add_argument("--no-download", action="store_true", help="Only score already-local UIDs.")
     ap.add_argument("--dry-run", action="store_true", help="Never delete files (log evictions/purges only).")
     ap.add_argument("--limit", type=int, default=None, help="Hard cap on UIDs processed (smoke).")
+    ap.add_argument("--stop-at-kept", type=int, default=None,
+                    help="Stop as soon as the reservoir holds this many videos (e.g. 1000). "
+                         "Lets a run keep downloading/scoring past --target until the reservoir "
+                         "is actually full, then exit without churning extra downloads.")
     ap.add_argument("--smoke", action="store_true",
                     help="Isolated dry-run on local videos: --no-download --dry-run, temp state, small cap/limit.")
     ap.add_argument("--skip-local", action="store_true",
@@ -260,6 +264,14 @@ def main():
         elif idx % 5 == 0 or idx == len(work):
             reservoir.save()
             reservoir.export_manifest(manifest_path)
+
+        # Goal-reached stop: exit as soon as the reservoir is full (e.g. 1000),
+        # regardless of how many UIDs remain in --target. Avoids churning extra
+        # downloads once the target reservoir size is met.
+        if args.stop_at_kept and len(reservoir.entries) >= args.stop_at_kept:
+            print(f"[reservoir] stop-at-kept reached: {len(reservoir.entries)} >= "
+                  f"{args.stop_at_kept}; stopping early.", flush=True)
+            break
 
     _save_set(processed_path, processed)
     reservoir.save()
