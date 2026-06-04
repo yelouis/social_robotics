@@ -56,6 +56,13 @@ MIN_FACE_CONF = float(_os.getenv("SR_03A_MIN_FACE_CONF", "0.5"))
 REDETECT_IOU_THRESH = float(_os.getenv("SR_03A_REDETECT_IOU", "0.1"))
 ENABLE_FACE_GATE = _os.getenv("SR_03A_FACE_GATE", "1").lower() in ("1", "true", "yes")
 ENABLE_BBOX_REDETECT = _os.getenv("SR_03A_BBOX_REDETECT", "1").lower() in ("1", "true", "yes")
+# Window-restricted sampling (scaling Idea 1): only ~19% of clip-time contains a
+# bystander, so process just the +/-WINDOW_PAD_SEC intervals around real bystander
+# detections and seek past the gaps. WINDOW_PAD_SEC must match the per-sample
+# nearest-detection tolerance (the 2.0 s check in _track_and_score_batched) so the
+# set of scored frames is unchanged. Toggle off with SR_03A_WINDOW_RESTRICT=0.
+ENABLE_WINDOW_RESTRICT = _os.getenv("SR_03A_WINDOW_RESTRICT", "1").lower() in ("1", "true", "yes")
+WINDOW_PAD_SEC = float(_os.getenv("SR_03A_WINDOW_PAD_SEC", "2.0"))
 class AttentionLayerPipeline:
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -459,6 +466,42 @@ class AttentionLayerPipeline:
         if not next_t:
             return {}
 
+        # Idea 1 (window-restricted sampling): build the union of
+        # +/-WINDOW_PAD_SEC intervals around every bystander detection timestamp.
+        # Samples in a GAP (no bystander within the tolerance) are still grabbed
+        # for frame-accuracy but SKIP the expensive per-frame YOLO re-detect +
+        # scoring below. v2 ran YOLO on every sampled frame and then discarded
+        # gap samples via the 2.0 s check anyway, so the recorded output is
+        # unchanged while ~80% of the YOLO passes are eliminated. WINDOW_PAD_SEC
+        # equals that 2.0 s tolerance.
+        # NOTE: decoding stays fully sequential — cap.set() seeking is
+        # keyframe-approximate on H.264 and desyncs frame<->timestamp (it
+        # corrupted scores in an earlier seek-based attempt), so we do not seek.
+        windows = None
+        if ENABLE_WINDOW_RESTRICT:
+            det_times = sorted({t for b in bystanders
+                                for t in b.get('timestamps_sec', [])
+                                if b.get('person_id') in next_t})
+            windows = []
+            for t in det_times:
+                s, e = max(0.0, t - WINDOW_PAD_SEC), min(duration_sec, t + WINDOW_PAD_SEC)
+                if windows and s <= windows[-1][1] + 1e-6:
+                    windows[-1][1] = max(windows[-1][1], e)
+                else:
+                    windows.append([s, e])
+            if not windows:
+                return traces
+
+        def _in_window(t):
+            if windows is None:
+                return True
+            for s, e in windows:
+                if s <= t <= e:
+                    return True
+                if t < s:          # windows are sorted; past the relevant one
+                    return False
+            return False
+
         # Prime the capture so the first cap.retrieve() has a valid buffer (Issue 5).
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         ret = cap.grab()
@@ -490,6 +533,17 @@ class AttentionLayerPipeline:
             batch_pids = []
             batch_crops = []
             batch_info = []
+
+            # Idea 1: gap sample — skip the per-frame YOLO re-detect + scoring
+            # (it would record nothing here, per the 2.0 s check). Advance the
+            # active tracks by baseline stride exactly as the in-loop gap path
+            # does, so the recorded trace is identical to the full-clip result.
+            if windows is not None and not _in_window(current_t):
+                for bystander in bystanders:
+                    pid = bystander.get('person_id')
+                    if pid in next_t and abs(next_t[pid] - current_t) < 1e-4:
+                        next_t[pid] += self.BASELINE_STRIDE_SEC
+                continue
 
             # Re-detect bystander boxes on THIS frame once (Resolved Issue 2);
             # shared across all bystanders active at current_t.
