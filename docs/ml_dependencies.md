@@ -11,6 +11,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **YOLOv8-pose** (`yolov8n-pose.pt`) | High-performance pose estimation (Motor Resonance) | ~6.5 MB | Internal SSD or Local Project | AGPL-3.0 |
 | **MediaPipe HandLandmarker** (`hand_landmarker.task`, float16) | Egocentric wearer hand detection for occlusion suppression (Layer 02 → Layer 03a). MediaPipe Tasks API bundle (replaces the legacy `mp.solutions.hands` namespace removed in mediapipe>=0.10.30). | ~7 MB | Local Project (`models/mediapipe/`) | Apache-2.0 |
 | **L2CS-Net** (or CrossGaze) | 3D Gaze / Head Pose Estimation | ~200 MB | Internal SSD or Local Project | MIT |
+| **MediaPipe FaceDetector** (`blaze_face_short_range.tflite`, float16) | Human-face presence gate for Layer 03a — rejects non-human/empty/occluded crops before L2CS gaze regression (03a Resolved Issue #2). MediaPipe Tasks API BlazeFace (short-range). | ~230 KB | Local Project (`models/mediapipe/`) | Apache-2.0 |
 | **Qwen2.5-VL** (via Ollama) | Primary VLM for visual classification + Task Climax VLM refinement (Node 02) | ~3-10 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **moondream** (via Ollama) | Fast VLM alternative (Lightweight) | ~1.6 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |
 | **Gemma 4** `gemma4:26b` (via Ollama) | Multi-step action expectation & reasoning logic (Layer 03b) | ~15 GB | "Extreme SSD" (`OLLAMA_MODELS` external directory) | Apache-2.0 |

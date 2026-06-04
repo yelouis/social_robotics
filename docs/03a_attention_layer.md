@@ -112,58 +112,20 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
    - **Problem**: In multi-bystander videos, the Attention pipeline looped over each bystander sequentially. This caused the video file to be opened and decoded from frame 0 multiple times (once per bystander), introducing massive video I/O bottlenecks and preventing parallel tensor operations.
    - **Solution**: Refactored `process_video` and replaced `_track_and_score` with `_track_and_score_batched` in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py) to perform single-pass video decoding. At each sampling timestamp (reconciled as the union of active bystanders' strides), the frame is decoded once, cropped and resized to `(448, 448)` for all active bystanders, stacked into a single `[N, 448, 448, 3]` batch, and processed in a single forward pass of L2CS-Net. This significantly speeds up I/O and leverages Apple Silicon (MPS) batched tensor acceleration.
 
+2. **Human-Face Validity Gate Before Gaze Regression (Resolved - June 03)**:
+   - **Problem**: `_track_and_score_batched` cropped every Node-02 bystander bbox and ran L2CS-Net on it unconditionally. L2CS (trained only on human faces) returns a confident pitch/yaw for *any* crop — animal, poster, or empty background — so non-human and degenerate crops produced high "attention" scores. In the June 3 10-clip smell test (`e2e_reports/2026_06_02_layer03a/`) the single highest-scoring track (`25ffbde8`, score 0.92, target "Camera") was a **dog** the wearer was petting.
+   - **Solution**: Added a MediaPipe Tasks API BlazeFace face-presence gate (`models/mediapipe/blaze_face_short_range.tflite`, `min_detection_confidence = MIN_FACE_CONF`, default 0.5) in `src/layer_03a_attention/pipeline.py`. Each candidate crop is checked via `_crop_has_face()` before scoring; crops with no detected human face emit `{"score": 0.0, "target": "NoFace"}` and skip L2CS, so dogs / empty / occluded / unresolvable crops no longer fabricate a gaze score. The gate is env-toggleable (`SR_03A_FACE_GATE`) and threshold-tunable (`SR_03A_MIN_FACE_CONF`); on a missing model/mediapipe or a detector exception it fails open (scores the crop) so a VLM/model outage never silently zeros every bystander. `gaze_target_classification` was updated to exclude `"NoFace"` (as it already excluded `"Unknown"`) so the per-person target reflects gaze on face-present samples. Validated on the June 3 sample: the dog crop is rejected, the post-fix v2 re-run shows 6–95% `NoFace` per clip (reflecting Ego4D's distant/profile bystanders), and the remaining high scorers (`14f5014d`, `6fd026d8`) are confirmed real humans. Residual L2CS gaze noise on hard poses (sunglasses/profile/bent-over) is unchanged but now bounded to genuine human faces (see Model Selection Rationale).
+
+3. **Stale / Drifting Bystander Boxes Under Fast Egocentric Motion (Resolved - June 03)**:
+   - **Problem**: Node 02 persists `bystander_detections` at 1/3 FPS (a box every ~3 s, Resolved Issue #11), but 03a samples gaze at 8 FPS and matched each sample to the nearest manifest box within a 2.0 s tolerance. In fast-moving egocentric clips the box was up to 2 s stale, so the gaze crop landed on the wrong region — for `25ffbde8` a single track's box sat on a dog at t=31 s and on empty canyon terrain at t=13 s — yielding meaningless scores and the bulk of the noisy zero/peak trace distribution.
+   - **Solution**: Added per-frame YOLO-pose re-detection in `_track_and_score_batched`. On each decoded sample frame, `_detect_pose_boxes()` runs `yolov8n-pose.pt` (resolved via `models_config.get_model("social_presence_pose")`) once and the result is shared across all bystanders active at that timestamp; for each track the stale manifest box is replaced by the maximum-IoU fresh detection when IoU ≥ `REDETECT_IOU_THRESH` (default 0.1), otherwise it falls back to the manifest box. This re-aligns the crop to the subject under motion and synergistically improves the Issue-2 face gate's recall (a fresh, tight box gives the detector a better crop). Env-toggleable via `SR_03A_BBOX_REDETECT`; it adds one detection pass per sampled frame (a material cost on multi-hour clips — disable for throughput-bound batch runs). The model is freed alongside L2CS in `unload()`.
+
+4. **Length-Invariant Engagement Metrics (Resolved - June 03)**:
+   - **Problem**: `average_attention_score` (and the `mean_attention_all_persons` aggregate) averages over the entire trace, including the many 0.0 / `NoFace` samples, so it scales with clip length rather than engagement — in the June 3 sample the shortest clip had the highest mean while a 4.7 h clip would regress toward 0 regardless of genuine looking. The summary statistic was a misleading headline for downstream layers (e.g. 03b correlation).
+   - **Solution**: Added two additive per-person fields in `process_video`: `attended_fraction` (share of trace samples with score ≥ 0.5 — how often the bystander looked) and `engaged_attention_score` (mean over only score > 0 samples — how intently when they did). The existing `average_attention_score`, `peak_engagement_timestamp_sec`, `sustained_engagement_sec`, and `is_engaged` are retained unchanged (additive schema contract). Post-fix v2 example: `6fd026d8` reports `attended_fraction` 0.23 / `engaged_attention_score` 0.80 against a length-diluted mean of 0.11, making the genuine engagement legible.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: No human-face validity gate before gaze regression
-**Status**: ⚠️ Confirmed Unresolved — Verified in the June 3 10-clip smell test (`e2e_reports/2026_06_02_layer03a/`). The highest-scoring track in the batch (`25ffbde8`, score 0.92, target "Camera") is a **dog** that fills the egocentric frame while the wearer pets it; `_track_and_score_batched` ([pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py#L306-L503)) crops the Node-02 bystander bbox and runs L2CS-Net on it unconditionally, and L2CS (trained only on human faces) returns a confident pitch/yaw for any crop — dog, mannequin, poster, or empty background. There is no check that the crop actually contains a forward-facing human face, so non-human and degenerate crops produce high "attention" scores. Root cause is shared with Node 02 Issue 2 (animals pass the social gate), but 03a should not blindly trust that every bystander box is a human.
-
-**Option A (recommended)**: **Add a lightweight face-presence + quality gate on each crop** — run a fast face detector (e.g. MediaPipe FaceDetection / BlazeFace, already an MPS-friendly dependency) on the crop before L2CS; if no human face clears a confidence + min-pixel-size threshold, emit `score=0.0, target="NoFace"` for that sample instead of a gaze score.
-  - *Pros*: Directly removes the dog/empty/poster false-highs; cheap (BlazeFace is sub-millisecond); also fixes the distant/occluded-face over-confidence (faces below the min-size threshold are gated out); adds an auditable `NoFace` reason to the trace.
-  - *Cons*: Adds one detector forward pass per crop (mitigated by the existing batching); a too-strict size threshold could drop genuine distant bystanders (needs tuning against the pass-score distribution).
-
-**Option B**: **Confidence-weight the score by L2CS face-embedding plausibility** — keep scoring all crops but down-weight samples whose L2CS internal feature confidence is low.
-  - *Pros*: No second model; single-pass.
-  - *Cons*: L2CS does not expose a calibrated face-confidence; brittle and indirect; would not cleanly reject a dog face that L2CS is "confident" about.
-
-**Option C**: **Fix it upstream only (rely on Node 02 Issue 2 remediation)** — assume a human-validated bystander gate at Node 02 and make no 03a change.
-  - *Pros*: Single chokepoint; no per-frame cost in 03a.
-  - *Cons*: Couples 03a correctness to a 02 change that is itself unresolved; 03a remains wrong for any manifest produced before that lands, and for any future non-human that slips the 02 gate.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Gaze crops use stale, drifting Node-02 bystander boxes under fast egocentric motion
-**Status**: ⚠️ Confirmed Unresolved — Verified in the June 3 smell test. Node 02 persists `bystander_detections` at 1/3 FPS (one box every ~3 s, per Resolved Issue #11), but 03a samples gaze at 8 FPS and matches each sample to the nearest box within a **2.0 s** tolerance ([pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03a_attention/pipeline.py#L365-L392)). In fast-moving egocentric clips the box is up to 2 s stale, so the crop lands on the wrong region: for clip `25ffbde8` a single `person_id` track's box sits on a dog at t=31 s and on **empty canyon terrain** at t=13 s (the real hikers are center-frame, outside the box), indicating both 2 s staleness and ByteTrack ID drift across the moving camera. Stale crops yield meaningless gaze scores (high when the crop accidentally catches a face, zero when it catches background), which is the dominant source of the 43%-zero / noisy-peak trace distribution.
-
-**Option A (recommended)**: **Re-detect the bystander box at the gaze sample time** — run the cheap YOLO-pose detector (already used by Node 02) on the sampled frame and associate the nearest box to the track before cropping, rather than reusing a box up to 2 s old.
-  - *Pros*: Eliminates staleness; crops follow the subject under fast motion; reuses an existing model.
-  - *Cons*: Adds a detection pass per sampled frame (cost partly offset by skipping samples with no nearby box); needs a track-association rule to keep `person_id` stable.
-
-**Option B**: **Tighten the match tolerance and interpolate** — drop the tolerance from 2.0 s to ~0.4 s and linearly interpolate box position between the two nearest Node-02 detections.
-  - *Pros*: No new model; interpolation smooths slow motion.
-  - *Cons*: Linear interpolation is wrong under fast/jerky egocentric motion (the failure case here); a tight tolerance without interpolation would simply drop most 8-FPS samples, collapsing the trace toward the 1/3-FPS box cadence.
-
-**Option C**: **Raise Node 02's bystander sampling rate** for retained clips so boxes exist near every 03a sample.
-  - *Pros*: Fixes staleness at the source for all downstream layers.
-  - *Cons*: Re-running Node 02 over the 1,000-clip reservoir is expensive; increases manifest size; the 1/3-FPS rate was deliberately chosen for 02 throughput (Resolved Issue #11).
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 3: `average_attention_score` compresses toward a low band and tracks clip length, not engagement
-**Status**: ⚠️ Confirmed Unresolved — Verified in the June 3 smell test. All 10 clips scored a mean of 0.16–0.41 (none ≥ 0.5), yet every clip's **peak** single-sample score was 0.80–1.00 and 21% of all 50,502 samples were ≥ 0.70. Because `mean_attention_all_persons` averages over the full trace — 43% of which are exactly 0.0 (subject not looking, or stale/empty crop per Issue 2) — the summary statistic is dominated by clip length: the shortest clip (`25ffbde8`, 122 s) has the highest mean and a 4.7 h clip would regress toward 0 regardless of genuine engagement. The per-person `is_engaged` flag partly compensates via the `sustained_engagement_sec > 2.0` clause, but `average_attention_score` as exposed is a misleading headline metric for downstream layers (e.g. 03b correlation).
-
-**Option A (recommended)**: **Report engagement over "attended" samples, not all samples** — add `attended_fraction` (share of samples with score ≥ 0.5) and `engaged_attention_score` (mean over only score>0 samples) alongside the existing mean; document the peak/sustained metrics as the primary engagement signal.
-  - *Pros*: Length-invariant; separates "how often they looked" from "how intently when they did"; additive schema change, no recompute of traces.
-  - *Cons*: More fields for downstream layers to understand; thresholds (0.5) need a short calibration pass.
-  - *Note*: Most informative once Issue 2 is fixed, since today's zero-samples are a mix of genuine not-looking and stale-crop artifacts.
-
-**Option B**: **Keep the mean but window it** to the task reaction-window (from `task_temporal_metadata`) instead of the whole clip.
-  - *Pros*: Focuses the score on the moment that matters for reaction-class analysis; aligns 03a with the climax-window design.
-  - *Cons*: Requires climax metadata to be populated first (deferred to the first Layer 03 pass per 02 Resolved Issue #8); undefined for clips with no clear climax.
-
-Your selection: Proceed with Option A.
+There are currently no unresolved issues.
 
 
