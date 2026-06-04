@@ -372,7 +372,11 @@ class AttentionLayerPipeline:
             target_counts = {}
             for item in trace:
                 tgt = item.get('target')
-                if tgt and tgt != "Unknown":
+                # Exclude both "Unknown" and "NoFace" (Resolved Issue 1) so the
+                # classification reflects where the bystander looked on the
+                # samples where a face was actually resolved, not the gate's
+                # rejections.
+                if tgt and tgt not in ("Unknown", "NoFace"):
                     target_counts[tgt] = target_counts.get(tgt, 0) + 1
             if target_counts:
                 gaze_target = max(target_counts.items(), key=lambda kv: kv[1])[0]

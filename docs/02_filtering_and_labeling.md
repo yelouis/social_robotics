@@ -228,6 +228,10 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
     - **Problem**: In 150-video E2E runs, fixed-camera clips containing a single occupant (non-egocentric POVs) were occasionally accepted by `qwen2.5vl` as containing multiple people, leading to a small number of false positives. Attempting to filter these via a minimum confidence score floor (`social_presence_score >= 10`) or a one-shot egocentric framing classifier over-rejected genuine distant/intermittent bystander true positives, demonstrating that standard VLM framing judgments and score floors reduce recall for negligible precision gains.
     - **Solution**: Accepted the rare non-egocentric / over-confirmation false-positive as a known minor limitation. Avoided adding a blunt confidence floor or frame-level POV gate to preserve recall of weak-band bystander true positives (e.g. distant pedestrians or brief crew interactions) which downstream layers can still successfully process. If needed, structural non-egocentric sources will be filtered at intake via dataset metadata rather than per-frame VLM classification.
 
+17. **Non-Human (Animal) Bystander Tracks Pass the Social-Presence Gate (Resolved - June 03)**:
+    - **Problem**: The June 3 Layer 03a smell test (`e2e_reports/2026_06_02_layer03a/`) found clip `25ffbde8` retained with a `bystander_detections` track whose boxes follow a **dog** the wearer is petting: YOLO-pose fired on the animal's head/forequarters and the `qwen2.5vl` multi-person gate confirmed it. The clip also contains real human hikers (so the clip is a true social positive), but one persisted track is an animal — and Layer 03a then regressed a confident 0.92 "looking at camera" gaze on the dog. Neither the YOLO-pose head+shoulder keypoint gate nor the multi-person VLM prompt explicitly excludes animals.
+    - **Solution**: Per the operator directive to avoid a full Node-02 re-run over the 1,000-clip reservoir, the remediation is defense-in-depth on the existing data rather than a gate-behavior change: (1) the identified clip is quarantined in `filtered_manifest.json` with `flagged_invalid: true` + a `flag_reason` (clip `25ffbde8`); (2) Layer 03a's `run()` now skips `flagged_invalid` entries (alongside its synthetic-skip guard); and (3) the new Layer 03a human-face gate (03a Resolved Issue #2) independently rejects non-human crops at scoring time, so even an un-flagged animal track cannot fabricate a gaze score downstream. The general prophylactic — the selected Option A "human, not animal" clause on the multi-person VLM prompt so future runs never *persist* animal tracks — is intentionally deferred to the next scheduled Node-02 re-run, where the prompt change can be validated live (shipping an unvalidated VLM-gate prompt change risks silent recall regressions); the current manifest is protected in the interim by the face gate.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
 ### Issue 1: Residual multi-person false-negative on long/mixed videos with intermittently-framed bystanders
@@ -244,24 +248,5 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 **Option C**: **Segment long videos and filter per-segment** so a solo stretch and a social stretch are evaluated independently.
   - *Pros*: Matches the real structure of long Ego4D clips; yields per-segment social windows useful to Layer 03.
   - *Cons*: Larger architectural change; requires a segment schema in `filtered_manifest.json`.
-
-Your selection: Proceed with Option A.
-
----
-
-### Issue 2: Non-human subjects (animals) pass the social-presence gate as bystander tracks
-**Status**: ⚠️ Confirmed Unresolved — Surfaced by the June 3 Layer 03a smell test (`e2e_reports/2026_06_02_layer03a/`). Clip `25ffbde8` (a hiking clip) was retained with a `bystander_detections` track whose bounding boxes follow a **dog** the wearer is petting; YOLO-pose fired on the animal's head/forequarters and the `qwen2.5vl` multi-person gate confirmed it (the clip also contains real human hikers, so the clip itself is a true social positive — but one of its persisted tracks is an animal). Downstream this is real pollution: Layer 03a then regressed a confident 0.92 "looking at camera" gaze on the dog (03a Issue 1), and any per-track consumer inherits a non-human "bystander." Neither the YOLO-pose head+shoulder keypoint gate nor the Moondream/qwen prompt explicitly excludes animals.
-
-**Option A (recommended)**: **Add an explicit "human, not animal" clause to the multi-person VLM prompt** and require it per-track at the first pose-positive frame — e.g. ask whether each detected figure is a *human person* (not a dog, cat, or other animal) and drop tracks the VLM labels non-human.
-  - *Pros*: Cheap (reuses the existing VLM call); targets the exact failure; keeps genuinely-social clips while pruning the polluted track.
-  - *Cons*: Per-track verification adds VLM calls on multi-track clips; prompt tuning needed; small risk of dropping a real distant human the VLM misjudges.
-
-**Option B**: **Filter YOLO-pose detections by keypoint skeleton plausibility** — reject detections whose keypoint geometry (shoulder width vs head size, limb counts) is inconsistent with a human bipedal skeleton.
-  - *Pros*: No VLM cost; deterministic; runs at the detection stage.
-  - *Cons*: Brittle geometric thresholds; quadruped-on-hind-legs / partial-body humans could be misclassified either way; more code to maintain.
-
-**Option C**: **Accept as a rare, low-impact pollution** and rely on the downstream 03a face gate (03a Issue 1 Option A) to discard non-human tracks at scoring time.
-  - *Pros*: Zero 02 change; the 03a face gate already needs to exist for occluded/empty crops.
-  - *Cons*: Leaves non-human tracks in `filtered_manifest.json` for every consumer to defend against individually; the manifest stays factually wrong about who is present.
 
 Your selection: Proceed with Option A.
