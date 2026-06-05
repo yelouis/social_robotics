@@ -124,8 +124,27 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
    - **Problem**: `average_attention_score` (and the `mean_attention_all_persons` aggregate) averages over the entire trace, including the many 0.0 / `NoFace` samples, so it scales with clip length rather than engagement — in the June 3 sample the shortest clip had the highest mean while a 4.7 h clip would regress toward 0 regardless of genuine looking. The summary statistic was a misleading headline for downstream layers (e.g. 03b correlation).
    - **Solution**: Added two additive per-person fields in `process_video`: `attended_fraction` (share of trace samples with score ≥ 0.5 — how often the bystander looked) and `engaged_attention_score` (mean over only score > 0 samples — how intently when they did). The existing `average_attention_score`, `peak_engagement_timestamp_sec`, `sustained_engagement_sec`, and `is_engaged` are retained unchanged (additive schema contract). Post-fix v2 example: `6fd026d8` reports `attended_fraction` 0.23 / `engaged_attention_score` 0.80 against a length-diluted mean of 0.11, making the genuine engagement legible.
 
+5. **Window-Restricted Sampling for Throughput (Resolved - June 03)**:
+   - **Problem**: `_track_and_score_batched` sampled the *entire* clip at 8 FPS and ran the per-frame YOLO-pose re-detect (Resolved Issue #3) on every retrieved frame — but only **~19.4%** of clip-time actually contains a bystander detection (measured across the June 3 10-clip sample). The other ~81% of frames were decoded and YOLO'd only to be discarded by the 2.0 s nearest-detection check, making the post-Issue-#3 run **~6.6× slower (9 → 61 min on the 10-clip sample)** and projecting the 1,000-clip reservoir to multiple days.
+   - **Solution**: Added window-restricted sampling, gated by `SR_03A_WINDOW_RESTRICT` (default on) with `SR_03A_WINDOW_PAD_SEC` (default 2.0, matching the nearest-detection tolerance). Before the decode loop, `_track_and_score_batched` builds the union of ±`WINDOW_PAD_SEC` intervals around every bystander detection timestamp. Decoding stays **fully sequential and frame-accurate**; for samples that fall in a gap (no bystander within tolerance) the frame is grabbed but the expensive per-frame YOLO re-detect and gaze scoring are skipped (those samples recorded nothing under the 2.0 s check anyway), advancing the active tracks by baseline stride exactly as the in-loop gap path did. An earlier attempt that used `cap.set()` to also skip gap *decode* was reverted: `cap.set` is keyframe-approximate on H.264, desyncing frame↔timestamp and corrupting scores (max mean-score drift 0.38, inflated sample counts). The final no-seek version is **bit-identical to the full-clip output** (max mean-score diff **0.0000**, identical trace-point counts across all 9 validated clips) while running **2.7× faster (61.2 → 22.6 min)** on the 10-clip sample.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-There are currently no unresolved issues.
+### Issue 1: 03a throughput at corpus scale (gap decode + within-window per-frame YOLO)
+**Status**: ⚠️ Confirmed Unresolved — Window-restricted sampling (Resolved Issue #5) cut the 10-clip run 2.7× (61 → 23 min), but two costs remain: (a) decode stays fully sequential over the whole clip (gap frames are grabbed, not skipped, to preserve frame-accuracy), and (b) the per-frame YOLO-pose re-detect (Resolved Issue #3) still runs on every sampled frame *within* bystander windows. At the 1,000-clip reservoir (median ~26 min/clip) this still projects to many hours. Three further levers were scoped during the June 3 scaling review and deferred:
+
+**Option A (recommended)**: **Frame-accurate seeking decoder (decord / PyAV / VideoToolbox)** — replace cv2 sequential `grab()` with a decoder supporting exact frame seeking, so gap *decode* (not just gap-YOLO) is skipped.
+  - *Pros*: Removes the gap-decode floor that windowing alone cannot; compounds with Resolved Issue #5.
+  - *Cons*: New dependency; the cv2 `cap.set` path is keyframe-approximate and was shown to corrupt scores (Resolved Issue #5), so frame-accuracy must be verified on the Ego4D H.264 corpus.
+
+**Option B**: **Cheaper within-window re-detect** — run YOLO-pose at a coarse rate (1–2 FPS) and track between detections (cv2 KCF/CSRT), or re-detect only when the manifest box is stale, instead of every 8 FPS frame.
+  - *Pros*: Directly cuts the dominant within-window cost; no new dependency.
+  - *Cons*: Tracker drift between detections; must validate that the crop alignment from Resolved Issue #3 is preserved.
+
+**Option C**: **Parallelize / pipeline** — overlap CPU decode with MPS inference and/or process multiple clips concurrently for the decode-bound portion.
+  - *Pros*: Multiplies throughput on the 64 GB host.
+  - *Cons*: A single MPS GPU serializes inference, so gains are mostly on decode; added concurrency complexity. Best assessed after A/B narrow the bottleneck.
+
+Your selection: _____
 
 
