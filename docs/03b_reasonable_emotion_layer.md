@@ -160,86 +160,42 @@ The initial implementation of the Reasonable Emotion Layer is complete:
    - **Problem**: The emotion layer sequentially calls the local Gemma 4 LLM to evaluate every emotional transition for each bystander. This created a severe processing bottleneck, adding 3-5 seconds of latency per transition sequentially.
    - **Solution**: Implemented sequential evaluation with cross-bystander parallelization in `_process_task` in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03b_reasonable_emotion/pipeline.py) using a `ThreadPoolExecutor`. Emotion frames are still sampled sequentially to avoid thread-safety violations on `cv2.VideoCapture`. Once sampled, the chronological history evaluations for each bystander's emotional journey are submitted as concurrent tasks. This maintains sequential context within each bystander's chain while overlapping the I/O-heavy local LLM calls across different bystanders, tasks, and videos.
 
+2. **Reaction Window Anchored to Bystander Presence (Resolved - June 04)**:
+   - **Problem**: `_process_task` sampled emotion strictly inside `task_reaction_window_sec` — anchored to the optical-flow peak (the *wearer's* kinetic climax), which in egocentric Ego4D is usually not when a bystander is on camera. In the June 4 10-clip smell test, **8 of 10 clips scored nothing**: the nearest bystander detection was 8–110 s from the reaction window, so every sample was dropped by the 2 s match tolerance.
+   - **Solution**: Added per-bystander window anchoring in the new `_collect_emotion_timeseries` (`src/layer_03b_reasonable_emotion/pipeline.py`). For each bystander, if any of its detections fall within `MATCH_TOL` of the optical-flow window the original window is kept; otherwise the sampling window is re-anchored to the bystander's detection timestamp **nearest the climax** (preserving the velocity-derived window width). Re-validated on the same 10 clips: **scored clips rose from 2/10 to 8/10**, sampling now occurs where bystanders are actually present.
+
+3. **Face-Presence Gate Before Emotion Inference (Resolved - June 04)**:
+   - **Problem**: `_sample_emotions` cropped the Node-02 **full-body** bystander box and passed it to HSEmotion (a face model). On the v1 run the crops were a hiker's backpack and a distant body; HSEmotion returned near-uniform magnitudes (~0.18, vs the 1/8 = 0.125 baseline) and labels flipped neutral→fear→joy→surprise→disgust within 2 s — pure noise, with no confidence gate.
+   - **Solution**: Added a MediaPipe BlazeFace gate (`models/mediapipe/blaze_face_short_range.tflite`, reusing 03a's model) in `_extract_face`: each bystander crop is face-detected and cropped to the largest face before HSEmotion; crops with no detected face emit no sample. The gate is active only when a real emotion model is loaded (the mock/test path is unaffected) and is env-toggleable (`SR_03B_FACE_GATE`, `SR_03B_MIN_FACE_CONF`). **Caveat surfaced by re-validation** (see Unresolved Issue 1): on this Ego4D sample the bystander crops are so distant/motion-blurred that BlazeFace still false-positives on non-face regions and HSEmotion stays near-uniform (~0.18), so the gate alone does not yet make the emotion signal trustworthy — a residual data-quality limitation is filed below.
+
+4. **ONNX Emotion Backend + No Silent Mock (Resolved - June 04)**:
+   - **Problem**: `from hsemotion.facial_emotions import HSEmotionRecognizer` failed to load under this environment for three compounding reasons — torch ≥ 2.6 `weights_only=True`, a CUDA-pickled checkpoint needing `map_location`, and a timm-version pickle mismatch (`DepthwiseSeparableConv` / `timm.layers`). On failure `emotion_detector` became `None` and `_sample_emotions` **silently** substituted seeded-RNG **mock** emotions — producing fake-but-real-looking scores with no warning.
+   - **Solution**: The emotion backend now **prefers the ONNX build** (`from hsemotion_onnx.facial_emotions import HSEmotionRecognizer`), falling back to the torch build, then to mock. `emotion_source` (`hsemotion_onnx` | `hsemotion_torch` | `mock`) is recorded on the pipeline and emitted on every output record, and a **loud warning** is printed at init if the model fails to load (Option C, done regardless). Validated: the smell-test re-run reports `emotion_source = hsemotion_onnx` with real weights. Adds `hsemotion-onnx` + `onnxruntime` (see `docs/ml_dependencies.md`).
+
+5. **03b Self-Populates Climax Metadata (Resolved - June 04)**:
+   - **Problem**: `filtered_manifest.json` ships with `task_temporal_metadata = {}` (Node 02 defers it, 02 Resolved Issue #8) and `_process_task` returns `None` without `task_reaction_window_sec`, but 03b never called `populate_climax_for_manifest` — so run standalone on the production manifest it scored **0 clips**.
+   - **Solution**: `run()` now calls `shared.climax_extraction.populate_climax_for_manifest(self.input_manifest_path, skip_vlm=True)` before reading the manifest (idempotent — a no-op once every task has metadata), fulfilling the Layer-03 contract from 02 Resolved Issue #8. Defensive: a failure logs and proceeds with existing metadata so a missing optional dep cannot crash the run.
+
+6. **Single-Pass, Face-Batched Emotion Sampling (Resolved - June 04)**:
+   - **Problem** (was Unresolved Issue 1): `_process_task` looped over each bystander and called `_sample_emotions` separately, re-opening/decoding the video from frame 0 once per bystander and using a per-sample random `cap.set(POS_FRAMES)` seek — both wasteful and, on H.264, seek-fragile.
+   - **Solution**: Replaced the per-bystander loop with `_collect_emotion_timeseries`, which builds the union of all bystanders' per-window sample timestamps and walks the video in a **single sequential `grab()`/`retrieve()` pass** (no random seeks — matching the 03a Resolved Issue #5 lesson that `cap.set` is keyframe-approximate on H.264). At each timestamp the active bystanders' face crops are collected and run through HSEmotion as a **batch** via `predict_multi_emotions`. This integrates with the face gate (Resolved Issue #3) and window anchoring (Resolved Issue #2) in one pass. The tested aggregation math (`_evaluate_bystander_transitions`, late-stage weighting) is unchanged; the two math unit tests were updated to monkeypatch the new `_collect_emotion_timeseries` and the suite stays green (12/12).
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Redundant Video Decoding for Multiple Bystanders
-**Status**: ⚠️ Confirmed Unresolved — Verified in [pipeline.py](file:///Users/louisye/Desktop/Louis/social_robotics/src/layer_03b_reasonable_emotion/pipeline.py#L386-L480): the pipeline loops over each tracked bystander separately, resulting in the video file being opened and decoded from frame 0 multiple times (once per bystander) and using random seeks (`cap.set`) which adds I/O latency.
+### Issue 1: Bystander faces in egocentric footage are too low-quality for reliable emotion (face gate alone insufficient)
+**Status**: ⚠️ Confirmed Unresolved — Surfaced by the June 4 post-fix re-validation (`e2e_reports/2026_06_04_layer03b/`, v2 run). With window anchoring (Resolved Issue #2) and the BlazeFace face gate (Resolved Issue #3) in place, **8/10 clips now score** and emotions come from a real ONNX model — yet HSEmotion magnitudes remain near the 1/8 = 0.125 uniform baseline (median **0.18**, max 0.38), so task scores stay near zero (−0.11 to +0.09). Inspection of the post-gate crops shows why: Node-02 bystander boxes are full-body and distant, so at the sampled timestamps the face region is tiny / motion-blurred, **BlazeFace false-positives on non-face regions** (e.g. a dark blurred blob was scored "Neutral" 0.176 with all 8 classes within 0.06–0.18), and HSEmotion is correctly uncertain. The emotion signal is therefore still largely noise — a data-quality limitation exposed now that the plumbing works, not a code bug.
 
-**Option A (recommended)**: **Single-Pass Video Decoding with Batched Model Inference** — Modify `_process_task` and `_sample_emotions` to decode the video file once, extract the cropped frames for all active bystanders at the sampled timestamp, and pass them as a batch to HSEmotion.
-  - *Pros*: Avoids opening the video multiple times and performing random seeks; speeds up video I/O and frame decoding overhead by N-times; utilizes PyTorch batched tensor execution on MPS.
-  - *Cons*: Complex codebase refactoring of frame sampling and cropping logic.
+**Option A (recommended)**: **Confidence-gate the emotion magnitude** — discard emotion samples whose top softmax probability is below a threshold (~0.3–0.4) so near-uniform guesses (and BlazeFace false positives) produce no sample; a task with no confident sample scores nothing (honest) rather than emitting noise.
+  - *Pros*: Cheap (no new model); directly removes the ~0.18 noise; complements the face gate; env-tunable.
+  - *Cons*: On this Ego4D sample it will likely drop most/all clips to "no score" — correct, but means 03b yields little on distant-bystander egocentric footage.
 
-**Option B**: **In-Memory Frame Caching** — Cache decoded video frames or bystander crops in memory or temporary files so subsequent bystander loops read from cache.
-  - *Pros*: Avoids re-decoding the video.
-  - *Cons*: Consumes significant RAM/disk if frames are cached, increasing memory pressure on 24GB hosts.
+**Option B**: **Require a minimum face size** (e.g. detected face box ≥ 60–80 px) before scoring — reject tiny/distant faces where neither BlazeFace nor HSEmotion is reliable.
+  - *Pros*: Targets the root cause (resolution); reduces the BlazeFace false-positive rate.
+  - *Cons*: Threshold needs tuning against the bystander-distance distribution; still yields little on far-away bystanders.
 
-Your selection: _____
-
----
-
-### Issue 2: Reaction window decoupled from bystander presence → most clips score nothing
-**Status**: ⚠️ Confirmed Unresolved — Verified in the June 4 10-clip smell test (`e2e_reports/2026_06_04_layer03b/`): **8 of 10 clips failed to score**. `_process_task` samples bystander emotion strictly inside `task_reaction_window_sec`, which `shared/climax_extraction.py` anchors to the **optical-flow peak — the wearer's kinetic climax**. In egocentric Ego4D that moment is usually *not* when a bystander is on camera: across the 8 failures the nearest bystander detection was **8–110 s away** from the reaction window (e.g. `6b3988dd`: pedestrian detected at t=87 s, reaction window at t=116 s on an empty street). With no bystander box within the `_sample_emotions` 2.0 s tolerance, every sample is skipped, `<2` samples remain, and the task returns `None`.
-
-**Option A (recommended)**: **Anchor the reaction window to bystander presence, not just wearer kinetics** — intersect the optical-flow window with the intervals where bystanders are actually detected, or select the bystander-present span nearest the climax, before sampling emotion.
-  - *Pros*: Directly fixes the dominant failure; emotion is only sampled where a bystander exists; keeps the climax as a tie-breaker.
-  - *Cons*: A task whose bystander is never present near any kinetic event still yields nothing (arguably correct); needs a rule for choosing among multiple bystander spans.
-
-**Option B**: **Use a per-bystander reaction window** computed from that bystander's own detection timestamps overlapping the task, decoupling 03b from the wearer-centric optical-flow climax entirely.
-  - *Pros*: Maximizes recall of real reactions; each bystander scored over the time they are actually visible.
-  - *Cons*: Loses the "reaction *to the task climax*" semantics the layer was designed around; larger change.
-
-**Option C**: **Widen the window / match tolerance** to the nearest bystander detection when the window is empty.
-  - *Pros*: Smallest change.
-  - *Cons*: Samples emotion far from the actual task moment, weakening the causal "reaction to outcome" interpretation.
-
-Your selection: _____
-
----
-
-### Issue 3: Full-body / non-face crops fed to HSEmotion → near-uniform emotion noise
-**Status**: ⚠️ Confirmed Unresolved — Verified in the June 4 smell test. `_sample_emotions` crops the Node-02 **bystander bounding box (a full-body YOLO-pose person box)** and passes it to HSEmotion, which expects a face. On the 2 clips that scored, the crops were a hiker's **backpack/back (no face)** and a **distant full-body** desk occupant; HSEmotion returned magnitudes of **0.16–0.25** (the 8-class uniform baseline is 0.125 — i.e. the model is guessing) and the labels flipped neutral→fear→joy→surprise→disgust within 2 s. The resulting `task_aggregate_score` (0.04 on both) is classifier noise, and the magnitude is consumed as `terminal_magnitude` with no confidence gate, so a 0.18 "fear" is weighted like a 0.9 "fear".
-
-**Option A (recommended)**: **Add a face-detection + crop gate** (BlazeFace via MediaPipe, mirroring 03a Resolved Issue #2) — detect the face within the bystander box, crop to it before HSEmotion, and emit no emotion sample when no face is found.
-  - *Pros*: Feeds HSEmotion an actual face; removes the back-of-person/full-body noise; reuses the 03a gate pattern + model.
-  - *Cons*: One detector pass per sample; distant/occluded bystanders yield no emotion (arguably correct).
-
-**Option B**: **Confidence-gate the emotion magnitude** — discard samples whose top softmax probability is below a threshold (e.g. < 0.4) as "no reliable emotion".
-  - *Pros*: Cheap; filters the near-uniform guesses without a new model.
-  - *Cons*: Does not fix *what* is cropped; a confidently-wrong emotion on a non-face crop still passes; threshold needs tuning.
-
-Your selection: _____
-
----
-
-### Issue 4: HSEmotion torch backend fails to load (torch ≥2.6 / CUDA-pickle / timm) → silent mock-emotion fallback
-**Status**: ⚠️ Confirmed Unresolved — Verified June 4. `from hsemotion.facial_emotions import HSEmotionRecognizer` + construct fails in this environment for three compounding reasons: (1) torch ≥ 2.6 defaults `weights_only=True`, refusing the pickled `timm` EfficientNet checkpoint; (2) the checkpoint is **CUDA-pickled**, so `torch.load` needs `map_location` on this MPS/CPU host; (3) **timm version mismatch** — `DepthwiseSeparableConv has no attribute 'conv_s2d'` on timm 1.x, while timm 0.6.x lacks `timm.layers` the pickle imports. When it fails, `emotion_detector` is set to `None` and `_sample_emotions` **silently** uses a seeded-RNG **mock** emotion distribution (pipeline.py:600–611) — producing fake-but-real-looking scores with no prominent warning. The smell-test run only got real emotions by injecting the ONNX backend.
-
-**Option A (recommended)**: **Switch 03b to the ONNX HSEmotion backend** (`hsemotion-onnx`, `from hsemotion_onnx.facial_emotions import HSEmotionRecognizer`) — same `predict_emotions` API, ONNX weights via onnxruntime, no torch/timm pickle. Validated working (`enet_b2_8`) in this run.
-  - *Pros*: Sidesteps all three breakages; drop-in; CPU/ARM friendly.
-  - *Cons*: Adds `onnxruntime`; loses native MPS for the emotion model (small model, negligible).
-
-**Option B**: **Pin the compatible timm + patch the load** — pin timm to the checkpoint's version and wrap HSEmotion's `torch.load` with `weights_only=False, map_location=...`.
-  - *Pros*: Keeps the torch backend / MPS.
-  - *Cons*: Brittle version pinning that can conflict with other layers; still pickle-fragile.
-
-**Option C (do regardless)**: **Fail loudly instead of silently mocking** — if the emotion model cannot load, log a prominent warning and tag results `emotion_source: "mock"` (or refuse to run) so a run is never silently fake.
-  - *Pros*: Prevents the silent-mock landmine; trivial.
-  - *Cons*: None material; complements A or B.
-
-Your selection: _____
-
----
-
-### Issue 5: 03b never populates climax metadata → 0 results on the shipped manifest
-**Status**: ⚠️ Confirmed Unresolved — Verified June 4. `filtered_manifest.json` ships with `task_temporal_metadata = {}` (Node 02 defers it, 02 Resolved Issue #8), and `_process_task` returns `None` when `task_reaction_window_sec` is missing. Per Issue #8 the *first Layer 03 to consume the manifest* must call `shared.climax_extraction.populate_climax_for_manifest`, but **03b never does** — so run standalone on the production manifest it scores **0 clips**. The smell-test runner had to call it first (cost: 988 s for 10 short clips).
-
-**Option A (recommended)**: **03b calls `populate_climax_for_manifest(manifest_path, ...)` at the top of `run()`** (it is idempotent — a no-op once populated), fulfilling the documented Layer-03 contract.
-  - *Pros*: Makes 03b self-sufficient; matches 02 Resolved Issue #8; idempotent and cheap on already-populated manifests.
-  - *Cons*: The first Layer-03 run pays the optical-flow cost (already the documented design).
-
-**Option B**: **A Layer-03 orchestrator populates climax once** before invoking any 03x layer.
-  - *Pros*: Single chokepoint; shared across 03a–03g.
-  - *Cons*: Requires an orchestrator that does not yet exist; 03b still broken if run directly.
+**Option C**: **Accept that 03b is low-yield on egocentric data** — keep the gates, treat 03b as firing only on the rare close, frontal-face bystander, and use 03a's face-quality / `attended_fraction` signals to pre-select clips worth running 03b on.
+  - *Pros*: No further code; honest about the modality limit.
+  - *Cons*: Most filtered clips produce no emotion signal; 03b's contribution to the dataset is sparse.
 
 Your selection: _____
 
