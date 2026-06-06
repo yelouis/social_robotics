@@ -17,8 +17,10 @@ through every Ego4D file.
 """
 
 import json
+import os
 import re
 import tempfile
+from multiprocessing import Pool
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -74,11 +76,27 @@ def compute_task_climax_for_video(
         climax_frame = start_frame
         flow_data = []
 
+        # Sequential decode (climax-speedup Resolved Issue). The old loop called
+        # cap.set(POS_FRAMES, frame_idx) every iteration; on H.264 each such seek
+        # re-decodes from the nearest keyframe (~tens of frames) just to land on
+        # the requested one — ~10-20x wasted decode. Instead we grab() forward
+        # cheaply (demux/decode without the numpy copy) and read() only the
+        # every-`step`-th frame we actually analyze. The exact same frames are
+        # fed to Farneback, so the optical-flow peak is unchanged.
+        pos = start_frame + 1  # next frame index the capture will return
         for frame_idx in range(start_frame + step, end_frame, step):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ok = True
+            while pos < frame_idx:
+                if not cap.grab():
+                    ok = False
+                    break
+                pos += 1
+            if not ok or pos != frame_idx:
+                break
             ret, frame = cap.read()
             if not ret:
                 break
+            pos = frame_idx + 1
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
             flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
@@ -100,8 +118,10 @@ def compute_task_climax_for_video(
             prev_dense_gray = cv2.resize(prev_dense_gray, (0, 0), fx=0.5, fy=0.5)
             dense_max_flow = 0.0
             dense_climax_frame = dense_start
+            # Dense pass walks consecutive frames, so it is a pure sequential
+            # read — the cap.set(dense_start) above is the only seek needed (no
+            # per-frame seeking).
             for frame_idx in range(dense_start + 1, dense_end):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, dense_frame = cap.read()
                 if not ret:
                     break
@@ -180,15 +200,62 @@ def compute_task_climax_for_video(
         task['task_temporal_metadata'] = meta
 
 
+def _entry_needs_climax(entry) -> bool:
+    tasks = entry.get('identified_tasks', [])
+    return bool(tasks) and not all(t.get('task_temporal_metadata') for t in tasks)
+
+
+def _populate_one_entry(args):
+    """Worker for the parallel path. Module-level so it is picklable under the
+    macOS 'spawn' start method. Computes climax for one entry's tasks in place
+    and returns (entry, updated_bool)."""
+    entry, vlm_model, skip_vlm = args
+    try:
+        cv2.setNumThreads(1)  # each worker single-threaded; parallelism is across clips
+    except Exception:
+        pass
+    if not _entry_needs_climax(entry):
+        return entry, False
+    video_path = entry.get('video_path')
+    if not video_path or not Path(video_path).exists():
+        return entry, False
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        cap.release()
+        return entry, False
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or entry.get('fps') or 0.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration_sec = entry.get('duration_sec') or (total_frames / fps if fps else 0.0)
+        if fps <= 0 or duration_sec <= 0:
+            return entry, False
+        compute_task_climax_for_video(
+            cap, fps, total_frames, entry['identified_tasks'], duration_sec,
+            vlm_model=vlm_model, skip_vlm=skip_vlm,
+        )
+        return entry, True
+    finally:
+        cap.release()
+
+
 def populate_climax_for_manifest(
     manifest_path: Path,
     vlm_model: Optional[str] = None,
     skip_vlm: bool = False,
+    workers: Optional[int] = None,
 ) -> int:
     """Fill in `task_temporal_metadata` for every entry in `manifest_path`
     that has tasks with empty metadata. Writes back to the same path. Returns
-    the number of entries updated. Idempotent — subsequent calls are no-ops
-    once every task has metadata.
+    the number of entries updated. Idempotent — a no-op once every task has
+    metadata.
+
+    Climax is per-clip independent, so entries can be processed in parallel.
+    `workers` controls process count: **default 1 (serial)** so library callers
+    are unaffected and spawn-safe. Pass `workers>1` (or use the guarded
+    `python -m shared.climax_extraction` CLI) to parallelize the full-corpus
+    pre-pass. The VLM-refinement path is only parallel-safe if the local LLM
+    server tolerates concurrent calls; the optical-flow-only path (skip_vlm or
+    no vlm_model) always is.
     """
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
@@ -196,33 +263,46 @@ def populate_climax_for_manifest(
     with open(manifest_path, 'r') as f:
         entries = json.load(f)
 
+    todo = [i for i, e in enumerate(entries) if _entry_needs_climax(e)]
+    if not todo:
+        return 0
+
+    if workers is None:
+        workers = 1  # serial by default; opt-in to parallel via the CLI / explicit arg
+    workers = max(1, int(workers))
+
+    args = [(entries[i], vlm_model, skip_vlm) for i in todo]
     updated = 0
-    for entry in entries:
-        tasks = entry.get('identified_tasks', [])
-        if not tasks or all(t.get('task_temporal_metadata') for t in tasks):
-            continue
-        video_path = entry.get('video_path')
-        if not video_path or not Path(video_path).exists():
-            continue
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            cap.release()
-            continue
-        try:
-            fps = cap.get(cv2.CAP_PROP_FPS) or entry.get('fps') or 0.0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration_sec = entry.get('duration_sec') or (total_frames / fps if fps else 0.0)
-            if fps <= 0 or duration_sec <= 0:
-                continue
-            compute_task_climax_for_video(
-                cap, fps, total_frames, tasks, duration_sec,
-                vlm_model=vlm_model, skip_vlm=skip_vlm,
-            )
-            updated += 1
-        finally:
-            cap.release()
+    if workers > 1 and len(args) > 1:
+        with Pool(processes=min(workers, len(args))) as pool:
+            for idx, (entry, was_updated) in zip(todo, pool.map(_populate_one_entry, args)):
+                entries[idx] = entry
+                updated += 1 if was_updated else 0
+    else:
+        for idx, a in zip(todo, args):
+            entry, was_updated = _populate_one_entry(a)
+            entries[idx] = entry
+            updated += 1 if was_updated else 0
 
     if updated:
         with open(manifest_path, 'w') as f:
             json.dump(entries, f, indent=4)
     return updated
+
+
+if __name__ == "__main__":
+    # Guarded CLI — the spawn-safe entry point for the parallel full-corpus
+    # climax pre-pass. Layer runners then find climax cached and skip it.
+    #   SR_CLIMAX_WORKERS=8 python -m shared.climax_extraction <manifest.json>
+    import argparse
+    import time as _time
+
+    ap = argparse.ArgumentParser(description="Parallel climax pre-population for a manifest.")
+    ap.add_argument("manifest")
+    ap.add_argument("--workers", type=int,
+                    default=int(os.getenv("SR_CLIMAX_WORKERS", "0")) or max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("--no-skip-vlm", action="store_true", help="Enable slow-task VLM refinement (serial-safe only).")
+    a = ap.parse_args()
+    _t0 = _time.time()
+    n = populate_climax_for_manifest(a.manifest, skip_vlm=not a.no_skip_vlm, workers=a.workers)
+    print(f"[climax] populated {n} entries with {a.workers} workers in {_time.time()-_t0:.0f}s -> {a.manifest}")
