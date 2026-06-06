@@ -180,22 +180,22 @@ The initial implementation of the Reasonable Emotion Layer is complete:
    - **Problem** (was Unresolved Issue 1): `_process_task` looped over each bystander and called `_sample_emotions` separately, re-opening/decoding the video from frame 0 once per bystander and using a per-sample random `cap.set(POS_FRAMES)` seek — both wasteful and, on H.264, seek-fragile.
    - **Solution**: Replaced the per-bystander loop with `_collect_emotion_timeseries`, which builds the union of all bystanders' per-window sample timestamps and walks the video in a **single sequential `grab()`/`retrieve()` pass** (no random seeks — matching the 03a Resolved Issue #5 lesson that `cap.set` is keyframe-approximate on H.264). At each timestamp the active bystanders' face crops are collected and run through HSEmotion as a **batch** via `predict_multi_emotions`. This integrates with the face gate (Resolved Issue #3) and window anchoring (Resolved Issue #2) in one pass. The tested aggregation math (`_evaluate_bystander_transitions`, late-stage weighting) is unchanged; the two math unit tests were updated to monkeypatch the new `_collect_emotion_timeseries` and the suite stays green (12/12).
 
+7. **Emotion-Confidence Gate (Resolved - June 05)**:
+   - **Problem** (was Unresolved Issue 1): Even with window anchoring (Resolved Issue #2) + the face gate (Resolved Issue #3), HSEmotion magnitudes on the Ego4D sample stayed near the 1/8 = 0.125 uniform baseline (median **0.18**) because bystander crops are distant/blurry and BlazeFace false-positives on non-face regions. 03b therefore emitted near-zero **noise** scores, with the magnitude consumed as `terminal_magnitude` under no confidence floor (a 0.18 "fear" weighted like a 0.9 "fear").
+   - **Solution**: Added `MIN_EMOTION_CONF` (default **0.4**, env `SR_03B_MIN_EMOTION_CONF`) in `_collect_emotion_timeseries`: emotion samples whose top softmax probability is below the threshold are dropped, so a task with no confident sample scores **nothing (honest)** instead of feeding noise downstream. Validated on the June 5 50-clip run: scored clips fell to **2/50**, and both are high-face-quality close-frontal-face clips (`137d8616`: 278 px/0.90 conf; `43bd06f3`: 140 px/0.97 conf) — i.e. the gate suppresses the noise while retaining the genuine signal. This makes explicit that 03b is intrinsically **low-yield on distant-bystander egocentric footage**; the cost of that is addressed by the face-quality pre-filter (Unresolved Issue 1 below).
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Bystander faces in egocentric footage are too low-quality for reliable emotion (face gate alone insufficient)
-**Status**: ⚠️ Confirmed Unresolved — Surfaced by the June 4 post-fix re-validation (`e2e_reports/2026_06_04_layer03b/`, v2 run). With window anchoring (Resolved Issue #2) and the BlazeFace face gate (Resolved Issue #3) in place, **8/10 clips now score** and emotions come from a real ONNX model — yet HSEmotion magnitudes remain near the 1/8 = 0.125 uniform baseline (median **0.18**, max 0.38), so task scores stay near zero (−0.11 to +0.09). Inspection of the post-gate crops shows why: Node-02 bystander boxes are full-body and distant, so at the sampled timestamps the face region is tiny / motion-blurred, **BlazeFace false-positives on non-face regions** (e.g. a dark blurred blob was scored "Neutral" 0.176 with all 8 classes within 0.06–0.18), and HSEmotion is correctly uncertain. The emotion signal is therefore still largely noise — a data-quality limitation exposed now that the plumbing works, not a code bug.
+### Issue 1: Productionize the bystander-face-quality pre-filter to avoid wasted climax
+**Status**: ⚠️ Confirmed Unresolved (validated prototype, not yet wired) — Because 03b is low-yield on egocentric data (Resolved Issue #7: only 2/50 clips produce a confident score) and climax optical-flow is the dominant per-clip cost (~0.57× realtime; ~14 days for the 1,000-clip / 600 h reservoir before the 02 Resolved Issue #18 speedup), paying climax on the ~84–96 % of clips that will score nothing is wasted work. A cheap pre-pass (`scratch/face_quality_prefilter.py`, **~0.9 s/clip → ~15 min for 1,000**) that decodes only the sparse bystander-detection frames already in the manifest and records the best BlazeFace face size/confidence per clip was validated on the June 5 50-clip run: a threshold of **face ≥ 120 px, conf ≥ 0.8, ≥ 3 face-frames keeps both clips that actually scored (0 false negatives) while skipping 84 % → 6.2× climax saving**. It is not yet productionized or wired into the run flow.
 
-**Option A (recommended)**: **Confidence-gate the emotion magnitude** — discard emotion samples whose top softmax probability is below a threshold (~0.3–0.4) so near-uniform guesses (and BlazeFace false positives) produce no sample; a task with no confident sample scores nothing (honest) rather than emitting noise.
-  - *Pros*: Cheap (no new model); directly removes the ~0.18 noise; complements the face gate; env-tunable.
-  - *Cons*: On this Ego4D sample it will likely drop most/all clips to "no score" — correct, but means 03b yields little on distant-bystander egocentric footage.
+**Option A (recommended)**: **Standalone pre-pass that annotates + filters the manifest** — run the face-quality pass over `filtered_manifest.json`, write a `bystander_face_quality` field per clip, and have the climax/03b runner skip clips below a configurable threshold.
+  - *Pros*: Cheap, one-time, reusable by every face-based Layer 03 module (03b/03c…); decouples the gate from each layer; pairs with the 02 Resolved Issue #18 climax speedup to hit the ~hours full-corpus target.
+  - *Cons*: Adds a `bystander_face_quality` manifest field + a pre-pass step to the workflow; threshold needs periodic re-tuning against the bystander-distance distribution.
 
-**Option B**: **Require a minimum face size** (e.g. detected face box ≥ 60–80 px) before scoring — reject tiny/distant faces where neither BlazeFace nor HSEmotion is reliable.
-  - *Pros*: Targets the root cause (resolution); reduces the BlazeFace false-positive rate.
-  - *Cons*: Threshold needs tuning against the bystander-distance distribution; still yields little on far-away bystanders.
-
-**Option C**: **Accept that 03b is low-yield on egocentric data** — keep the gates, treat 03b as firing only on the rare close, frontal-face bystander, and use 03a's face-quality / `attended_fraction` signals to pre-select clips worth running 03b on.
-  - *Pros*: No further code; honest about the modality limit.
-  - *Cons*: Most filtered clips produce no emotion signal; 03b's contribution to the dataset is sparse.
+**Option B**: **Integrate the face-quality check into 03b's `run()`** — compute it inline and skip low-quality clips before climax.
+  - *Pros*: Self-contained in 03b; no manifest change.
+  - *Cons*: Recomputed per layer (not shared with 03c/03d); couples the cost decision to one layer.
 
 Your selection: _____
 

@@ -45,6 +45,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 FACE_DETECTOR_PATH = _PROJECT_ROOT / "models" / "mediapipe" / "blaze_face_short_range.tflite"
 MIN_FACE_CONF = float(_os.getenv("SR_03B_MIN_FACE_CONF", "0.5"))
 ENABLE_FACE_GATE = _os.getenv("SR_03B_FACE_GATE", "1").lower() in ("1", "true", "yes")
+# Emotion confidence gate (Resolved Issue 1, June 04). HSEmotion's 8-class
+# softmax has a 0.125 uniform baseline; on distant/blurry egocentric crops (or a
+# BlazeFace false positive) the top probability stays ~0.18 — the model is
+# guessing. Drop any emotion sample below this top-probability threshold so a
+# task with no confident sample scores nothing (honest) instead of emitting
+# noise. Default 0.4 sits just above the ~0.38 noise ceiling observed on Ego4D.
+MIN_EMOTION_CONF = float(_os.getenv("SR_03B_MIN_EMOTION_CONF", "0.4"))
 
 # Optional dependency: Ollama
 try:
@@ -720,9 +727,15 @@ class ReasonableEmotionPipeline:
             if rgb_faces:
                 labels, scores = self._predict_emotions_batch(rgb_faces)   # Issue #1
                 for pid, lab, sc in zip(meta, labels, scores):
+                    magnitude = float(max(sc))
+                    # Confidence gate (Resolved Issue 1): a near-uniform softmax
+                    # means HSEmotion can't resolve the face — drop the sample
+                    # rather than feed noise downstream.
+                    if magnitude < MIN_EMOTION_CONF:
+                        continue
                     series[pid].append({
                         "t": round(t, 2),
                         "emotion": HSEMOTION_TO_CANONICAL.get(str(lab).lower(), "neutral"),
-                        "magnitude": float(max(sc)),
+                        "magnitude": magnitude,
                     })
         return {pid: ser for pid, ser in series.items() if len(ser) >= 2}
