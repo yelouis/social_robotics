@@ -209,14 +209,14 @@ def test_late_stage_weighted_math():
         }
     }
 
-    def mock_sample_emotions(cap, fps, start_sec, end_sec, bystander):
-        return [
+    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec):
+        return {0: [
             {"t": 6.2, "emotion": "neutral", "magnitude": 1.0},
             {"t": 6.7, "emotion": "anger", "magnitude": 1.0},
             {"t": 7.7, "emotion": "anger", "magnitude": 0.0},
             {"t": 8.2, "emotion": "joy", "magnitude": 1.0}
-        ]
-    pipeline._sample_emotions = mock_sample_emotions
+        ]}
+    pipeline._collect_emotion_timeseries = mock_collect
 
     result = pipeline._process_task(None, 30, task, [bystander], "test_video_1")
 
@@ -267,12 +267,12 @@ def test_surprise_classified_as_neutral():
         }
     }
 
-    def mock_sample_emotions(cap, fps, start_sec, end_sec, bystander):
-        return [
+    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec):
+        return {0: [
             {"t": 1.0, "emotion": "neutral", "magnitude": 0.85},
             {"t": 1.5, "emotion": "surprise", "magnitude": 0.85}
-        ]
-    pipeline._sample_emotions = mock_sample_emotions
+        ]}
+    pipeline._collect_emotion_timeseries = mock_collect
 
     result = pipeline._process_task(None, 30, task, [bystander], "test_video_2")
 
@@ -290,6 +290,11 @@ def test_schema_conformance(dummy_manifest, dummy_attention, tmp_path, monkeypat
     out_path = tmp_path / "out.json"
     pipeline = ReasonableEmotionPipeline(dummy_manifest, out_path, dummy_attention)
     pipeline.ollama_available = False
+    # This is a schema/plumbing test on a synthetic (zeros) video, so force the
+    # deterministic mock-emotion path regardless of whether a real emotion model
+    # (which would face-gate the blank frames) happens to be installed.
+    pipeline.emotion_detector = None
+    pipeline.enable_face_gate = False
 
     # Mock cv2 to pretend video opens and has frames
     class MockCap:
@@ -297,6 +302,8 @@ def test_schema_conformance(dummy_manifest, dummy_attention, tmp_path, monkeypat
         def get(self, prop): return 30.0 if prop == 5 else 300  # fps, total_frames
         def release(self): pass
         def read(self): return True, np.zeros((480, 640, 3), dtype=np.uint8)
+        def grab(self): return True
+        def retrieve(self): return True, np.zeros((480, 640, 3), dtype=np.uint8)
         def set(self, prop, val): pass
 
     import cv2

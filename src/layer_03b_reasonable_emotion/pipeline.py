@@ -8,17 +8,43 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import List, Literal, Optional
 
-# Optional dependency: HSEmotion-PyTorch (native MPS face-emotion model)
+import numpy as np
+
+# Emotion model backend (Resolved Issue #4). The torch HSEmotion checkpoint
+# fails to load under torch>=2.6 (weights_only) + CUDA-pickle + timm-version
+# mismatch, so we PREFER the ONNX backend (hsemotion-onnx) — same
+# predict_emotions API, ONNX weights, no torch/timm pickle. Fall back to the
+# torch backend, then to None (which triggers a LOUD mock warning at init).
+HSEMOTION_BACKEND = None
 try:
-    from hsemotion.facial_emotions import HSEmotionRecognizer
+    from hsemotion_onnx.facial_emotions import HSEmotionRecognizer
+    HSEMOTION_BACKEND = "onnx"
 except ImportError:
-    HSEmotionRecognizer = None
+    try:
+        from hsemotion.facial_emotions import HSEmotionRecognizer
+        HSEMOTION_BACKEND = "torch"
+    except ImportError:
+        HSEmotionRecognizer = None
 
 # Optional dependency: torch — used only for MPS device detection
 try:
     import torch
 except ImportError:
     torch = None
+
+# Face-presence gate (Resolved Issue #3, mirrors 03a Resolved Issue #2).
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
+except ImportError:
+    mp = None
+
+import os as _os
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+FACE_DETECTOR_PATH = _PROJECT_ROOT / "models" / "mediapipe" / "blaze_face_short_range.tflite"
+MIN_FACE_CONF = float(_os.getenv("SR_03B_MIN_FACE_CONF", "0.5"))
+ENABLE_FACE_GATE = _os.getenv("SR_03B_FACE_GATE", "1").lower() in ("1", "true", "yes")
 
 # Optional dependency: Ollama
 try:
@@ -101,17 +127,36 @@ class ReasonableEmotionPipeline:
         # when MPS is unavailable, and to the deterministic mock generator in
         # _sample_emotions when the package itself is absent.
         self.emotion_device = "mps" if (torch is not None and torch.backends.mps.is_available()) else "cpu"
+        self.emotion_detector = None
+        self.emotion_source = "mock"
         try:
-            if HSEmotionRecognizer:
+            if HSEmotionRecognizer and HSEMOTION_BACKEND == "onnx":
+                # ONNX backend takes only model_name (onnxruntime picks the provider).
+                self.emotion_detector = HSEmotionRecognizer(model_name=HSEMOTION_MODEL)
+                self.emotion_source = "hsemotion_onnx"
+                print(f"[03b] HSEmotion ONNX backend loaded ({HSEMOTION_MODEL}).")
+            elif HSEmotionRecognizer and HSEMOTION_BACKEND == "torch":
                 self.emotion_detector = HSEmotionRecognizer(
                     model_name=HSEMOTION_MODEL, device=self.emotion_device
                 )
-                print(f"[03b] HSEmotion loaded ({self.emotion_device} mode).")
-            else:
-                self.emotion_detector = None
+                self.emotion_source = "hsemotion_torch"
+                print(f"[03b] HSEmotion torch backend loaded ({self.emotion_device} mode).")
         except Exception as e:
-            print(f"[03b] Failed to load HSEmotion: {e}")
+            print(f"[03b] Failed to load HSEmotion ({HSEMOTION_BACKEND}): {e}")
             self.emotion_detector = None
+        if self.emotion_detector is None:
+            # Resolved Issue #4: never run silently on mock emotions.
+            print("[03b] *** WARNING: no real emotion model loaded — FALLING BACK TO "
+                  "MOCK (seeded-RNG) EMOTIONS. Results are NOT real (emotion_source="
+                  "'mock'). Install `hsemotion-onnx` to fix. ***")
+
+        # Lazy MediaPipe BlazeFace face gate (Resolved Issue #3). Only used when a
+        # real emotion model is present; the mock path needs no face.
+        self._face_detector = None
+        self.enable_face_gate = (
+            ENABLE_FACE_GATE and mp is not None and FACE_DETECTOR_PATH.exists()
+            and self.emotion_detector is not None
+        )
 
         # Check Ollama availability once at init
         self.ollama_available = False
@@ -266,6 +311,20 @@ class ReasonableEmotionPipeline:
     #  Main run loop
     # ------------------------------------------------------------------
     def run(self):
+        # Resolved Issue #5: 03b is the consumer that needs the reaction window,
+        # so it populates climax metadata itself (idempotent — a no-op once every
+        # task has it), fulfilling the Layer-03 contract from 02 Resolved Issue #8.
+        try:
+            try:
+                from shared.climax_extraction import populate_climax_for_manifest
+            except ImportError:
+                from src.shared.climax_extraction import populate_climax_for_manifest
+            n = populate_climax_for_manifest(self.input_manifest_path, skip_vlm=True)
+            if n:
+                print(f"[03b] Populated climax metadata for {n} manifest entries.")
+        except Exception as e:
+            print(f"[03b] climax population skipped ({e}); proceeding with existing metadata.")
+
         with open(self.input_manifest_path, 'r') as f:
             registry = json.load(f)
 
@@ -364,6 +423,7 @@ class ReasonableEmotionPipeline:
         return {
             "video_id": video_id,
             "layer": "03b_reasonable_emotion",
+            "emotion_source": self.emotion_source,
             "tasks_analyzed": tasks_analyzed
         }
 
@@ -382,13 +442,12 @@ class ReasonableEmotionPipeline:
         # Step 1: Expectation Generation — LLM with pydantic validation + retry
         expectations = self._llm_generate_expectations(task_label)
 
-        # Step 2: Sample emotions sequentially to avoid cv2.VideoCapture thread-safety issues
-        bystander_timeseries = {}
-        for bystander in bystanders:
-            person_id = bystander.get('person_id')
-            timeseries = self._sample_emotions(cap, fps, start_sec, end_sec, bystander)
-            if timeseries and len(timeseries) >= 2:
-                bystander_timeseries[person_id] = timeseries
+        # Step 2: single-pass emotion sampling (Resolved Issue #1) with
+        # bystander-presence-anchored windows (Resolved Issue #2) and a face
+        # gate (Resolved Issue #3). Returns {person_id: timeseries(>=2 samples)}.
+        bystander_timeseries = self._collect_emotion_timeseries(
+            cap, fps, task, bystanders, climax_sec, [start_sec, end_sec]
+        )
 
         per_person = []
         if bystander_timeseries:
@@ -520,102 +579,150 @@ class ReasonableEmotionPipeline:
         }
 
     # ------------------------------------------------------------------
-    #  Emotion sampling (HSEmotion-PyTorch, native MPS)
+    #  Emotion sampling — single-pass, face-gated (Resolved Issues #1/#2/#3)
     # ------------------------------------------------------------------
-    def _sample_emotions(self, cap, fps, start_sec, end_sec, bystander):
-        """Sample bystander emotions at ~3 FPS within the reaction window.
+    SAMPLE_DT = 0.33      # ~3 FPS within the reaction window
+    MATCH_TOL = 2.0       # max gap (s) between a sample time and a bystander detection
 
-        When HSEmotion is available, the BGR crop is converted to RGB and
-        passed as a numpy ndarray directly to predict_emotions() — HSEmotion
-        handles its own face resize/normalisation internally. The dominant
-        FER+ label is folded onto the canonical 03b vocabulary via
-        HSEMOTION_TO_CANONICAL; its softmax probability becomes the magnitude.
+    def _face_detector_inst(self):
+        if self._face_detector is None and self.enable_face_gate:
+            base = mp_python.BaseOptions(model_asset_path=str(FACE_DETECTOR_PATH))
+            opts = mp_vision.FaceDetectorOptions(
+                base_options=base, running_mode=mp_vision.RunningMode.IMAGE,
+                min_detection_confidence=MIN_FACE_CONF,
+            )
+            self._face_detector = mp_vision.FaceDetector.create_from_options(opts)
+        return self._face_detector
 
-        When HSEmotion is unavailable (or fails), a deterministic mock
-        distribution is used for integration testing. The mock uses a
-        method-local random.Random instance so the global RNG is never
-        mutated by Layer 03b.
-        """
-        current_t = start_sec
-        timeseries = []
-        b_timestamps = bystander.get('timestamps_sec', [])
-        b_bboxes = bystander.get('bounding_boxes', [])
+    def _extract_face(self, crop_bgr):
+        """Resolved Issue #3: return the largest detected face sub-crop (BGR) from
+        a bystander box, or None if no face is found. With the gate disabled
+        (mock/no-model path) returns the whole crop so the mock path is unaffected."""
+        if not self.enable_face_gate or crop_bgr.size == 0:
+            return crop_bgr
+        try:
+            rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+            det = self._face_detector_inst().detect(
+                mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            if not det.detections:
+                return None
+            d = max(det.detections, key=lambda x: x.bounding_box.width * x.bounding_box.height)
+            bb = d.bounding_box
+            H, W = crop_bgr.shape[:2]
+            fx1, fy1 = max(0, bb.origin_x), max(0, bb.origin_y)
+            fx2, fy2 = min(W, bb.origin_x + bb.width), min(H, bb.origin_y + bb.height)
+            face = crop_bgr[fy1:fy2, fx1:fx2]
+            return face if face.size > 0 else None
+        except Exception:
+            return None
 
-        if not b_timestamps or not b_bboxes:
-            return timeseries
+    def _predict_emotions_batch(self, rgb_faces):
+        """Resolved Issue #1: batched HSEmotion inference. Returns (labels, scores_list)."""
+        try:
+            labels, scores = self.emotion_detector.predict_multi_emotions(rgb_faces, logits=False)
+            return list(labels), [scores[i] for i in range(len(rgb_faces))]
+        except Exception:
+            labels, out = [], []
+            for f in rgb_faces:
+                lab, sc = self.emotion_detector.predict_emotions(f, logits=False)
+                labels.append(lab); out.append(sc)
+            return labels, out
 
-        # Local RNG — deterministic per-bystander, no global state mutation.
-        rng = random.Random(int(sum(sum(b) for b in b_bboxes)))
+    @staticmethod
+    def _mock_emotion(t, start_sec, end_sec, rng):
+        progress = (t - start_sec) / max(0.1, end_sec - start_sec)
+        if progress < 0.3:
+            return {"t": round(t, 2), "emotion": "neutral", "magnitude": rng.uniform(0.5, 0.8)}
+        if progress < 0.6:
+            return {"t": round(t, 2), "emotion": rng.choice(["surprise", "neutral", "fear"]),
+                    "magnitude": rng.uniform(0.7, 0.9)}
+        return {"t": round(t, 2), "emotion": rng.choice(["joy", "anger", "surprise"]),
+                "magnitude": rng.uniform(0.8, 1.0)}
 
-        while current_t <= end_sec:
-            # Find closest bbox
-            diffs = [abs(t - current_t) for t in b_timestamps]
-            closest_idx = diffs.index(min(diffs))
-
-            if diffs[closest_idx] > 2.0:
-                current_t += 0.33
+    def _collect_emotion_timeseries(self, cap, fps, task, bystanders, climax_sec, window_sec):
+        """Single decode pass over the union of all bystanders' sampling windows
+        (Issue #1). Each bystander's window is anchored to where it is actually
+        detected near the climax (Issue #2), and each crop is gated to a real
+        face before emotion inference (Issue #3). Returns {person_id: timeseries}
+        keeping only series with >= 2 samples."""
+        s, e = window_sec
+        width = max(0.5, e - s)
+        # Issue #2: anchor sampling to bystander presence, not the wearer's climax.
+        win = {}
+        for b in bystanders:
+            pid = b.get('person_id')
+            ts = b.get('timestamps_sec') or []
+            if not ts or not b.get('bounding_boxes'):
                 continue
+            if any(s - self.MATCH_TOL <= t <= e + self.MATCH_TOL for t in ts):
+                win[pid] = (s, e)
+            else:
+                t_near = min(ts, key=lambda t: abs(t - climax_sec))
+                win[pid] = (t_near, t_near + width)
+        if not win:
+            return {}
 
-            bbox = b_bboxes[closest_idx]
-            x1, y1, x2, y2 = bbox
+        # Union of per-bystander sample timestamps -> a single sorted decode pass.
+        samples = {}
+        for pid, (ws, we) in win.items():
+            t = ws
+            while t <= we:
+                samples.setdefault(round(t, 2), []).append(pid)
+                t += self.SAMPLE_DT
+        sorted_ts = sorted(samples)
+        if not sorted_ts:
+            return {}
 
-            frame_idx = int(current_t * fps)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
-            if not ret:
+        bmap = {b.get('person_id'): b for b in bystanders}
+        series = {pid: [] for pid in win}
+        rng = random.Random(int(sum(sum(bb) for b in bystanders
+                                    for bb in (b.get('bounding_boxes') or []))) or 1)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if not cap.grab():
+            return {}
+        cur = 1
+        for t in sorted_ts:
+            target = int(t * fps)
+            broke = False
+            while cur < target:
+                if not cap.grab():
+                    broke = True
+                    break
+                cur += 1
+            if broke:
                 break
-
+            ok, frame = cap.retrieve()
+            cur += 1
+            if not ok:
+                break
             h, w = frame.shape[:2]
-            px1 = max(0, int(x1) - 20)
-            py1 = max(0, int(y1) - 20)
-            px2 = min(w, int(x2) + 20)
-            py2 = min(h, int(y2) + 20)
-
-            crop = frame[py1:py2, px1:px2]
-            if crop.size == 0:
-                current_t += 0.33
-                continue
-
-            emotion_label = "neutral"
-            magnitude = 0.5
-            detected = False
-
-            if self.emotion_detector:
-                try:
-                    # In-memory call — HSEmotion accepts an RGB ndarray
-                    # directly. predict_emotions returns the argmax FER+
-                    # label plus the per-class softmax scores.
-                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    emotion_raw, scores = self.emotion_detector.predict_emotions(
-                        crop_rgb, logits=False
-                    )
-                    emotion_label = HSEMOTION_TO_CANONICAL.get(
-                        emotion_raw.lower(), "neutral"
-                    )
-                    magnitude = float(max(scores))
-                    detected = True
-                except Exception as e:
-                    print(f"[03b] HSEmotion inference failed at t={current_t:.2f}s: {e}")
-
-            if not detected:
-                # Fallback: deterministic mock distribution for integration testing
-                progress = (current_t - start_sec) / (max(0.1, end_sec - start_sec))
-                if progress < 0.3:
-                    emotion_label = "neutral"
-                    magnitude = rng.uniform(0.5, 0.8)
-                elif progress < 0.6:
-                    emotion_label = rng.choice(["surprise", "neutral", "fear"])
-                    magnitude = rng.uniform(0.7, 0.9)
+            rgb_faces, meta = [], []
+            for pid in samples[t]:
+                b = bmap[pid]
+                ts, bb = b['timestamps_sec'], b['bounding_boxes']
+                i = min(range(len(ts)), key=lambda k: abs(ts[k] - t))
+                if abs(ts[i] - t) > self.MATCH_TOL:
+                    continue
+                x1, y1, x2, y2 = bb[i]
+                crop = frame[max(0, int(y1) - 20):min(h, int(y2) + 20),
+                             max(0, int(x1) - 20):min(w, int(x2) + 20)]
+                if crop.size == 0:
+                    continue
+                if self.emotion_detector is not None:
+                    face = self._extract_face(crop)   # Issue #3
+                    if face is None:
+                        continue
+                    rgb_faces.append(cv2.cvtColor(face, cv2.COLOR_BGR2RGB))
+                    meta.append(pid)
                 else:
-                    emotion_label = rng.choice(["joy", "anger", "surprise"])
-                    magnitude = rng.uniform(0.8, 1.0)
-
-            timeseries.append({
-                "t": round(current_t, 2),
-                "emotion": emotion_label,
-                "magnitude": magnitude
-            })
-
-            current_t += 0.33
-
-        return timeseries
+                    series[pid].append(self._mock_emotion(t, s, e, rng))
+            if rgb_faces:
+                labels, scores = self._predict_emotions_batch(rgb_faces)   # Issue #1
+                for pid, lab, sc in zip(meta, labels, scores):
+                    series[pid].append({
+                        "t": round(t, 2),
+                        "emotion": HSEMOTION_TO_CANONICAL.get(str(lab).lower(), "neutral"),
+                        "magnitude": float(max(sc)),
+                    })
+        return {pid: ser for pid, ser in series.items() if len(ser) >= 2}

@@ -46,7 +46,7 @@ This document outlines the machine learning dependencies, models, and libraries 
 |---|---|---|---|---|
 | **Ollama** | Main engine for running Gemma 4, moondream, etc. | ~500 MB (binary + runtime) | System Install | |
 | **FunASR** | Framework for emotion2vec+ inference | ~50 MB | Python virtual environment | `pip install -U funasr` |
-| **HSEmotion-PyTorch** | SOTA Emotion inference on bystander faces (Layer 03b) | ~50-100 MB (incl. `enet_b2_8` weights) | Python virtual environment | Native MPS acceleration on Apple Silicon; `pip install hsemotion`. Replaced Py-Feat, which was CPU-only on macOS. |
+| **HSEmotion (ONNX preferred)** | SOTA Emotion inference on bystander faces (Layer 03b) | ~50-100 MB (incl. `enet_b2_8` weights) | Python virtual environment | **`pip install hsemotion-onnx onnxruntime`** is the production backend (03b Resolved Issue #4): the torch `hsemotion` build fails to load under torch≥2.6 (`weights_only`) + CUDA-pickled checkpoint + timm mismatch. 03b prefers ONNX, falls back to torch, then to a loud mock. Replaced Py-Feat (CPU-only on macOS). |
 | **MediaPipe** | Egocentric Hand Detection tracker | ~100 MB | Python virtual environment | |
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
 | **transformers** | Loading Hugging Face models like Depth Anything V2 and the Wan2.1 UMT5-XXL text encoder | ~150 MB | Python virtual environment (`venv` / `gen_env`) | |
