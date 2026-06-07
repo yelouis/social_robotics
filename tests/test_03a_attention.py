@@ -82,9 +82,22 @@ class TestAttentionLayerPipeline(unittest.TestCase):
             output_result_path=self.output_result_path,
             force=True
         )
-        
+
+        # This test exercises the gaze dot-product -> attention-score math, so
+        # make it independent of whether the real L2CS weights / BlazeFace / YOLO
+        # assets are present on disk:
+        #  - pin the mocked gaze pipeline (the __init__ guard sets it to None when
+        #    the .pkl weights are absent, which would zero every score);
+        #  - disable the face gate (Resolved Issue 1) and bbox re-detect (Resolved
+        #    Issue 2): the synthetic all-zeros mock frame has no real face, so the
+        #    gate would correctly score it NoFace/0.0 and the scoring path under
+        #    test would never run. The gate's own behavior is covered separately.
+        pipeline.gaze_pipeline = mock_pipeline_instance
+        pipeline.enable_face_gate = False
+        pipeline.enable_bbox_redetect = False
+
         pipeline.run()
-        
+
         self.assertTrue(self.output_result_path.exists())
         with open(self.output_result_path, 'r') as f:
             results = json.load(f)
