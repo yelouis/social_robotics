@@ -318,15 +318,41 @@ class ReasonableEmotionPipeline:
     #  Main run loop
     # ------------------------------------------------------------------
     def run(self):
+        # Resolved Issue #8: bystander-face-quality pre-filter. 03b is low-yield
+        # on egocentric data (Resolved Issue #7) and climax optical-flow is the
+        # dominant per-clip cost, so a cheap pre-pass (~0.9 s/clip) annotates each
+        # clip with `bystander_face_quality` and the gate skips clips with no
+        # close, resolvable face *before* paying climax + emotion. Idempotent and
+        # env-toggleable (SR_FACE_QUALITY_GATE=0). Defensive: any failure (import
+        # or scoring) leaves the gate open (every clip processed) so it can never
+        # silently drop work.
+        passes_face_quality = lambda entry: True  # noqa: E731 — fail-open default
+        try:
+            try:
+                from shared.face_quality_prefilter import (
+                    populate_face_quality_for_manifest, passes_face_quality)
+            except ImportError:
+                from src.shared.face_quality_prefilter import (
+                    populate_face_quality_for_manifest, passes_face_quality)
+            nq = populate_face_quality_for_manifest(self.input_manifest_path)
+            if nq:
+                print(f"[03b] Scored bystander face quality for {nq} manifest entries.")
+        except Exception as e:
+            print(f"[03b] face-quality pre-filter skipped ({e}); gate fails open.")
+            passes_face_quality = lambda entry: True  # noqa: E731 — fail open
+
         # Resolved Issue #5: 03b is the consumer that needs the reaction window,
         # so it populates climax metadata itself (idempotent — a no-op once every
         # task has it), fulfilling the Layer-03 contract from 02 Resolved Issue #8.
+        # The face-quality gate is passed as `entry_filter` so optical flow is
+        # never paid on clips the gate will skip below.
         try:
             try:
                 from shared.climax_extraction import populate_climax_for_manifest
             except ImportError:
                 from src.shared.climax_extraction import populate_climax_for_manifest
-            n = populate_climax_for_manifest(self.input_manifest_path, skip_vlm=True)
+            n = populate_climax_for_manifest(
+                self.input_manifest_path, skip_vlm=True, entry_filter=passes_face_quality)
             if n:
                 print(f"[03b] Populated climax metadata for {n} manifest entries.")
         except Exception as e:
@@ -343,11 +369,19 @@ class ReasonableEmotionPipeline:
             except Exception:
                 pass
 
+        skipped_face_quality = 0
         for entry in registry:
             if entry.get("synthetic") is True:
                 continue
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
+                continue
+
+            # Resolved Issue #8: skip low-yield clips (no climax was computed for
+            # them either, so _process_task would no-op anyway). Counted so the
+            # gate's effect is visible in the run log.
+            if not passes_face_quality(entry):
+                skipped_face_quality += 1
                 continue
 
             print(f"Processing Layer 03b for video: {video_id}")
@@ -365,6 +399,9 @@ class ReasonableEmotionPipeline:
             except Exception as e:
                 self.log_error(video_id, e)
 
+        if skipped_face_quality:
+            print(f"[03b] face-quality gate skipped {skipped_face_quality} low-yield clips "
+                  f"(SR_FACE_QUALITY_GATE=0 to disable).")
         print(f"Final count: {len(results)} videos processed for Reasonable Emotion.")
 
     def log_error(self, video_id, error):
