@@ -36,7 +36,15 @@ def dummy_manifest(tmp_path):
                         [100, 100, 200, 200]
                     ] * 5
                 }
-            ]
+            ],
+            # Pre-populated passing face-quality record (Resolved Issue #8): the
+            # pre-filter's populate pass is idempotent, so it skips this entry
+            # (no video decode) and the real gate predicate lets it through —
+            # keeping this a pure 03b schema/plumbing test, import-path-agnostic.
+            "bystander_face_quality": {
+                "best_face_px": 200, "best_face_conf": 0.95,
+                "n_face_frames": 5, "n_checked": 5
+            }
         }
     ]
     with open(manifest_path, 'w') as f:

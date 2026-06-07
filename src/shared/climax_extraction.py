@@ -22,7 +22,7 @@ import re
 import tempfile
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import cv2
 import numpy as np
@@ -243,6 +243,7 @@ def populate_climax_for_manifest(
     vlm_model: Optional[str] = None,
     skip_vlm: bool = False,
     workers: Optional[int] = None,
+    entry_filter: Optional[Callable[[dict], bool]] = None,
 ) -> int:
     """Fill in `task_temporal_metadata` for every entry in `manifest_path`
     that has tasks with empty metadata. Writes back to the same path. Returns
@@ -256,6 +257,13 @@ def populate_climax_for_manifest(
     pre-pass. The VLM-refinement path is only parallel-safe if the local LLM
     server tolerates concurrent calls; the optical-flow-only path (skip_vlm or
     no vlm_model) always is.
+
+    `entry_filter` is an optional predicate `(entry) -> bool`; entries for which
+    it returns False are skipped (climax not computed). This is how the
+    bystander-face-quality pre-filter (03b Resolved Issue #8) avoids paying the
+    dominant optical-flow cost on clips that will score nothing. The predicate is
+    applied in the main process *before* dispatch, so there is no Pool-pickling
+    concern and skipped clips are never opened.
     """
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
@@ -263,7 +271,8 @@ def populate_climax_for_manifest(
     with open(manifest_path, 'r') as f:
         entries = json.load(f)
 
-    todo = [i for i, e in enumerate(entries) if _entry_needs_climax(e)]
+    todo = [i for i, e in enumerate(entries)
+            if _entry_needs_climax(e) and (entry_filter is None or entry_filter(e))]
     if not todo:
         return 0
 
