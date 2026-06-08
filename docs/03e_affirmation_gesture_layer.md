@@ -87,3 +87,22 @@ A comprehensive verification suite in `tests/test_layer_03e.py` validates the fo
 - **Ambiguous Wobble:** Correct classification of simultaneous equal-amplitude oscillations.
 - **Non-Uniform Sampling:** Verification of detection accuracy after uniform resampling.
 - **Upstream Gaze-Model Calibration:** `MAX_INTERPOLATED_FRACTION` re-keys to 0.3 / 0.2 / 0.25 against `processing_meta.model_used` across L2CS-Net, CrossGaze, 3DGazeNet, unknown-model, fallback-only, and missing-meta branches.
+
+## ⚠️ Unresolved Issues & Suggestions
+
+### Issue 1: Nod/shake is inferred from GAZE vectors, not true HEAD POSE
+**Status**: ⚠️ Confirmed Unresolved — Verified in `src/layer_03e_affirmation_gesture/pipeline.py`: `process_video()` reads `pitch_rad` / `yaw_rad` from 03a's `attention_trace` (lines 199–200), which are **L2CS-Net gaze-direction angles** (03a's `gaze_pipeline.step()` output — where the *eyes* point), not head-pose Euler angles (how the *head* is oriented). The entire layer premise — nod = pitch oscillation, shake = yaw oscillation — assumes head orientation, but gaze pitch/yaw also move with eye saccades and smooth pursuit while the head is perfectly still. The FPS-gated `medfilt(kernel_size=3)` saccade suppressor (Strategy §2) only rejects single-sample impulses and fires only at `fps >= 32`; it cannot convert gaze into head pose, so a sustained non-nod gaze oscillation (reading, vertical scanning of a workspace, tracking a moving object) can still alias into the 1–3 Hz "nod" band and yield a false `affirming_nod`/`negating_shake`. The doc is itself unreconciled: the Objective and Data-Reuse sections call this signal "3D head pose arrays" / "head tracking data" (lines 4, 17) while Strategy §2 admits it is "gaze vectors" (line 23). *(Surfaced by the April-28 audit formerly in `scratch/audit_03e.py`; that audit's six other findings — non-uniform `filtfilt`, `_fill_nan` mutation, missing nod+shake class, count-only confidence, `*_variance_hz` naming, silent missing-03a — are all since resolved or were non-issues.)*
+
+**Option A (recommended)**: **Add a dedicated head-pose source.** Run a lightweight head-pose estimator on the bystander face crops 03a already localizes — e.g. MediaPipe Face Landmarker's `facial_transformation_matrixes` (decomposed to head Euler angles) or a 6DoF model (SixDRepNet/6DRepNet) — and feed *its* pitch/yaw into 03e instead of gaze, keeping the existing signal-processing chain.
+  - *Pros*: Resolves the premise — measures actual head orientation, so nod/shake become physically grounded and saccade aliasing disappears; reuses 03a's face crops + timestamps so the added cost is one cheap inference per already-cropped face; MediaPipe Tasks is already a dependency (BlazeFace is used in 03a/03b).
+  - *Cons*: Adds a head-pose extraction pass + a head-pose field to 03a's output (or a new shared extractor); the 1–3 Hz bands, `PEAK_PROMINENCE`, `RMS_THRESHOLD`, and `STD_DEV_FLOOR` were tuned against gaze-angle amplitudes and must be re-validated against head-pose amplitude scale.
+
+**Option B**: **Keep gaze but bound the claim and harden the rejection.** Relabel the output as a gaze-derived affirmation *proxy* and tighten non-nod rejection — e.g. require the oscillation to co-occur with low net gaze drift (bounded translation of the gaze point) and bounded pitch↔yaw coupling, so steady rhythmic head motion is favored over wandering eye motion.
+  - *Pros*: No new model; preserves the millisecond signal-only pass; makes the layer honest about what it measures.
+  - *Cons*: Still a proxy — fundamentally cannot separate a vertical head nod from a vertical smooth-pursuit eye movement with the head still; residual false positives remain; churns the output schema/labels.
+
+**Option C**: **Cross-corroborate with 03d head-box motion.** Derive a coarse vertical/horizontal head-centroid oscillation from the per-frame bystander bounding box (03d proxemic/kinematic) and require it to agree with the gaze oscillation before emitting nod/shake.
+  - *Pros*: Uses an existing layer's output (no new model) to disambiguate head motion from eye motion; cross-layer corroboration cuts false positives.
+  - *Cons*: Introduces a dependency on 03d having run; head-box centroid is a crude, camera-motion-contaminated head-pose proxy in egocentric footage; degrades to no-op when 03d is absent.
+
+Your selection: _____
