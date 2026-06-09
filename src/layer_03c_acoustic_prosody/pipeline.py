@@ -333,25 +333,40 @@ class AcousticProsodyPipeline:
             logger.error(f"Error running SenseVoice model on {wav_path}: {e}")
             return []
 
-    def _classify_acoustic_tone(self, emotion_scores: Dict[str, float], max_amp_dbFS: float, pitch_variance: float) -> Tuple[str, float]:
+    def _task_expects_high_volume(self, task_label: str) -> bool:
+        """Issue 2: True when the task's own mechanics are inherently loud
+        (cooking clatter, machinery, power tools), so a volume spike is
+        uninformative for the alarming heuristic. Case-insensitive substring
+        match against `config.high_volume_expected_task_keywords`."""
+        label = (task_label or "").lower()
+        return any(kw in label for kw in self.config.high_volume_expected_task_keywords)
+
+    def _classify_acoustic_tone(self, emotion_scores: Dict[str, float], max_amp_dbFS: float, pitch_variance: float, expect_high_volume: bool = False) -> Tuple[str, float]:
         """
         Heuristic Mapping:
         - Alarming / Deterrent: High angry + high fearful + Sudden Volume Spike
         - Soothing / Encouraging: High happy + high surprised + Melodic Pitch Contour
         - Discouraging / Negative: High sad + Low Volume
+
+        `expect_high_volume` (Issue 2): when the task is inherently loud, the
+        volume spike reflects the task, not an alarmed voice, so the
+        `high_volume_bonus` is withheld to prevent a false "Alarming".
         """
         angry = emotion_scores.get("angry", 0.0)
         fearful = emotion_scores.get("fearful", 0.0)
         happy = emotion_scores.get("happy", 0.0)
         surprised = emotion_scores.get("surprised", 0.0)
         sad = emotion_scores.get("sad", 0.0)
-        
+
         cfg = self.config
         # Volume heuristic — cutoffs for "high" vs "low" volume relative to dBFS.
         is_high_volume = max_amp_dbFS > cfg.high_volume_dbfs
         is_low_volume = max_amp_dbFS < cfg.low_volume_dbfs
 
-        alarming_score = angry + fearful + (cfg.high_volume_bonus if is_high_volume else 0.0)
+        # Issue 2: suppress the volume bonus on inherently-loud tasks so loud
+        # mechanical noise (not a vocal reaction) cannot fabricate an Alarming.
+        apply_volume_bonus = is_high_volume and not expect_high_volume
+        alarming_score = angry + fearful + (cfg.high_volume_bonus if apply_volume_bonus else 0.0)
         soothing_score = happy + surprised + (pitch_variance * cfg.pitch_variance_soothing_weight)
         negative_score = sad + (cfg.low_volume_bonus if is_low_volume else 0.0)
         
@@ -395,16 +410,22 @@ class AcousticProsodyPipeline:
         try:
             wav_path = self._extract_audio_chunk(video_path, start_sec, end_sec)
             if not wav_path:
-                # If no audio or extraction failed, return a neutral stub
+                # Issue 1: no audio track (or extraction failed) -> emit an
+                # explicit no-data marker instead of a *confident* Neutral. The
+                # old stub reported dominant_emotion_confidence=1.0 + neutral=1.0,
+                # byte-identical to a genuinely-neutral clip, so downstream fusion
+                # could not tell "no acoustic data" from "confident neutral".
+                # Now audio_present=False, confidence 0.0, all-zero scores.
                 return {
                     "task_id": task_id,
                     "task_reaction_window_sec": window,
                     "prosody_metrics": {
                         "max_amplitude_dbFS": -100.0,
                         "pitch_contour_variance": 0.0,
-                        "emotion_scores": {k: (1.0 if k=="neutral" else 0.0) for k in ["angry", "happy", "sad", "surprised", "fearful", "neutral", "disgusted", "other", "unknown"]},
+                        "emotion_scores": {k: 0.0 for k in ["angry", "happy", "sad", "surprised", "fearful", "neutral", "disgusted", "other", "unknown"]},
                         "dominant_emotion": "neutral",
-                        "dominant_emotion_confidence": 1.0,
+                        "dominant_emotion_confidence": 0.0,
+                        "audio_present": False,
                         "audio_events": []
                     },
                     "classified_acoustic_tone": "Neutral",
@@ -421,7 +442,10 @@ class AcousticProsodyPipeline:
             if dominant_confidence < self.config.sensevoice_confidence_threshold:
                 audio_events = self._run_sensevoice_model(wav_path)
 
-            tone, scalar = self._classify_acoustic_tone(emotions, max_amp, pitch_var)
+            # Issue 2: withhold the volume bonus on inherently-loud tasks.
+            expect_high_volume = self._task_expects_high_volume(task.get("task_label", ""))
+            tone, scalar = self._classify_acoustic_tone(
+                emotions, max_amp, pitch_var, expect_high_volume=expect_high_volume)
 
             return {
                 "task_id": task_id,
@@ -432,6 +456,7 @@ class AcousticProsodyPipeline:
                     "emotion_scores": emotions,
                     "dominant_emotion": dominant_emotion[0],
                     "dominant_emotion_confidence": dominant_confidence,
+                    "audio_present": True,
                     "audio_events": audio_events
                 },
                 "classified_acoustic_tone": tone,

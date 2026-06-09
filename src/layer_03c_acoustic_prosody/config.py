@@ -34,3 +34,15 @@ class Layer03cConfig:
 
     # Divisor used to normalize raw pitch variance into [0, 1].
     pitch_variance_normalization: float = 10000.0
+
+    # Issue 2: tasks whose own mechanics are inherently loud (clatter, machinery,
+    # power tools). For these, a high-volume reading reflects the *task*, not an
+    # alarmed vocal reaction, so the `high_volume_bonus` must NOT push the clip
+    # toward "Alarming". Matched as case-insensitive substrings against
+    # `task_label`; tuple (not list/set) to keep the dataclass frozen/hashable.
+    high_volume_expected_task_keywords: tuple = (
+        "cook", "laundry", "clean", "dish", "blacksmith", "construct",
+        "renovation", "yardwork", "shovel", "snow", "vacuum", "lawn", "mow",
+        "machin", "carpentr", "woodwork", "saw", "drill", "hammer", "weld",
+        "grind", "mechanic",
+    )
