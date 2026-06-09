@@ -521,3 +521,69 @@ def test_schema_conformance(dummy_manifest, tmp_path, monkeypatch):
     assert metrics["dominant_emotion"] == "angry"
     assert task_res["classified_acoustic_tone"] == "Alarming"
     assert task_res["prosody_scalar"] == -1.0
+    # Issue 1: audio-present tasks carry the explicit presence marker.
+    assert metrics["audio_present"] is True
+
+
+# ------------------------------------------------------------------
+#  Issue 1: no-audio explicit marker
+# ------------------------------------------------------------------
+
+def test_no_audio_task_emits_explicit_marker():
+    """Issue 1: when the source has no audio track, _extract_audio_chunk returns
+    None and the task must be emitted as an explicit no-data marker
+    (audio_present=False, confidence 0.0, all-zero scores) rather than a
+    *confident* Neutral that downstream fusion cannot distinguish from a
+    genuinely-neutral clip.
+    """
+    pipeline = _make_pipeline()
+    pipeline._extract_audio_chunk = lambda v, s, e: None  # no audio track
+
+    task = {
+        "task_id": "t_silent",
+        "task_label": "Hiking",
+        "task_temporal_metadata": {"task_reaction_window_sec": [0.0, 2.0]},
+    }
+    res = pipeline._process_task("dummy.mp4", task)
+    pm = res["prosody_metrics"]
+
+    assert pm["audio_present"] is False
+    assert pm["dominant_emotion_confidence"] == 0.0
+    assert all(v == 0.0 for v in pm["emotion_scores"].values())
+    assert res["classified_acoustic_tone"] == "Neutral"
+    assert res["prosody_scalar"] == 0.0
+
+
+# ------------------------------------------------------------------
+#  Issue 2: task-conditional volume bonus
+# ------------------------------------------------------------------
+
+def test_task_expects_high_volume_keyword_match():
+    """Issue 2: inherently-loud task labels are recognized via substring match."""
+    pipeline = _make_pipeline()
+    assert pipeline._task_expects_high_volume("Cooking") is True
+    assert pipeline._task_expects_high_volume("Cleaning / laundry") is True
+    assert pipeline._task_expects_high_volume("Doing yardwork / shoveling snow") is True
+    assert pipeline._task_expects_high_volume("Yelling") is False
+    assert pipeline._task_expects_high_volume("Talking with family members") is False
+    assert pipeline._task_expects_high_volume("") is False
+
+
+def test_volume_bonus_suppressed_for_loud_task_end_to_end(monkeypatch):
+    """Issue 2: identical loud audio + identical emotions must NOT classify an
+    inherently-loud task ("Cooking") as Alarming (the volume bonus is withheld),
+    while a non-loud task ("Yelling") keeps the bonus and IS Alarming. This is
+    the false-Alarming mode the June 8 smell test surfaced on 573fc64b."""
+    pipeline = _make_pipeline()
+    monkeypatch.setattr(pipeline, "_extract_audio_chunk", lambda v, s, e: "dummy.wav")
+    monkeypatch.setattr(pipeline, "_extract_librosa_features", lambda w: (-10.0, 0.0))  # high volume
+    monkeypatch.setattr(pipeline, "_run_ser_model",
+                        lambda w: {"angry": 0.1, "fearful": 0.05, "neutral": 0.3})
+    monkeypatch.setattr(AcousticProsodyPipeline, "_safe_remove", staticmethod(lambda x: None))
+
+    win = {"task_temporal_metadata": {"task_reaction_window_sec": [0.0, 2.0]}}
+    loud = pipeline._process_task("dummy.mp4", {"task_id": "t1", "task_label": "Cooking", **win})
+    quiet = pipeline._process_task("dummy.mp4", {"task_id": "t2", "task_label": "Yelling", **win})
+
+    assert loud["classified_acoustic_tone"] == "Neutral"
+    assert quiet["classified_acoustic_tone"] == "Alarming"
