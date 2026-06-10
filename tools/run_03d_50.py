@@ -13,13 +13,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from src.layer_03d_proxemic_kinematics.pipeline import ProxemicKinematicsPipeline  # noqa: E402
 
-RDIR = ROOT / "e2e_reports" / "2026_06_09_layer03d_50"
+RDIR = ROOT / "e2e_reports" / "2026_06_10_layer03d_50_postfix"
 MAN = RDIR / "manifest_03d_50.json"
 OUT = RDIR / "03d_result_50.json"
 
 t0 = time.time()
 print("[run_03d_50] init (may download depth + SAM weights to the SSD on first run)...", flush=True)
-pipe = ProxemicKinematicsPipeline(str(MAN), str(OUT), force=True)
+pipe = ProxemicKinematicsPipeline(str(MAN), str(OUT), force=False)  # resume across crashes
 print(f"[run_03d_50] init done in {time.time()-t0:.0f}s on device={pipe.device}; processing 50 clips...", flush=True)
 pipe.run()
 print(f"[run_03d_50] DONE total {time.time()-t0:.0f}s -> {OUT}", flush=True)

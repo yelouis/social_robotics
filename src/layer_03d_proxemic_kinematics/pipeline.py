@@ -34,6 +34,12 @@ class ProxemicKinematicsPipeline:
     DEPTH_WEIGHT = 0.6                    # weight of depth heuristic in the fused proxemic vector
     MICROMOVEMENT_THRESHOLD = 0.05        # |vector| below this is treated as no movement (jitter rejection)
     APPROACH_THRESHOLD = 0.3              # vector > this -> Approach_Intervention; < -this -> Avoidance
+    # Issue 1 (June 10): detections on each side of the climax-nearest detection
+    # used when the strict reaction window holds <2 detections. Node-02 emits
+    # bystander detections at a median ~6s cadence vs 2s reaction windows, so a
+    # window holds at most ONE detection by construction; +/-1 detection spans
+    # 2-3 consecutive detections (~6-12s) — the minimum measurable interval.
+    ANCHOR_SPAN_DETECTIONS = 1
     
     # Auto-tune accelerator cache flush frequency based on host memory.
     # Hosts with >= 48GB can absorb the intermediate cache pressure of many videos.
@@ -48,6 +54,7 @@ class ProxemicKinematicsPipeline:
         self.sam_model = None
         self.sam_processor = None
         self.device = 'cpu'
+        self._sam_failure_warned = False  # Issue 2: one-time loud fallback warning
         
         self.processed_ids = set()
         if self.output_result_path.exists() and not self.force:
@@ -238,25 +245,41 @@ class ProxemicKinematicsPipeline:
                 continue
                 
             start_sec, end_sec = reaction_window
-            
-            chaos_score = self._extract_ego_motion_noise(video_path, start_sec, end_sec)
+            climax_sec = meta.get('task_climax_sec', (start_sec + end_sec) / 2.0)
             noise_threshold = self.OPTICAL_FLOW_NOISE_THRESHOLD
+            # Issue 1 (June 10): ego-motion noise is measured over each
+            # bystander's actual measurement window (which may be anchored and
+            # wider than the 2s reaction window); cached per window so
+            # bystanders sharing a window pay Farneback once.
+            chaos_cache = {}
 
             per_person = []
             for bystander in bystanders:
                 person_id = bystander.get('person_id')
                 timestamps_sec = bystander.get('timestamps_sec', [])
                 bounding_boxes = bystander.get('bounding_boxes', [])
-                
+
                 if not timestamps_sec or not bounding_boxes:
                     continue
-                    
-                bbox_delta = self._calculate_bbox_scale_delta(timestamps_sec, bounding_boxes, start_sec, end_sec)
-                
+
+                # Issue 1 (June 10): per-bystander window anchoring + span.
+                window = self._bystander_measurement_window(
+                    timestamps_sec, climax_sec, start_sec, end_sec)
+                if window is None:
+                    continue
+                win_start, win_end, window_source = window
+
+                bbox_delta = self._calculate_bbox_scale_delta(timestamps_sec, bounding_boxes, win_start, win_end)
+
                 # Check if person is present in the window at all
                 if bbox_delta is None:
                     continue
-                    
+
+                win_key = (round(win_start, 2), round(win_end, 2))
+                if win_key not in chaos_cache:
+                    chaos_cache[win_key] = self._extract_ego_motion_noise(video_path, win_start, win_end)
+                chaos_score = chaos_cache[win_key]
+
                 if chaos_score > noise_threshold:
                     per_person.append({
                         "person_id": person_id,
@@ -265,11 +288,13 @@ class ProxemicKinematicsPipeline:
                         "proxemic_vector": 0.0,
                         "classified_action": "Neutral",
                         "proxemic_confidence": 0.0,
-                        "optical_flow_noise": round(chaos_score, 2)
+                        "optical_flow_noise": round(chaos_score, 2),
+                        "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
+                        "window_source": window_source
                     })
                     continue
-                    
-                depth_delta = self._calculate_depth_delta(video_path, timestamps_sec, bounding_boxes, start_sec, end_sec)
+
+                depth_delta = self._calculate_depth_delta(video_path, timestamps_sec, bounding_boxes, win_start, win_end)
                 
                 # Check if depth calculation succeeded
                 if depth_delta is None:
@@ -294,7 +319,9 @@ class ProxemicKinematicsPipeline:
                     "proxemic_vector": round(proxemic_vector, 2),
                     "classified_action": action,
                     "proxemic_confidence": round(confidence, 2),
-                    "optical_flow_noise": round(chaos_score, 2)
+                    "optical_flow_noise": round(chaos_score, 2),
+                    "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
+                    "window_source": window_source
                 })
                 
             if per_person:
@@ -311,6 +338,36 @@ class ProxemicKinematicsPipeline:
             "layer": "03d_proxemic_kinematics",
             "tasks_analyzed": tasks_analyzed
         }
+
+    def _bystander_measurement_window(self, timestamps, climax_sec, start_sec, end_sec):
+        """Issue 1 (June 10): per-bystander measurement window.
+
+        The strict `task_reaction_window_sec` (2s, wearer-climax-anchored) holds
+        at most one Node-02 detection (median ~6s cadence), starving the >=2-
+        detection precondition — the June 9 smell test scored 0/50. Mirrors the
+        03b Resolved #2 pattern: keep the original window when it already holds
+        >=2 detections; otherwise anchor to the detection nearest the climax and
+        widen to ANCHOR_SPAN_DETECTIONS on each side (>=2 consecutive
+        detections, ~6-12s).
+
+        Returns (start, end, window_source) or None when the bystander has <2
+        usable detections at all.
+        """
+        in_window = sum(1 for t in timestamps if start_sec <= t <= end_sec)
+        if in_window >= 2:
+            return start_sec, end_sec, "reaction_window"
+        if len(timestamps) < 2:
+            return None
+        ts = sorted(timestamps)
+        i = min(range(len(ts)), key=lambda k: abs(ts[k] - climax_sec))
+        lo = max(0, i - self.ANCHOR_SPAN_DETECTIONS)
+        hi = min(len(ts) - 1, i + self.ANCHOR_SPAN_DETECTIONS)
+        if hi == lo:  # single-index span (can't happen with len>=2, defensive)
+            return None
+        ws, we = ts[lo], ts[hi]
+        if we <= ws:  # duplicate timestamps
+            return None
+        return ws, we, "bystander_anchored"
 
     def _calculate_bbox_scale_delta(self, timestamps, bboxes, start_sec, end_sec):
         # Extract bboxes in the window
@@ -516,7 +573,21 @@ class ProxemicKinematicsPipeline:
                 img,
                 input_boxes=[[[float(x1), float(y1), float(x2), float(y2)]]],
                 return_tensors="pt",
-            ).to(self.device)
+            )
+            # Issue 2 (June 10): SamProcessor emits float64 tensors
+            # (input_boxes / original_sizes) which the MPS backend cannot host
+            # ("Cannot convert a MPS Tensor to float64 dtype") — previously
+            # every SAM call failed here and silently fell back to the raw-bbox
+            # mask. Cast float64 -> float32 BEFORE moving to device; integer
+            # tensors (sizes) are left untouched.
+            inputs = {
+                k: (v.to(torch.float32) if torch.is_tensor(v) and v.dtype == torch.float64 else v)
+                for k, v in inputs.items()
+            }
+            inputs = {
+                k: (v.to(self.device) if torch.is_tensor(v) else v)
+                for k, v in inputs.items()
+            }
             with torch.no_grad():
                 outputs = self.sam_model(**inputs)
             masks = self.sam_processor.image_processor.post_process_masks(
@@ -530,7 +601,16 @@ class ProxemicKinematicsPipeline:
             best_idx = int(np.argmax(iou_scores))
             return mask_tensor[best_idx].numpy().astype(bool)
         except Exception as e:
-            print(f"SAM bbox-prompt inference failed: {e}")
+            # Issue 2 (June 10): never degrade silently for a whole batch — the
+            # June 9 smell test showed SAM failing on EVERY frame (MPS float64)
+            # while production quietly used diluted raw-bbox depth medians.
+            if not self._sam_failure_warned:
+                self._sam_failure_warned = True
+                print("[03d] *** WARNING: SAM bbox-prompt inference failed — falling "
+                      "back to rectangular-bbox depth medians (less precise). First "
+                      f"error: {e} ***")
+            else:
+                print(f"SAM bbox-prompt inference failed: {e}")
             return None
 
     def _compute_proxemic_vector(self, bbox_delta, depth_delta):

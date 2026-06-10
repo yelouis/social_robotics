@@ -145,6 +145,91 @@ def test_schema_conformance(dummy_manifest, tmp_path, monkeypatch):
     assert "optical_flow_noise" in per_person
 
 # ------------------------------------------------------------------
+#  June 10 Issue 1: per-bystander window anchoring + detection-span widening
+# ------------------------------------------------------------------
+
+def test_measurement_window_keeps_reaction_window_when_dense():
+    """>=2 detections inside the strict reaction window -> original window kept
+    (the pre-existing dense-detection behavior is unchanged)."""
+    pipeline = _make_pipeline()
+    win = pipeline._bystander_measurement_window(
+        [1.0, 1.5, 2.0, 2.5, 3.0], climax_sec=1.0, start_sec=1.0, end_sec=3.0)
+    assert win == (1.0, 3.0, "reaction_window")
+
+
+def test_measurement_window_anchors_sparse_detections():
+    """The June 9 0/50 case: detections at the Node-02 ~6s cadence, a 2s
+    reaction window holding one detection. The window must re-anchor to the
+    climax-nearest detection +/- ANCHOR_SPAN_DETECTIONS (here [6, 18])."""
+    pipeline = _make_pipeline()
+    win = pipeline._bystander_measurement_window(
+        [0.0, 6.0, 12.0, 18.0, 24.0], climax_sec=10.0, start_sec=10.0, end_sec=12.0)
+    assert win == (6.0, 18.0, "bystander_anchored")
+
+
+def test_measurement_window_anchor_clips_at_edges():
+    """Anchor at the first/last detection still spans >=2 detections."""
+    pipeline = _make_pipeline()
+    win = pipeline._bystander_measurement_window(
+        [0.0, 6.0, 12.0], climax_sec=0.0, start_sec=0.0, end_sec=2.0)
+    assert win == (0.0, 6.0, "bystander_anchored")
+
+
+def test_measurement_window_none_for_single_detection():
+    """A bystander with a single detection can never yield a delta -> None."""
+    pipeline = _make_pipeline()
+    assert pipeline._bystander_measurement_window(
+        [5.0], climax_sec=5.0, start_sec=4.0, end_sec=6.0) is None
+
+
+def test_sparse_detections_now_score_end_to_end(tmp_path, monkeypatch):
+    """June 10 Issue 1 end-to-end: the exact geometry that scored 0/50 on
+    June 9 (6s detection cadence vs 2s window) now produces a scored record
+    via the anchored window, with window provenance fields emitted."""
+    manifest_path = tmp_path / "manifest.json"
+    dummy_video = tmp_path / "dummy.mp4"
+    dummy_video.touch()
+    manifest_path.write_text(json.dumps([{
+        "video_id": "sparse_video",
+        "video_path": str(dummy_video),
+        "bystander_detections": [{
+            "person_id": 0,
+            "timestamps_sec": [0.0, 6.0, 12.0, 18.0],
+            "bounding_boxes": [
+                [100, 100, 200, 200],   # 10000
+                [90, 90, 210, 210],     # 14400
+                [80, 80, 220, 220],     # 19600
+                [70, 70, 230, 230],     # 25600
+            ],
+        }],
+        "identified_tasks": [{
+            "task_id": "t_01",
+            "task_label": "Sparse task",
+            "task_temporal_metadata": {
+                "task_climax_sec": 11.0,
+                "task_reaction_window_sec": [11.0, 13.0],  # holds only t=12
+            },
+        }],
+    }]))
+    out_path = tmp_path / "out.json"
+    pipeline = _make_pipeline(str(manifest_path), str(out_path))
+    monkeypatch.setattr(pipeline, "_extract_ego_motion_noise", lambda v, s, e: 2.0)
+    monkeypatch.setattr(pipeline, "_calculate_depth_delta", lambda v, t, b, s, e: -0.1)
+
+    pipeline.run()
+
+    with open(out_path) as f:
+        results = json.load(f)
+    per_person = results[0]["tasks_analyzed"][0]["per_person"][0]
+    # anchored to t=12 (nearest climax 11.0) +/-1 detection -> [6, 18]
+    assert per_person["window_source"] == "bystander_anchored"
+    assert per_person["measurement_window_sec"] == [6.0, 18.0]
+    # bbox delta over [6,18]: (25600 - 14400) / 14400 * 100
+    assert per_person["bbox_scale_delta_pct"] == round((25600 - 14400) / 14400 * 100, 2)
+    assert per_person["classified_action"] in ("Approach_Intervention", "Neutral", "Avoidance")
+
+
+# ------------------------------------------------------------------
 #  Issue 4: Extreme SSD mount validation (fail-fast in _init_model)
 # ------------------------------------------------------------------
 
