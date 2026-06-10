@@ -435,10 +435,68 @@ def test_config_volume_cutoff_override_changes_alarming_bonus():
     pipeline = _make_pipeline()
     # With default cfg, -25 dBFS is below the -20 cutoff and gets no bonus.
     # Push the cutoff to -30 so -25 now exceeds it and earns the bonus.
+    # angry 0.5 clears the min_ser_confidence floor (June 9 Issue 1) so the
+    # volume-bonus mechanics under test are actually reached.
     pipeline.config = Layer03cConfig(high_volume_dbfs=-30.0)
-    emotions = {"angry": 0.4, "fearful": 0.2, "neutral": 0.4}
+    emotions = {"angry": 0.5, "fearful": 0.2, "neutral": 0.4}
     tone, _ = pipeline._classify_acoustic_tone(emotions, max_amp_dbFS=-25.0, pitch_variance=0.0)
     assert tone == "Alarming"
+
+
+# ------------------------------------------------------------------
+#  June 9 Issue 1: SER-confidence floor + gated pitch term
+# ------------------------------------------------------------------
+
+def test_soothing_blocked_below_ser_confidence_floor():
+    """June 9 Issue 1: a near-coin-flip SER read (happy 0.32 vs neutral 0.26 —
+    the 072e3481 'Walking on street' case) must NOT assemble a full-strength
+    Soothing out of the pitch-variance bonus. The floor forces Neutral."""
+    pipeline = _make_pipeline()
+    emotions = {"happy": 0.317, "neutral": 0.261, "disgusted": 0.096}
+    tone, scalar = pipeline._classify_acoustic_tone(
+        emotions, max_amp_dbFS=-22.7, pitch_variance=0.65)
+    assert tone == "Neutral"
+    assert scalar == 0.0
+
+
+def test_pitch_term_requires_confident_happy():
+    """June 9 Issue 1: the pitch-variance term only corroborates Soothing when
+    `happy` itself clears the floor. Here the dominant class (neutral 0.6)
+    passes the floor, but happy 0.3 does not — so high melodic variance must
+    not lift Soothing above Neutral (ungated it would: 0.3 + 0.9*0.5 = 0.75)."""
+    pipeline = _make_pipeline()
+    emotions = {"happy": 0.3, "neutral": 0.6}
+    tone, scalar = pipeline._classify_acoustic_tone(
+        emotions, max_amp_dbFS=-25.0, pitch_variance=0.9)
+    assert tone == "Neutral"
+    assert scalar == 0.0
+
+
+# ------------------------------------------------------------------
+#  June 9 Issue 2: confident disgust -> Discouraging
+# ------------------------------------------------------------------
+
+def test_confident_disgust_maps_to_discouraging():
+    """June 9 Issue 2: `disgusted` previously fed no tone score, so confident
+    disgust read as Neutral. It now folds into the Discouraging bucket."""
+    pipeline = _make_pipeline()
+    emotions = {"disgusted": 0.7, "neutral": 0.2, "happy": 0.05}
+    tone, scalar = pipeline._classify_acoustic_tone(
+        emotions, max_amp_dbFS=-25.0, pitch_variance=0.1)
+    assert tone == "Discouraging"
+    assert scalar == -0.5
+
+
+def test_weak_disgust_stays_neutral_via_floor():
+    """June 9 Issues 1+2 interplay: sub-floor disgust (the 04f2cec1 case,
+    disgusted 0.41) must NOT over-fire Discouraging — the SER floor holds it
+    at Neutral."""
+    pipeline = _make_pipeline()
+    emotions = {"disgusted": 0.41, "neutral": 0.3}
+    tone, scalar = pipeline._classify_acoustic_tone(
+        emotions, max_amp_dbFS=-15.8, pitch_variance=0.0)
+    assert tone == "Neutral"
+    assert scalar == 0.0
 
 # ------------------------------------------------------------------
 #  Temp file lifecycle (Issue #2)
@@ -577,8 +635,11 @@ def test_volume_bonus_suppressed_for_loud_task_end_to_end(monkeypatch):
     pipeline = _make_pipeline()
     monkeypatch.setattr(pipeline, "_extract_audio_chunk", lambda v, s, e: "dummy.wav")
     monkeypatch.setattr(pipeline, "_extract_librosa_features", lambda w: (-10.0, 0.0))  # high volume
+    # neutral 0.55 clears the June-9 min_ser_confidence floor so the volume-
+    # bonus differential under test is reached; angry+fearful (0.4) beats
+    # neutral only WITH the +0.3 bonus, so the loud-task gate decides the tone.
     monkeypatch.setattr(pipeline, "_run_ser_model",
-                        lambda w: {"angry": 0.1, "fearful": 0.05, "neutral": 0.3})
+                        lambda w: {"angry": 0.3, "fearful": 0.1, "neutral": 0.55})
     monkeypatch.setattr(AcousticProsodyPipeline, "_safe_remove", staticmethod(lambda x: None))
 
     win = {"task_temporal_metadata": {"task_reaction_window_sec": [0.0, 2.0]}}

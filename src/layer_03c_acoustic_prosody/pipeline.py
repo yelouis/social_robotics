@@ -357,8 +357,19 @@ class AcousticProsodyPipeline:
         happy = emotion_scores.get("happy", 0.0)
         surprised = emotion_scores.get("surprised", 0.0)
         sad = emotion_scores.get("sad", 0.0)
+        disgusted = emotion_scores.get("disgusted", 0.0)
 
         cfg = self.config
+
+        # Issue 1 (June 9): SER-confidence floor. When even the dominant class
+        # is below the floor the softmax is effectively guessing, and heuristic
+        # bonus terms (pitch variance, volume) must not be allowed to assemble a
+        # full-strength tone out of noise (e.g. happy 0.32 + pitch 0.65 -> a
+        # fabricated Soothing +1.0). Force Neutral instead. Mirrors 03b's
+        # MIN_EMOTION_CONF honesty gate.
+        dominant_conf = max(emotion_scores.values()) if emotion_scores else 0.0
+        if dominant_conf < cfg.min_ser_confidence:
+            return "Neutral", 0.0
         # Volume heuristic — cutoffs for "high" vs "low" volume relative to dBFS.
         is_high_volume = max_amp_dbFS > cfg.high_volume_dbfs
         is_low_volume = max_amp_dbFS < cfg.low_volume_dbfs
@@ -367,8 +378,19 @@ class AcousticProsodyPipeline:
         # mechanical noise (not a vocal reaction) cannot fabricate an Alarming.
         apply_volume_bonus = is_high_volume and not expect_high_volume
         alarming_score = angry + fearful + (cfg.high_volume_bonus if apply_volume_bonus else 0.0)
-        soothing_score = happy + surprised + (pitch_variance * cfg.pitch_variance_soothing_weight)
-        negative_score = sad + (cfg.low_volume_bonus if is_low_volume else 0.0)
+        # Issue 1 (June 9): the pitch-variance term only corroborates Soothing
+        # when `happy` itself clears the SER floor — high melodic variance from
+        # music / ambient tones / the wearer's own speech must not convert a
+        # weak happy into a winning Soothing score.
+        pitch_term = (pitch_variance * cfg.pitch_variance_soothing_weight
+                      if happy >= cfg.min_ser_confidence else 0.0)
+        soothing_score = happy + surprised + pitch_term
+        # Issue 2 (June 9): disgust is a negative-valence vocalization (a
+        # recoiling "ugh") and previously fed no tone score at all, so a clip
+        # whose top SER emotion was confident disgust read as Neutral. Fold it
+        # into the Discouraging bucket alongside sad; the SER floor above keeps
+        # weak disgust from over-firing.
+        negative_score = sad + disgusted + (cfg.low_volume_bonus if is_low_volume else 0.0)
         
         scores = {
             "Alarming": alarming_score,

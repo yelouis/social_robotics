@@ -32,6 +32,15 @@ class Layer03cConfig:
     # SER dominant-emotion confidence below which SenseVoice runs.
     sensevoice_confidence_threshold: float = 0.6
 
+    # Issue 1 (June 9): minimum SER dominant-emotion confidence for ANY
+    # non-Neutral tone. Below this the 9-class softmax is effectively guessing
+    # (e.g. happy 0.32 vs neutral 0.26 — a coin-flip), so the tone is forced to
+    # Neutral instead of letting heuristic bonus terms (pitch variance, volume)
+    # fabricate a full-strength classification. Mirrors 03b's MIN_EMOTION_CONF.
+    # The same floor gates the pitch-variance term: melody only corroborates a
+    # Soothing read when `happy` itself is confident.
+    min_ser_confidence: float = 0.5
+
     # Divisor used to normalize raw pitch variance into [0, 1].
     pitch_variance_normalization: float = 10000.0
 
