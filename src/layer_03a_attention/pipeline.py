@@ -63,6 +63,23 @@ ENABLE_BBOX_REDETECT = _os.getenv("SR_03A_BBOX_REDETECT", "1").lower() in ("1", 
 # set of scored frames is unchanged. Toggle off with SR_03A_WINDOW_RESTRICT=0.
 ENABLE_WINDOW_RESTRICT = _os.getenv("SR_03A_WINDOW_RESTRICT", "1").lower() in ("1", "true", "yes")
 WINDOW_PAD_SEC = float(_os.getenv("SR_03A_WINDOW_PAD_SEC", "2.0"))
+# Throughput levers (Resolved Issue 6).
+# A' — clip-level face-quality gate: reuse the shared bystander_face_quality
+# manifest pre-pass (03b Resolved #8) with a 03a-TUNED tier. L2CS gaze resolves
+# smaller faces than HSEmotion emotion, so 03b's strict 120px/0.8/3 tier
+# provably loses real attention clips (June 11 join: 6fd026d8 eng 0.94,
+# 3f503d0b eng 0.68); 60px/0.6/2 lost none while skipping 54% of the 50-clip
+# corpus sample. Fail-open: unscored entries always pass.
+ENABLE_FACE_QUALITY_GATE = _os.getenv("SR_03A_FACE_QUALITY_GATE", "1").lower() in ("1", "true", "yes")
+FQ_MIN_PX = int(_os.getenv("SR_03A_FQ_MIN_PX", "60"))
+FQ_MIN_CONF = float(_os.getenv("SR_03A_FQ_MIN_CONF", "0.6"))
+FQ_MIN_FRAMES = int(_os.getenv("SR_03A_FQ_MIN_FRAMES", "2"))
+# B' — YOLO re-detect runs at most once per this interval. The gaze-sampling
+# cadence is untouched (03e's medfilt contract needs the dense 8-32 FPS trace),
+# but a person's box barely moves in 250ms relative to the +/-20px crop pad, so
+# re-detecting on every 32 FPS burst frame was 8x wasted YOLO. Cached boxes are
+# <=250ms stale vs the <=2s manifest staleness re-detection exists to fix.
+REDETECT_MIN_INTERVAL_SEC = float(_os.getenv("SR_03A_REDETECT_INTERVAL", "0.25"))
 class AttentionLayerPipeline:
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -109,6 +126,9 @@ class AttentionLayerPipeline:
         # Lazy-loaded crop-validation models (Resolved Issues 1 & 2).
         self._face_detector = None
         self._pose_model = None
+        # Resolved Issue 6 (A'): instance-level so tests (and callers running on
+        # synthetic fixtures) can disable the clip gate like enable_face_gate.
+        self.enable_face_quality_gate = ENABLE_FACE_QUALITY_GATE
         self.enable_face_gate = ENABLE_FACE_GATE and mp is not None and FACE_DETECTOR_PATH.exists()
         self.enable_bbox_redetect = ENABLE_BBOX_REDETECT and YOLO is not None and get_model is not None
         if ENABLE_FACE_GATE and not self.enable_face_gate:
@@ -242,7 +262,40 @@ class AttentionLayerPipeline:
         self.unload()
         return False
 
+    def _passes_face_quality(self, entry):
+        """Resolved Issue 6 (A'): 03a-tier clip gate over the shared
+        `bystander_face_quality` manifest field. Tier is deliberately looser
+        than 03b's (gaze works on smaller faces than emotion). Fail-open:
+        unscored entries and any import failure pass everything through."""
+        if not getattr(self, 'enable_face_quality_gate', ENABLE_FACE_QUALITY_GATE):
+            return True
+        try:
+            try:
+                from shared.face_quality_prefilter import passes_face_quality
+            except ImportError:
+                from src.shared.face_quality_prefilter import passes_face_quality
+        except ImportError:
+            return True
+        return passes_face_quality(entry, min_px=FQ_MIN_PX, min_conf=FQ_MIN_CONF,
+                                   min_frames=FQ_MIN_FRAMES, enabled=True)
+
     def run(self):
+        # Resolved Issue 6 (A'): annotate face quality first (idempotent
+        # ~0.9s/clip one-time pre-pass, shared with 03b) so the 03a-tier gate
+        # below can skip clips with no gaze-resolvable face before paying
+        # decode + YOLO + L2CS. Defensive: any failure leaves the gate open.
+        if self.enable_face_quality_gate:
+            try:
+                try:
+                    from shared.face_quality_prefilter import populate_face_quality_for_manifest
+                except ImportError:
+                    from src.shared.face_quality_prefilter import populate_face_quality_for_manifest
+                nq = populate_face_quality_for_manifest(self.input_manifest_path)
+                if nq:
+                    print(f"[03a] Scored bystander face quality for {nq} manifest entries.")
+            except Exception as e:
+                print(f"[03a] face-quality pre-filter skipped ({e}); gate fails open.")
+
         with open(self.input_manifest_path, 'r') as f:
             registry = json.load(f)
 
@@ -254,6 +307,7 @@ class AttentionLayerPipeline:
             except (json.JSONDecodeError, IOError, ValueError):
                 pass
 
+        skipped_face_quality = 0
         for entry in registry:
             if entry.get("synthetic") is True:
                 continue
@@ -265,6 +319,13 @@ class AttentionLayerPipeline:
                 continue
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
+                continue
+
+            # Resolved Issue 6 (A'): no gaze-resolvable face anywhere in the
+            # clip -> the trace would be all NoFace/0.0 (and 03e rejects such
+            # traces anyway), so skip before paying decode + inference.
+            if not self._passes_face_quality(entry):
+                skipped_face_quality += 1
                 continue
 
             print(f"Processing Attention Layer for video: {video_id}")
@@ -282,6 +343,9 @@ class AttentionLayerPipeline:
             except Exception as e:
                 self.log_error(video_id, e)
 
+        if skipped_face_quality:
+            print(f"[03a] Skipped {skipped_face_quality} clips below the face-quality tier "
+                  f"(px>={FQ_MIN_PX}, conf>={FQ_MIN_CONF}, frames>={FQ_MIN_FRAMES}).")
         print(f"Final count: {len(results)} videos processed for Attention.")
 
     def log_error(self, video_id, error):
@@ -509,6 +573,12 @@ class AttentionLayerPipeline:
             return {}
         current_frame_idx = 1
 
+        # Resolved Issue 6 (B'): YOLO re-detect cache. Refreshed at most every
+        # REDETECT_MIN_INTERVAL_SEC; between refreshes the freshest boxes are
+        # reused (<=250ms stale). The gaze-sampling cadence below is unchanged.
+        last_redetect_t = None
+        cached_pose_boxes = []
+
         while any(next_t[pid] <= duration_sec for pid in next_t):
             current_t = min(next_t[pid] for pid in next_t if next_t[pid] <= duration_sec)
             target_frame_idx = int(current_t * fps)
@@ -545,9 +615,15 @@ class AttentionLayerPipeline:
                         next_t[pid] += self.BASELINE_STRIDE_SEC
                 continue
 
-            # Re-detect bystander boxes on THIS frame once (Resolved Issue 2);
-            # shared across all bystanders active at current_t.
-            pose_boxes = self._detect_pose_boxes(frame)
+            # Re-detect bystander boxes at most once per REDETECT_MIN_INTERVAL_SEC
+            # (Resolved Issue 6, B'); shared across all bystanders active at
+            # current_t. Between refreshes the cached boxes are reused — far
+            # fresher than the <=2s-stale manifest boxes that per-frame
+            # re-detection (Resolved Issue 3) was added to replace.
+            if last_redetect_t is None or (current_t - last_redetect_t) >= REDETECT_MIN_INTERVAL_SEC:
+                cached_pose_boxes = self._detect_pose_boxes(frame)
+                last_redetect_t = current_t
+            pose_boxes = cached_pose_boxes
 
             for bystander in bystanders:
                 pid = bystander.get('person_id')
