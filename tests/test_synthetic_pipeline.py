@@ -161,7 +161,11 @@ def test_layer_03_skips_synthetic(tmp_path, monkeypatch):
     
     pipeline = AttentionLayerPipeline(input_manifest, output_result)
     pipeline.gaze_pipeline = None
-    
+    # 03a Resolved Issue 6: fixture entries have no real video, so the
+    # face-quality pre-pass would zero-score and (correctly) gate them out —
+    # disable the clip gate for this synthetic-skip plumbing test.
+    pipeline.enable_face_quality_gate = False
+
     # Mock process_video to return a dummy result for non-synthetic
     monkeypatch.setattr(pipeline, "process_video", lambda entry: {"video_id": entry["video_id"]})
     
