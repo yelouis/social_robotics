@@ -182,6 +182,25 @@ def test_measurement_window_none_for_single_detection():
         [5.0], climax_sec=5.0, start_sec=4.0, end_sec=6.0) is None
 
 
+def test_measurement_window_caps_long_anchored_span():
+    """June 11 span cap (Resolved #3): a sparse track whose neighbor-detection
+    gap stretches the anchored span past MAX_ANCHOR_SPAN_SEC measures
+    locomotion/drift, not a reaction -> the bystander is skipped (None). This
+    is the June 10 latent case (33/112 spans >30s, max 198s)."""
+    pipeline = _make_pipeline()
+    assert pipeline._bystander_measurement_window(
+        [0.0, 100.0, 200.0], climax_sec=100.0, start_sec=99.0, end_sec=101.0) is None
+
+
+def test_measurement_window_at_cap_boundary_kept():
+    """A span exactly at MAX_ANCHOR_SPAN_SEC is still measurable (cap is
+    strictly-greater-than)."""
+    pipeline = _make_pipeline()
+    win = pipeline._bystander_measurement_window(
+        [0.0, 15.0, 30.0], climax_sec=15.0, start_sec=14.0, end_sec=16.0)
+    assert win == (0.0, 30.0, "bystander_anchored")
+
+
 def test_sparse_detections_now_score_end_to_end(tmp_path, monkeypatch):
     """June 10 Issue 1 end-to-end: the exact geometry that scored 0/50 on
     June 9 (6s detection cadence vs 2s window) now produces a scored record
