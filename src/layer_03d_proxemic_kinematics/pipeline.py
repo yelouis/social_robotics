@@ -40,6 +40,13 @@ class ProxemicKinematicsPipeline:
     # window holds at most ONE detection by construction; +/-1 detection spans
     # 2-3 consecutive detections (~6-12s) — the minimum measurable interval.
     ANCHOR_SPAN_DETECTIONS = 1
+    # Span cap (June 11): hard ceiling in SECONDS on the anchored span. The
+    # +/-1-detection span is an index span, so a sparse track's neighbor gap can
+    # stretch it to minutes (observed max 198s on the June 10 run) — a bbox/depth
+    # delta over that interval measures locomotion/track drift, not a reaction.
+    # Anchored windows wider than this skip the bystander (None). All 10
+    # confident June-10 vectors sat on <=12s spans, so 30s is conservative.
+    MAX_ANCHOR_SPAN_SEC = 30.0
     
     # Auto-tune accelerator cache flush frequency based on host memory.
     # Hosts with >= 48GB can absorb the intermediate cache pressure of many videos.
@@ -366,6 +373,11 @@ class ProxemicKinematicsPipeline:
             return None
         ws, we = ts[lo], ts[hi]
         if we <= ws:  # duplicate timestamps
+            return None
+        if (we - ws) > self.MAX_ANCHOR_SPAN_SEC:
+            # Span cap (June 11): on sparse tracks the neighbor-detection gap
+            # can stretch the anchored span to minutes — that delta measures
+            # locomotion/drift, not a task reaction. No data beats wrong data.
             return None
         return ws, we, "bystander_anchored"
 
