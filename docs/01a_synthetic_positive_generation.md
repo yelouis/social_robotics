@@ -10,9 +10,9 @@ Generate a small, controlled corpus of **synthetic egocentric videos with a guar
 
 ## 1. Why a Synthetic Validation Stream
 
-The May 19 498-video E2E run produced a **0 % pass rate**. Manual spot-checks attributed the collapse to two independent gate-accuracy regressions, both filed in `docs/02_filtering_and_labeling.md` → `⚠️ Unresolved Issues & Suggestions`:
-- **Issue #1** — the stereo VLM gate over-fires on 80.8 % of all YOLO+VLM-processed videos, including at least one demonstrably multi-person scene (`082db032-…` pottery).
-- **Issue #2** — the multi-person Moondream gate rejects clear true positives (`0a6d4809-…` "Talking with friends/housemates", `03634630-…` "BBQ'ing/picnics").
+The May 19 498-video E2E run produced a **0 % pass rate**. Manual spot-checks attributed the collapse to two independent gate-accuracy regressions *(since fixed — see `docs/02_filtering_and_labeling.md` Resolved Issues #13 and #14)*:
+- the stereo VLM gate over-fired on 80.8 % of all YOLO+VLM-processed videos, including at least one demonstrably multi-person scene (`082db032-…` pottery);
+- the multi-person Moondream gate rejected clear true positives (`0a6d4809-…` "Talking with friends/housemates", `03634630-…` "BBQ'ing/picnics").
 
 Both diagnoses rely on human spot-checking of individual rejections. **There is no automated signal that tells the team "X of Y guaranteed true-positives passed Node 02"**, so regressions in the gates can land unnoticed between runs. Layer 1a provides exactly that signal:
 
@@ -210,7 +210,7 @@ A synthetic pass rate < 50 % overall is flagged as a regression alert in the rep
 
 ## 8. 🚀 Implementation Status
 
-**Integration: implemented. Local Wan2.1 backend: implemented in code + unit-tested; pending one live-render validation.** The generator-agnostic plumbing (registry → filtering bypass → Layer 03/04 skip → export guards) and the new local-generator code are in place, the Veo/`google-genai` backend has been removed, and the full suite passes (`tests/test_synthetic_pipeline.py` — 12 tests; 114 across the repo). The one remaining gap — installing the `diffusers` stack and running a real render on the Mac Studio — is tracked in **⚠️ Unresolved Issues & Suggestions** below. 
+**Integration: implemented. Local Wan2.1 backend: implemented in code + unit-tested; pending one live-render validation.** The generator-agnostic plumbing (registry → filtering bypass → Layer 03/04 skip → export guards) and the new local-generator code are in place, the Veo/`google-genai` backend has been removed, and the synthetic-pipeline tests pass as part of the full repo suite (`tests/test_synthetic_pipeline.py`). The one remaining gap — a successful live render on the Mac Studio — is tracked in **⚠️ Unresolved Issues & Suggestions** below. 
 
 ### Already implemented (generator-agnostic)
 These pieces do not depend on which generator renders the clips and are in place today:
@@ -387,4 +387,21 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-There are currently no unresolved issues.
+*(June 12 audit note: this section previously claimed "no unresolved issues" while the Implementation Status above still — correctly — tracked the live-render gap here. The discrepancy is fixed by re-filing the gap below; the render has never completed on this host.)*
+
+### Issue 1: No Wan2.1 render has ever completed on the Mac Studio (MPS OOM / SIGKILL at every tried tier)
+**Status**: ⚠️ Confirmed Unresolved — June 4 attempts all failed before producing a clip: the 14B model at 81 frames OOM'd in MPS attention (~48 GiB MTLBuffer request), and the 1.3B fallback was SIGKILL'd (exit 137) during CPU-side decode at both 49 and 33 frames. The 02-filter QA loop therefore still has zero locally-rendered true-positive fixtures; the synthetic clips referenced by the registry are the only fixtures available, and the "generate once, save to SSD, reference thereafter" workflow (docs/01a §4) is blocked at the "generate once" step.
+
+**Option A (recommended)**: **Constrained-render retry under the supervised wrapper.** Retry the 1.3B tier at reduced cost (e.g. 480p, ≤ 25 frames, fewer inference steps, `enable_model_cpu_offload` + VAE slicing/tiling already wired) under the run-supervision wrapper (docs/03 architecture Issue 1) with `PYTHONFAULTHANDLER=1`, so the next failure at least yields a traceback instead of a silent SIGKILL.
+  - *Pros*: Cheapest path to *any* validated fixture; diagnostics finally captured; parameters already exposed in `generator.py`.
+  - *Cons*: 480p/short clips are weaker QA fixtures; may still hit the same memory wall.
+
+**Option B**: **Render on a rented GPU box once, copy to SSD.** Run the 14B render on a cloud CUDA instance, copy the fixtures to the Extreme SSD, and keep the local pipeline reference-only (matching the generate-once design).
+  - *Pros*: Removes the MPS constraint entirely; full-quality 720p fixtures; one-time cost.
+  - *Cons*: External dependency/cost; weights re-download on the remote box.
+
+**Option C**: **Accept filter-only QA.** Drop the synthetic-render requirement and rely on the curated real-positive clips for gate QA.
+  - *Pros*: Zero further effort.
+  - *Cons*: Loses the automated guaranteed-true-positive regression signal that motivated Layer 1a (§1).
+
+Your selection: _____
