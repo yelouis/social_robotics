@@ -62,4 +62,11 @@ While extracting sub-degree gaze telemetry (`gaze_x`, `gaze_y`) from Aria glasse
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*(No unresolved issues at this time.)*
+### Issue 1: Per-stride `cap.set` seeking in `_extract_camera_shift` (H.264 keyframe-approximate anti-pattern)
+**Status**: ⚠️ Confirmed Unresolved — Found in the June 12 repo audit; the twin of **03f Unresolved Issue 1**. `_extract_camera_shift` (`src/layer_03g_shared_reality/pipeline.py`, the `if frame_stride > 1: cap.set(CAP_PROP_POS_FRAMES, current_frame_idx)` inside the stride loop) seeks on every ~10 Hz stride step across the reaction window. On H.264 `cap.set` is keyframe-approximate: each seek re-decodes from the nearest keyframe (~10–20× wasted decode) and risks frame↔timestamp desync — the failure mode that corrupted 03a scores before its no-seek rewrite (03a Resolved #5; fix validated bit-identical there and in 02 Resolved #18). For 03g specifically, desync perturbs the *accumulated* shift vector, since each iteration's flow is integrated into `total_dx/total_dy`.
+
+**Remediation (single option — proven fix)**: Replace the per-step seek with the sequential `grab()`/`read()` skip pattern (as in `shared/climax_extraction.py` / 03a), then validate on a few cached clips that `post_climax_camera_shift_vector` is unchanged. Ideally land together with 03f Issue 1 since the loops are near-identical.
+  - *Pros*: Strictly cheaper decode; frame-accurate; pattern validated twice in this repo; no new dependency.
+  - *Cons*: None of substance — mechanical change plus a short validation run.
+
+Your selection: _____
