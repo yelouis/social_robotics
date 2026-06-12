@@ -98,7 +98,7 @@ Videos that legitimately produce no output (missing file, no bystanders/tasks, n
   - *Pros*: Removes wasted keyframe re-decode and the timestamp-desync risk; pattern already validated twice in this repo; no new dependency.
   - *Cons*: None of substance — mechanical change plus a short validation run.
 
-Your selection: _____
+Your selection: Proceed with the Remediation.
 
 ---
 
@@ -113,5 +113,5 @@ Your selection: _____
   - *Pros*: No re-calibration of the chaos constants; explicitly separates "scene got chaotic" from "camera moved".
   - *Cons*: Two thresholds instead of one; more logic for the same outcome Option A achieves directly.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 

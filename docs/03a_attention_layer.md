@@ -148,6 +148,6 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
   - *Pros*: Proven pattern in this repo; multiplies CPU decode throughput without touching the decoder.
   - *Cons*: A single MPS GPU serializes inference, so gains cap out at the decode share; cross-process frame handoff adds complexity that Option A may render unnecessary.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 

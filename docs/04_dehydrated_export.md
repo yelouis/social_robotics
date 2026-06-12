@@ -86,4 +86,4 @@ To guarantee the export structure adheres to safety standards and schema require
   - *Pros*: Structurally prevents recurrence everywhere, not just where tested.
   - *Cons*: Touches every layer for a one-site bug; cross-module import coupling contradicts the "layers are independent scripts" paradigm.
 
-Your selection: _____
+Your selection: Proceed with Option A.

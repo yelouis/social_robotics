@@ -404,4 +404,4 @@ Then run the § 7 per-video human review (single-camera, bystander present, reac
   - *Pros*: Zero further effort.
   - *Cons*: Loses the automated guaranteed-true-positive regression signal that motivated Layer 1a (§1).
 
-Your selection: _____
+Your selection: Keep this issue here but lets not use this layer for now.

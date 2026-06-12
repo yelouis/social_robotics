@@ -69,4 +69,4 @@ While extracting sub-degree gaze telemetry (`gaze_x`, `gaze_y`) from Aria glasse
   - *Pros*: Strictly cheaper decode; frame-accurate; pattern validated twice in this repo; no new dependency.
   - *Cons*: None of substance — mechanical change plus a short validation run.
 
-Your selection: _____
+Your selection: Proceed with Remediation.

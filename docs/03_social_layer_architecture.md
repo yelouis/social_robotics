@@ -89,4 +89,4 @@ All layers **must** adhere to these conventions when processing batches:
   - *Pros*: The only option that also catches **live hangs** (process alive but wedged in an MPS op) rather than just deaths; heartbeat staleness doubles as a cheap progress display.
   - *Cons*: Two moving parts (runner instrumentation + a scheduled watchdog) and a kill threshold that must exceed the slowest legitimate clip (climax on a 300 s video) to avoid killing healthy runs; does not by itself prevent sleep or capture native-crash tracebacks, so it still wants Option A's `caffeinate`/`PYTHONFAULTHANDLER` pieces.
 
-Your selection: _____
+Your selection: Proceed with Option A.

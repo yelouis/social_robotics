@@ -105,4 +105,4 @@ A comprehensive verification suite in `tests/test_layer_03e.py` validates the fo
   - *Pros*: Uses an existing layer's output (no new model) to disambiguate head motion from eye motion; cross-layer corroboration cuts false positives.
   - *Cons*: Introduces a dependency on 03d having run; head-box centroid is a crude, camera-motion-contaminated head-pose proxy in egocentric footage; degrades to no-op when 03d is absent.
 
-Your selection: _____
+Your selection: Proceed with Option A.
