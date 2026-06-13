@@ -26,7 +26,7 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 
 1a. **Synthetic True-Positive Generation** (`01a_synthetic_positive_generation.md`)
    - A validation stream of synthetic egocentric videos with guaranteed bystander reactions, generated locally with **Wan2.1-T2V**, used to catch Layer 02 filtering regressions on known true positives (the canonical "more than one person in frame" case).
-   - **Generate once, reference thereafter**: the clips are rendered a single time in a standalone step and saved to the Extreme SSD; each E2E run *references* the saved clips via the registry rather than regenerating them. A toggle (`SAF_RUN_SYNTHETIC_QA`, default on) selects whether the Layer 1a QA check is included on a given run.
+   - **Generate once, reference thereafter**: the clips are rendered a single time in a standalone step and saved to the Extreme SSD; each E2E run *references* the saved clips via the registry rather than regenerating them. A toggle (`SAF_RUN_SYNTHETIC_QA`) selects whether the Layer 1a QA check runs. **Parked as of June 12 (default off)** — no Wan2.1 render has completed on this host, so Layer 1a is not used for now (see `docs/01a` Unresolved Issue 1); re-enable with `SAF_RUN_SYNTHETIC_QA=1`.
 
 2. **Filtering & Task Labeling** (`02_filtering_and_labeling.md`)
    - *Social Presence Filter*: We strictly filter the dataset for videos containing *more than one person* (excluding the POV cameraperson). 

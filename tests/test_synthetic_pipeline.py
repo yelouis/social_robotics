@@ -102,7 +102,10 @@ def test_filtering_pipeline_bypasses_and_labels_synthetic(tmp_path, monkeypatch)
     monkeypatch.setattr("filtering_and_labeling.pipeline.SocialPresenceDetector", MagicMock())
     monkeypatch.setattr(FilteringPipeline, "_load_metadata", lambda self: {})
     
-    pipeline = FilteringPipeline(input_manifest, output_manifest)
+    # run_synthetic_qa=True: this test exercises the synthetic-handling code
+    # path itself, which must still work when explicitly enabled. The env
+    # default is off (June 12: Layer 1a parked — see docs/01a Unresolved #1).
+    pipeline = FilteringPipeline(input_manifest, output_manifest, run_synthetic_qa=True)
     pipeline.initial_registry = registry_data  # set manually
     
     # Mock social_presence_filter to bypass YOLO run

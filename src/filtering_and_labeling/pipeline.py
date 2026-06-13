@@ -27,12 +27,15 @@ class FilteringPipeline:
         # generator`) and persisted on the Extreme SSD; the E2E run *references*
         # those saved clips via the registry rather than regenerating per run
         # (docs/01a §4). This flag controls whether the saved fixtures are
-        # exercised through the filter as a known-positive QA check: default on,
-        # set SAF_RUN_SYNTHETIC_QA=0 (or pass run_synthetic_qa=False) to run a
-        # pure-corpus pass that skips them.
+        # exercised through the filter as a known-positive QA check.
+        # DEFAULT OFF (June 12 decision): Layer 1a is parked — no Wan2.1 render
+        # has ever completed on this host (docs/01a Unresolved Issue 1), so the
+        # synthetic-QA path has no validated fixtures and is not used by default.
+        # Opt back in with SAF_RUN_SYNTHETIC_QA=1 (or run_synthetic_qa=True) once
+        # that issue is resolved.
         self.run_synthetic_qa = (
             run_synthetic_qa if run_synthetic_qa is not None
-            else os.getenv("SAF_RUN_SYNTHETIC_QA", "1").lower() in ("1", "true", "yes")
+            else os.getenv("SAF_RUN_SYNTHETIC_QA", "0").lower() in ("1", "true", "yes")
         )
         
         # Shared components. Default to YOLO-pose + VLM-gated verification
