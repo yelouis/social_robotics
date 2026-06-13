@@ -287,5 +287,64 @@ class TestBurstStrideMemoryGate(unittest.TestCase):
         self.assertAlmostEqual(pipeline.burst_stride_sec, 1.0 / 16.0)
 
 
+class TestParallelOrchestration(unittest.TestCase):
+    """Resolved Issue 6 (June 13): per-clip decode parallelism. These tests
+    cover the parent-side orchestration (result assembly, error recording,
+    incremental write) with the Pool mocked — the real spawn workers just call
+    the unchanged process_video, so per-clip *content* equivalence is validated
+    out-of-band by a workers=1-vs-2 diff, not in CI."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.tmp = Path(self.td.name)
+
+    def _bare_pipeline(self):
+        with patch.object(AttentionLayerPipeline, "__init__", lambda s: None):
+            p = AttentionLayerPipeline()
+        p.input_manifest_path = self.tmp / "manifest.json"
+        p.output_result_path = self.tmp / "03a_result.json"
+        p.error_log_path = self.tmp / "03a_errors.json"
+        p.processed_ids = set()
+        return p
+
+    def test_run_parallel_assembles_results_and_records_errors(self):
+        p = self._bare_pipeline()
+
+        # Fake spawn Pool: imap_unordered yields canned (video_id, result, err)
+        # tuples, standing in for what _par_worker_process returns per clip.
+        canned = [
+            ("v1", {"video_id": "v1", "layer": "03a_attention"}, None),
+            ("v2", None, "Traceback (most recent call last):\nValueError: boom"),
+            ("v3", {"video_id": "v3", "layer": "03a_attention"}, None),
+        ]
+
+        class _FakePool:
+            def __init__(self, results): self._r = results
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def imap_unordered(self, fn, todo): return iter(self._r)
+
+        class _FakeCtx:
+            def Pool(self, processes, initializer, initargs): return _FakePool(canned)
+
+        results = []
+        with patch("multiprocessing.get_context", return_value=_FakeCtx()):
+            p._run_parallel(todo=[{"video_id": "v1"}, {"video_id": "v2"}, {"video_id": "v3"}],
+                            results=results, workers=2)
+
+        # Both successful records assembled + marked processed; the failed one
+        # recorded to the error log and NOT in results.
+        self.assertEqual({r["video_id"] for r in results}, {"v1", "v3"})
+        self.assertEqual(p.processed_ids, {"v1", "v3"})
+        with open(p.output_result_path) as f:
+            self.assertEqual(len(json.load(f)), 2)  # incremental atomic write happened
+        with open(p.error_log_path) as f:
+            errs = json.load(f)
+        self.assertEqual(len(errs), 1)
+        self.assertEqual(errs[0]["video_id"], "v2")
+        self.assertIn("boom", errs[0]["error"])
+
+
 if __name__ == '__main__':
     unittest.main()

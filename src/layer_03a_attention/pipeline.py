@@ -279,7 +279,23 @@ class AttentionLayerPipeline:
         return passes_face_quality(entry, min_px=FQ_MIN_PX, min_conf=FQ_MIN_CONF,
                                    min_frames=FQ_MIN_FRAMES, enabled=True)
 
-    def run(self):
+    def _atomic_write(self, results):
+        temp_out = self.output_result_path.with_suffix('.tmp')
+        with open(temp_out, 'w') as f:
+            json.dump(results, f, indent=4)
+        temp_out.replace(self.output_result_path)
+
+    def run(self, workers=1):
+        """Process every eligible clip. `workers` (Resolved Issue 6, June 13):
+        **default 1 = serial** (byte-identical to the historical path, and the
+        only spawn-safe mode for arbitrary library callers). `workers > 1`
+        distributes whole clips across a spawn-safe process Pool — each clip's
+        `process_video` is unchanged, so its output record is identical to the
+        serial run (validated); only *which process* runs it differs, letting
+        one clip's CPU decode overlap another's MPS inference. Use the guarded
+        `python -m layer_03a_attention.pipeline … --workers N` CLI to opt in
+        (a bare runner that is not `__main__`-guarded must not pass workers>1,
+        or macOS 'spawn' will re-exec it)."""
         # Resolved Issue 6 (A'): annotate face quality first (idempotent
         # ~0.9s/clip one-time pre-pass, shared with 03b) so the 03a-tier gate
         # below can skip clips with no gaze-resolvable face before paying
@@ -307,6 +323,11 @@ class AttentionLayerPipeline:
             except (json.JSONDecodeError, IOError, ValueError):
                 pass
 
+        # Build the eligible-clip list with the exact same skip rules the serial
+        # loop has always applied (synthetic / flagged_invalid / already-processed
+        # / below the face-quality tier), so serial and parallel see an identical
+        # work set.
+        todo = []
         skipped_face_quality = 0
         for entry in registry:
             if entry.get("synthetic") is True:
@@ -320,33 +341,72 @@ class AttentionLayerPipeline:
             video_id = entry.get('id', entry.get('video_id'))
             if video_id in self.processed_ids and not self.force:
                 continue
-
             # Resolved Issue 6 (A'): no gaze-resolvable face anywhere in the
             # clip -> the trace would be all NoFace/0.0 (and 03e rejects such
             # traces anyway), so skip before paying decode + inference.
             if not self._passes_face_quality(entry):
                 skipped_face_quality += 1
                 continue
+            todo.append(entry)
 
-            print(f"Processing Attention Layer for video: {video_id}")
-            try:
-                result = self.process_video(entry)
-                if result:
-                    results.append(result)
-                    self.processed_ids.add(video_id)
-                    
-                    # Atomic write
-                    temp_out = self.output_result_path.with_suffix('.tmp')
-                    with open(temp_out, 'w') as f:
-                        json.dump(results, f, indent=4)
-                    temp_out.replace(self.output_result_path)
-            except Exception as e:
-                self.log_error(video_id, e)
+        if workers and workers > 1 and len(todo) > 1:
+            self._run_parallel(todo, results, int(workers))
+        else:
+            for entry in todo:
+                video_id = entry.get('id', entry.get('video_id'))
+                print(f"Processing Attention Layer for video: {video_id}")
+                try:
+                    result = self.process_video(entry)
+                    if result:
+                        results.append(result)
+                        self.processed_ids.add(video_id)
+                        self._atomic_write(results)
+                except Exception as e:
+                    self.log_error(video_id, e)
 
         if skipped_face_quality:
             print(f"[03a] Skipped {skipped_face_quality} clips below the face-quality tier "
                   f"(px>={FQ_MIN_PX}, conf>={FQ_MIN_CONF}, frames>={FQ_MIN_FRAMES}).")
         print(f"Final count: {len(results)} videos processed for Attention.")
+
+    def _run_parallel(self, todo, results, workers):
+        """Resolved Issue 6 (June 13): distribute whole clips across a spawn-safe
+        Pool. Each worker builds its own AttentionLayerPipeline once (models
+        loaded per process) and calls the unchanged `process_video`, so every
+        emitted record is identical to the serial run; results are written
+        incrementally (resumable) as they complete. Records land in completion
+        order, not registry order — the Layer-04 aggregator outer-joins on
+        `video_id`, so list order is not part of the contract."""
+        import multiprocessing as mp
+        n = min(workers, len(todo))
+        print(f"[03a] Parallel decode: {n} workers over {len(todo)} clips "
+              f"(per-clip output identical to serial; MPS inference serializes, "
+              f"CPU decode overlaps).")
+        ctx = mp.get_context("spawn")
+        init_args = (str(self.input_manifest_path), str(self.output_result_path))
+        with ctx.Pool(processes=n, initializer=_par_worker_init, initargs=init_args) as pool:
+            for video_id, result, err in pool.imap_unordered(_par_worker_process, todo):
+                if err:
+                    self._record_error(video_id, err)
+                elif result:
+                    results.append(result)
+                    self.processed_ids.add(video_id)
+                    self._atomic_write(results)
+
+    def _record_error(self, video_id, error_text):
+        """Append a worker-reported error (already-formatted traceback string)
+        to the error log, mirroring log_error's on-disk shape."""
+        errors = []
+        if self.error_log_path.exists():
+            try:
+                with open(self.error_log_path, 'r') as f:
+                    errors = json.load(f)
+            except (json.JSONDecodeError, IOError, ValueError):
+                pass
+        errors.append({"video_id": video_id, "error": error_text, "traceback": error_text})
+        with open(self.error_log_path, 'w') as f:
+            json.dump(errors, f, indent=4)
+        print(f"Error processing {video_id} (worker): {error_text.splitlines()[-1] if error_text else ''}")
 
     def log_error(self, video_id, error):
         error_entry = {
@@ -792,3 +852,50 @@ class AttentionLayerPipeline:
                 last_scores[pid] = score
 
         return traces
+
+
+# ---------------------------------------------------------------------------
+# Spawn-safe parallel workers (Resolved Issue 6, June 13). Module-level so they
+# are picklable under the macOS 'spawn' start method. Each worker process holds
+# one AttentionLayerPipeline (models loaded once) in `_WORKER_PIPE` and only
+# ever calls the unchanged `process_video`, so per-clip output is identical to
+# a serial run.
+# ---------------------------------------------------------------------------
+_WORKER_PIPE = None
+
+
+def _par_worker_init(manifest_path, output_path):
+    global _WORKER_PIPE
+    try:
+        cv2.setNumThreads(1)  # each worker single-threaded; parallelism is across clips
+    except Exception:
+        pass
+    # force=True: the worker never resumes/writes the result list (the parent
+    # owns that) and never re-runs the face-quality gate (done in the parent) —
+    # it only calls process_video.
+    _WORKER_PIPE = AttentionLayerPipeline(manifest_path, output_path, force=True)
+    _WORKER_PIPE.enable_face_quality_gate = False
+
+
+def _par_worker_process(entry):
+    """Process one clip in a worker; returns (video_id, result|None, err|None)."""
+    video_id = entry.get('id', entry.get('video_id'))
+    try:
+        return video_id, _WORKER_PIPE.process_video(entry), None
+    except Exception:
+        return video_id, None, traceback.format_exc()
+
+
+if __name__ == "__main__":
+    # Guarded CLI — the spawn-safe entry point for parallel 03a. A runner script
+    # that is NOT __main__-guarded must not request workers>1, or macOS 'spawn'
+    # will re-exec it in every worker.
+    #   PYTHONPATH=src python -m layer_03a_attention.pipeline <manifest> <out> --workers N
+    import argparse
+    ap = argparse.ArgumentParser(description="Run Layer 03a (Attention); optionally parallel across clips.")
+    ap.add_argument("manifest")
+    ap.add_argument("output")
+    ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--force", action="store_true")
+    a = ap.parse_args()
+    AttentionLayerPipeline(a.manifest, a.output, force=a.force).run(workers=a.workers)
