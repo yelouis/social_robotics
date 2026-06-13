@@ -287,13 +287,27 @@ class MotorResonancePipeline:
 
             chaos_scores = []
             current_frame_idx = start_frame + frame_stride
+            # Sequential decode (June 12 audit Issue 1). The old loop called
+            # cap.set(POS_FRAMES) every stride step; on H.264 each seek
+            # re-decodes from the nearest keyframe (~10-20x wasted decode) and
+            # risks frame<->timestamp desync (the failure mode that corrupted
+            # 03a scores pre-rewrite). grab() forward cheaply instead — the
+            # same frames are fed to Farneback.
+            pos = start_frame + 1  # next frame index the capture will return
 
             while current_frame_idx <= end_frame:
-                if frame_stride > 1:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_idx)
+                ok = True
+                while pos < current_frame_idx:
+                    if not cap.grab():
+                        ok = False
+                        break
+                    pos += 1
+                if not ok:
+                    break
                 ret, frame = cap.read()
                 if not ret:
                     break
+                pos = current_frame_idx + 1
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 gray = cv2.resize(gray, (0, 0),
@@ -305,6 +319,17 @@ class MotorResonancePipeline:
                 )
                 mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
+                # Bystander mask shared by BOTH ego signals (June 12 audit
+                # Issue 2): the chaos percentile previously ran on the full
+                # frame, so a flinching bystander could create the very "ego"
+                # spike their own flinch then correlated with (self-correlation
+                # false positive). Both chaos and mean_v now measure background
+                # (camera) motion only, falling back to the full frame when the
+                # mask is empty.
+                mask = self._bystander_mask_for_frame(
+                    current_frame_idx / fps, gray.shape, bystanders,
+                )
+
                 # 95th-percentile flow magnitude — left in raw flow-magnitude
                 # units regardless of stride. The chaos floor and relative
                 # spike threshold were calibrated against per-frame-pair flow
@@ -312,21 +337,15 @@ class MotorResonancePipeline:
                 # between two frames) do not scale with stride the way
                 # continuous motion does. Stride-normalizing here would have
                 # erased detectable jolts in the test fixture.
-                chaos_score = float(np.percentile(mag, 95))
-
-                # Mask out bystander regions before averaging vertical flow so
-                # the mirroring signal reflects *background* (camera) motion
-                # only, per the documented intent (Resolved Issue 12). For
-                # continuous camera motion the mean displacement between two
-                # stride-spaced frames is ~stride× the per-frame rate, so
-                # divide by stride to keep MIRRORING_VFLOW_THRESHOLD calibrated
-                # in the same units as before.
-                mask = self._bystander_mask_for_frame(
-                    current_frame_idx / fps, gray.shape, bystanders,
-                )
                 if mask.any():
+                    chaos_score = float(np.percentile(mag[mask], 95))
+                    # For continuous camera motion the mean displacement between
+                    # two stride-spaced frames is ~stride× the per-frame rate, so
+                    # divide by stride to keep MIRRORING_VFLOW_THRESHOLD
+                    # calibrated in the same units as before.
                     mean_v = float(np.mean(flow[..., 1][mask])) / float(frame_stride)
                 else:
+                    chaos_score = float(np.percentile(mag, 95))
                     mean_v = float(np.mean(flow[..., 1])) / float(frame_stride)
 
                 timestamp = current_frame_idx / fps

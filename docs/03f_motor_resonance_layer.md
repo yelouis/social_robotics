@@ -89,29 +89,15 @@ Videos that legitimately produce no output (missing file, no bystanders/tasks, n
    - **Problem**: The pose extraction loop assigned `prev_kpts_by_idx = current_kpts_by_idx` unconditionally, resetting the velocity chain when frames dropped. The peak velocity from the actual flinch could be missed entirely.
    - **Solution**: `prev_kpts_by_idx` and `prev_t` are only updated when `current_kpts_by_idx` is non-empty. To prevent stale comparisons across long occlusions, the velocity computation is gated on `dt <= PREV_KPTS_CARRY_FORWARD_SEC` (0.5 s).
 
+6. **Per-Stride `cap.set` Seeking in `_extract_ego_motion` (Resolved - June 12)**:
+   - **Problem**: Found in the June 12 repo audit. `_extract_ego_motion` seeked with `cap.set(CAP_PROP_POS_FRAMES, …)` on **every stride step** (~10 Hz across the reaction window). On H.264 `cap.set` is keyframe-approximate — each seek re-decodes from the nearest keyframe (~10–20× wasted decode) and can desync frame↔timestamp, the exact failure mode that corrupted 03a scores before its no-seek rewrite (03a Resolved #5; same fix validated bit-identical in 02 Resolved #18).
+   - **Solution**: Replaced the per-step seek with the repo-standard sequential `grab()`/`read()` skip (grab forward to the target frame, read only the analyzed frame), matching `shared/climax_extraction.py` and 03a. **Validated bit-identical** on 3 real cached clips: spike count, spike timestamps, `vertical_flow_timeline`, `ego_kinetic_chaos_score`, and the 03g shift vector were all unchanged vs the pre-fix output. The sparse per-detection seeks in `_extract_and_correlate_pose` are intentionally left (widely-spaced samples are the correct use of seeking, per the face-quality-prefilter precedent).
+
+7. **Ego Chaos Score Not Bystander-Masked — Self-Correlation False Positive (Resolved - June 12)**:
+   - **Problem**: Found in the June 12 repo audit. The chaos metric (`np.percentile(mag, 95)`) was computed over the **full downsampled frame** while only the vertical-flow (mirroring) signal applied `_bystander_mask_for_frame`. This let a large in-frame bystander's own abrupt movement raise the "ego" chaos, enabling a **self-correlation false positive**: the bystander's flinch creates the chaos spike, then `_extract_and_correlate_pose` detects that same flinch within `RESONANCE_WINDOW_SEC` of "the wearer's" spike → `motor_resonance_detected: true` with no actual wearer event, inverting the flinch metric's premise.
+   - **Solution** (Option A): The chaos percentile now uses the same `_bystander_mask_for_frame` as `mean_v` — `np.percentile(mag[mask], 95)` over background pixels, with the existing full-frame fallback when the mask is empty. On the 3-clip probe this removed the expected bystander-driven spurious spikes (e.g. 27→26, 36→30 spikes) while leaving clips with no large bystander unchanged; the chaos floor/normalizer (3.0/20.0) held without re-calibration on this sample. The Implementation Strategy's "EgoMotion = POV-actor motion" claim is now accurate.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Per-stride `cap.set` seeking in `_extract_ego_motion` (H.264 keyframe-approximate anti-pattern)
-**Status**: ⚠️ Confirmed Unresolved — Found in the June 12 repo audit. `_extract_ego_motion` (`src/layer_03f_motor_resonance/pipeline.py`, the `if frame_stride > 1: cap.set(CAP_PROP_POS_FRAMES, current_frame_idx)` inside the stride loop) seeks on **every stride step** (~10 Hz across the whole reaction window). This is the exact pattern the project eliminated everywhere else: on H.264, `cap.set` is keyframe-approximate — each seek re-decodes from the nearest keyframe (~10–20× wasted decode) **and** can desync frame↔timestamp, which corrupted 03a scores before its no-seek rewrite (03a Resolved #5; same fix validated bit-identical in 02 Resolved #18). At stride 3, sequentially `grab()`-ing 2 frames and `read()`-ing the third is strictly cheaper and frame-accurate. The sparse per-detection seeks in `_extract_and_correlate_pose` are fine (the face-quality-prefilter precedent: widely-spaced samples are the right use of seeking).
-
-**Remediation (single option — proven fix)**: Replace the per-step seek with the sequential `grab()`/`read()` skip pattern used by `shared/climax_extraction.py` and 03a, and validate on a few cached clips that chaos spike timestamps and `ego_kinetic_chaos_score` are unchanged (the established bit-identical protocol).
-  - *Pros*: Removes wasted keyframe re-decode and the timestamp-desync risk; pattern already validated twice in this repo; no new dependency.
-  - *Cons*: None of substance — mechanical change plus a short validation run.
-
-Your selection: Proceed with the Remediation.
-
----
-
-### Issue 2: Ego chaos score is not bystander-masked — a flinching bystander can correlate with itself
-**Status**: ⚠️ Confirmed Unresolved — Found in the June 12 repo audit. The chaos metric (`chaos_score = np.percentile(mag, 95)` in `_extract_ego_motion`) is computed over the **full downsampled frame**, while only the vertical-flow (mirroring) signal applies `_bystander_mask_for_frame`. Two consequences: (a) the Implementation Strategy's claim that ego-kinetic energy reflects the *POV actor's* motion is not strictly true — a large in-frame bystander's abrupt movement raises the "ego" chaos; and (b) a **self-correlation false positive** is possible: the bystander's own flinch creates the chaos spike, and `_extract_and_correlate_pose` then detects that same flinch within `RESONANCE_WINDOW_SEC` of "the wearer's" spike, yielding `motor_resonance_detected: true` with no actual wearer event. The flinch metric's core premise (bystander reacts *to the wearer*) is inverted in that case.
-
-**Option A (recommended)**: **Mask the chaos percentile like the vertical flow.** Compute `np.percentile(mag[mask], 95)` with the existing `_bystander_mask_for_frame` (falling back to the full frame when the mask is empty, as `mean_v` already does).
-  - *Pros*: One-line change reusing existing machinery; makes the metric match its documented meaning; eliminates the self-correlation mechanism.
-  - *Cons*: When a bystander dominates the frame, few background pixels remain and the percentile gets noisier (mitigated by the existing `mask.any()` fallback); chaos floor/normalizer (3.0/20.0) may need a small re-calibration since masked percentiles run slightly lower.
-
-**Option B**: **Keep full-frame chaos but require corroboration.** Keep the metric as-is and only accept a spike when the masked background flow also spikes at the same timestamp.
-  - *Pros*: No re-calibration of the chaos constants; explicitly separates "scene got chaotic" from "camera moved".
-  - *Cons*: Two thresholds instead of one; more logic for the same outcome Option A achieves directly.
-
-Your selection: Proceed with Option A.
+_None at this time._
 
