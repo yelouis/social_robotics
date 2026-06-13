@@ -72,21 +72,25 @@ All layers **must** adhere to these conventions when processing batches:
 2. **Resumability**: If a layer is re-run, it should detect already-completed `video_id` entries and skip them by default. A `--force` flag can override this to reprocess everything.
 3. **Atomic writes**: A layer must never produce a partial result for a `video_id`. Either the full output record is written, or nothing is written (write to a temp file first, then rename).
 
+## 🏃 Running Long Layer Batches (Supervised Runner)
+Long Layer-03 batches occasionally hit a silent macOS native crash (the *"Python quit unexpectedly"* mode — an MPS/OpenCV/ffmpeg fault on a particular clip) that leaves no traceback and no exit marker, so a dead run is indistinguishable from a slow one. Every layer pipeline is already resumable (Failure & Resumability Policy above), so the fix is supervision, not pipeline changes.
+
+**Always launch multi-hour layer runs under `tools/run_supervised.sh`:**
+```bash
+tools/run_supervised.sh <result_json> <runner command...>
+# e.g.
+tools/run_supervised.sh e2e_reports/<run>/03d_result_50.json ./venv/bin/python tools/run_03d_50.py
+```
+It wraps each attempt in `caffeinate -dimsu` (blocks system/disk sleep), exports `PYTHONFAULTHANDLER=1` (a native fault dumps a Python traceback into the log instead of vanishing), and relaunches the resumable runner until it exits 0. A **no-progress guard** counts records in `<result_json>` between attempts and aborts after **2 consecutive relaunches that add zero records** — this both breaks a deterministic *poison-clip* crash-loop (layer pipelines mark a `video_id` processed only *after* success, unlike the acquisition orchestrator which marks *before* scoring) and surfaces it loudly. `caffeinate` is auto-skipped on non-macOS hosts; `SR_SUPERVISE_MAX_ATTEMPTS` / `SR_SUPERVISE_LOG` tune the ceiling and log path.
+
+---
+
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **Long Unattended Layer Runs Died Silently and Looked "Stuck" (Resolved - June 12)**:
+   - **Problem**: Second documented occurrence (June 9–10): the 03d 50-clip post-fix run, launched bare via `tools/run_03d_50.py`, hard-died at 25/50 with no traceback, no exit marker, and no crash report — discovered only ~13 h later. The first occurrence was the late-May reservoir run. `docs/01_dataset_acquisition.md` already mandated an auto-restart wrapper, **but only for the acquisition orchestrator**; Layer-03 runners had none, despite every pipeline being resumable — so recovery was always one relaunch away, yet nothing performed it. A layer-specific edge made naive relaunch unsafe: layer pipelines mark a `video_id` processed only *after* success (the reservoir marks *before* scoring), so a deterministic poison clip could crash-loop forever.
+   - **Solution** (Option A): Added `tools/run_supervised.sh <result_json> <runner…>` (documented in "Running Long Layer Batches" above): `caffeinate -dimsu` + `PYTHONFAULTHANDLER=1` + a relaunch-until-exit-0 loop, with a no-progress guard that aborts after 2 consecutive zero-record relaunches (breaks + surfaces poison-clip loops). No pipeline-code change — it composes over the existing resume-by-default behavior. Smoke-tested both paths: a runner crashing twice (with progress) then succeeding reaches a clean DONE; a poison runner that never progresses aborts on the 2-stale guard. `launchd` KeepAlive (Option B) and a heartbeat watchdog (Option C) were declined for now — B's per-run plist ceremony is heavy for ad-hoc runs and C's live-hang detection is a separate need; both can layer on later (a heartbeat watchdog remains the natural follow-up if *hangs*, not just crashes, become a problem).
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Long unattended layer runs die silently and look "stuck" — no supervision, relaunch, or alerting
-**Status**: ⚠️ Confirmed Unresolved — **Second documented occurrence, June 9–10**: the 03d 50-clip post-fix run (depth + SAM on MPS, launched bare via `tools/run_03d_50.py`) hard-died at **25/50 around 21:51** — the log stops mid-clip with **no traceback**, the wrapper shell never wrote its exit marker (0-byte task output, so the session's background-task indicator kept looking like a live run), and **no crash report** landed in `~/Library/Logs/DiagnosticReports/`. The death was discovered only ~13 hours later when a human asked why it looked stuck; a manual `force=False` relaunch then completed the remaining 25 clips with zero data loss. The first occurrence was the late-May reservoir run (the macOS *"Python quit unexpectedly"* native-crash mode), which is why `docs/01_dataset_acquisition.md` (lines ~49–53) mandates an **auto-restart wrapper — but only for the acquisition orchestrator**. Layer-03 batch runners (`tools/run_03*_50.py` and the upcoming full-corpus runs) have no such supervision: every pipeline already satisfies this doc's Resumability Policy (per-video atomic writes + resume-by-default), so recovery is always one relaunch away, yet **nothing performs that relaunch, nothing detects the death, and a dead run is indistinguishable from a slow one** to an unattended operator. One sharp edge distinguishes layers from acquisition: the reservoir marks each UID processed *before* scoring (a crashing clip is skipped on relaunch), whereas layer pipelines mark a `video_id` processed only *after* success — so naive auto-relaunch can **crash-loop on a deterministic poison clip**; any supervisor must handle that.
-
-**Option A (recommended)**: **Shared supervised-runner wrapper** (`tools/run_supervised.sh <runner.py>`), generalizing the proven docs/01 acquisition pattern to every layer runner: `caffeinate -dimsu` (blocks system/disk sleep for the run's lifetime) + `PYTHONFAULTHANDLER=1` (native faults dump a Python traceback into the log instead of dying silently) + a relaunch loop that re-invokes the resumable runner until it prints its DONE marker, with a **no-progress guard** (count result-file records between attempts; abort after 2 consecutive relaunches with zero new records, which both breaks poison-clip crash-loops and surfaces them loudly) and a timestamped supervisor log line per attempt.
-  - *Pros*: One ~30-line script covers every current and future layer runner with no pipeline-code changes (all already resume); converts the observed failure mode from "stuck overnight, found dead 13 h later" into "self-healed within seconds, attempts logged"; `PYTHONFAULTHANDLER` finally captures which clip/op kills the process; the progress guard prevents the poison-clip loops the acquisition wrapper never had to worry about.
-  - *Cons*: `caffeinate` keeps the Mac Studio awake for the whole run (deliberate energy cost); a poison clip still costs 2 relaunch cycles before aborting (mitigable later by adding mark-in-flight skip semantics to the pipelines, a larger change).
-
-**Option B**: **`launchd` KeepAlive agent per long run** — register the runner as a user LaunchAgent with `KeepAlive.SuccessfulExit=false` plus a `caffeinate` assertion, letting macOS itself own the relaunch.
-  - *Pros*: OS-native supervision that survives logout and (with RunAtLoad) reboot — the strongest guarantee for multi-day full-corpus jobs.
-  - *Cons*: Per-run plist install/uninstall ceremony is heavy for ad-hoc smell tests; no built-in progress guard (a poison clip loops forever unless wrapped anyway); run state is less visible from the working session.
-
-**Option C**: **Heartbeat watchdog** — each runner touches a heartbeat file after every video; a watchdog (cron/launchd, every 5 min) kills and relaunches any run whose heartbeat is staler than N minutes and appends an alert line to the run log.
-  - *Pros*: The only option that also catches **live hangs** (process alive but wedged in an MPS op) rather than just deaths; heartbeat staleness doubles as a cheap progress display.
-  - *Cons*: Two moving parts (runner instrumentation + a scheduled watchdog) and a kill threshold that must exceed the slowest legitimate clip (climax on a 300 s video) to avoid killing healthy runs; does not by itself prevent sleep or capture native-crash tracebacks, so it still wants Option A's `caffeinate`/`PYTHONFAULTHANDLER` pieces.
-
-Your selection: Proceed with Option A.
+_None at this time._
