@@ -252,13 +252,26 @@ class SharedRealityPipeline:
 
             total_dx = 0.0
             total_dy = 0.0
+            # Sequential decode (June 12 audit Issue 1; twin of the 03f fix).
+            # Per-stride cap.set seeking is keyframe-approximate on H.264 —
+            # wasted keyframe re-decode plus desync risk, which matters doubly
+            # here because every iteration's flow integrates into the
+            # accumulated shift vector. grab() forward instead.
+            pos = start_frame + 1  # next frame index the capture will return
 
             while current_frame_idx <= end_frame:
-                if frame_stride > 1:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_idx)
+                ok = True
+                while pos < current_frame_idx:
+                    if not cap.grab():
+                        ok = False
+                        break
+                    pos += 1
+                if not ok:
+                    break
                 ret, frame = cap.read()
                 if not ret:
                     break
+                pos = current_frame_idx + 1
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 gray = cv2.resize(

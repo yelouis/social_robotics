@@ -36,8 +36,11 @@ LAYER_SUMMARY_REGISTRY = {
     "03d_proxemic_kinematics": [
         ("per_person.proxemic_confidence", "max", "max_proxemic_confidence"),
         ("per_person.proxemic_vector", "max_abs", "max_abs_proxemic_vector"),
-        ("per_person.classified_action", "any_eq:Approach", "any_approach_detected"),
-        ("per_person.classified_action", "any_eq:Retreat", "any_retreat_detected"),
+        # Literals MUST match 03d's _compute_proxemic_vector vocabulary exactly
+        # (June 12 audit: "Approach"/"Retreat" never matched -> dead columns).
+        # test_layer_04 enum-sync test enforces this against the layer vocab.
+        ("per_person.classified_action", "any_eq:Approach_Intervention", "any_approach_detected"),
+        ("per_person.classified_action", "any_eq:Avoidance", "any_avoidance_detected"),
     ],
     "03e_affirmation_gesture": [
         ("per_person.confidence", "max", "max_gesture_confidence"),

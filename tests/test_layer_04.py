@@ -457,5 +457,48 @@ class TestDehydratedExport(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestRegistryEnumSync(unittest.TestCase):
+    """June 12 audit (docs/04 Resolved Issue) — every ``any_eq:`` literal in
+    LAYER_SUMMARY_REGISTRY must be a value the emitting layer can actually
+    produce. ``any_eq:Approach`` silently never matched 03d's
+    ``Approach_Intervention``, leaving dead Parquet columns. The vocabularies
+    below are pinned to each layer's classification source; if a layer renames
+    a label, this test fails instead of the export column going silently dead."""
+
+    # Pinned to the emitting code: 03d ProxemicKinematicsPipeline.
+    # _compute_proxemic_vector and 03e AffirmationGesturePipeline.process_video.
+    LAYER_ENUM_VOCAB = {
+        "03d_proxemic_kinematics.per_person.classified_action": {
+            "Approach_Intervention", "Avoidance", "Neutral",
+        },
+        "03e_affirmation_gesture.per_person.gesture_detected": {
+            "affirming_nod", "negating_shake", "ambiguous_wobble", "none",
+        },
+    }
+
+    def test_any_eq_literals_match_layer_vocabulary(self):
+        from layer_04_dehydrated_export.aggregator import LAYER_SUMMARY_REGISTRY
+        checked = 0
+        for layer, entries in LAYER_SUMMARY_REGISTRY.items():
+            for path, agg, suffix in entries:
+                if not agg.startswith("any_eq:"):
+                    continue
+                literal = agg.split(":", 1)[1]
+                vocab = self.LAYER_ENUM_VOCAB.get(f"{layer}.{path}")
+                self.assertIsNotNone(
+                    vocab,
+                    f"No pinned vocabulary for {layer}.{path} — add it to "
+                    f"LAYER_ENUM_VOCAB so enum drift stays detectable.",
+                )
+                self.assertIn(
+                    literal, vocab,
+                    f"Registry literal '{literal}' for {layer}.{path} ({suffix}) "
+                    f"is not in the layer's vocabulary {sorted(vocab)} — the "
+                    f"column would be silently dead.",
+                )
+                checked += 1
+        self.assertGreaterEqual(checked, 4, "Expected at least 4 any_eq entries")
+
+
 if __name__ == '__main__':
     unittest.main()

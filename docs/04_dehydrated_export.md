@@ -71,19 +71,14 @@ To guarantee the export structure adheres to safety standards and schema require
 - **Singular Video Test**: Load the final `social_metadata.parquet` into a Pandas DataFrame inside a standalone Jupyter notebook or script. Select one random row (a single video) and attempt to cleanly follow the `rehydrate_dataset.py` instructions to rebuild the social context. If any keys are mismatched, it fails.
 - **Batch Test**: Run an automated validation script across the entire merged DataFrame. Assert that there are absolutely zero raw visual bytes (no images/video buffers stored). This check explicitly scans for Python `bytes`, `numpy.ndarray` buffers, base64-encoded image strings, and raw local file path references. Validate that the row count matches exactly the number of clips successfully parsed, and perform a null-check analysis. Verify that this Pandas aggregation operates within the data limits of our **Mac Studio (M4 Max, 64 GB unified memory)** when reading multi-gigabyte Parquets into memory.
 
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **`LAYER_SUMMARY_REGISTRY` 03d Action Labels Never Matched — Dead Export Columns (Resolved - June 12)**:
+   - **Problem**: Found in the June 12 repo audit. The registry (`src/layer_04_dehydrated_export/aggregator.py`) queried `per_person.classified_action` with `any_eq:Approach` and `any_eq:Retreat`, but Layer 03d's `_compute_proxemic_vector` emits exactly `"Approach_Intervention"`, `"Avoidance"`, or `"Neutral"` (confirmed in the June 10 50-clip output, which contains both non-neutral labels). String equality never matched, so `any_approach_detected` / `any_retreat_detected` were silently `None` on every export — filtering `any_approach_detected == True` returned zero rows even when approaches existed in the `*_raw` JSON. Same silent-degradation class the project eliminates elsewhere, here on the export surface.
+   - **Solution** (Option A): Corrected the literals to `any_eq:Approach_Intervention` / `any_eq:Avoidance` and renamed the second column to `any_avoidance_detected` for accuracy (additive-only is preserved — the broken columns never materialized in a real export, so the schema hash is undamaged). Added `tests/test_layer_04.py::TestRegistryEnumSync`, which asserts every `any_eq:` literal in the registry is in the emitting layer's pinned classification vocabulary (03d + 03e), so future enum drift fails the suite instead of silently deadening a column. Centralizing enums into a shared module (Option B) was declined to preserve the "layers are independent scripts" paradigm.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
 *(June 12 cleanup: the former "Aria Gaze Pre-Wiring" deferral entry referenced a 03g Unresolved Issue that no longer exists — 03g integrated the Aria deferral into its design ("Deferred Alternative" section). The underlying rule — never pre-wire speculative registry columns — is now documented under Aggregation Logic §6 above.)*
 
-### Issue 1: `LAYER_SUMMARY_REGISTRY` 03d action labels never match — `any_approach_detected`/`any_retreat_detected` are dead columns
-**Status**: ⚠️ Confirmed Unresolved — Found in the June 12 repo audit. The registry (`src/layer_04_dehydrated_export/aggregator.py`) queries `per_person.classified_action` with `any_eq:Approach` and `any_eq:Retreat`, but Layer 03d's `_compute_proxemic_vector` emits exactly **`"Approach_Intervention"`, `"Avoidance"`, or `"Neutral"`** (verified against the June 10 50-clip run output, which contains both non-neutral labels). String equality therefore never matches: both summary columns are silently `None`/absent on every export — a researcher filtering `any_approach_detected == True` gets zero rows even when approaches exist in the `*_raw` JSON. This is the silent-degradation pattern the project eliminates elsewhere (03b mock emotions, 03d SAM fallback), here in the export surface.
-
-**Option A (recommended)**: **Fix the literals + add an enum-sync test.** Change the registry entries to `any_eq:Approach_Intervention` / `any_eq:Avoidance` (and rename the second column `any_avoidance_detected` for accuracy — additive-only is preserved since the old columns never materialized), plus a unit test asserting every `any_eq:` literal in the registry appears in the emitting layer's classification vocabulary, so future enum drift fails the suite instead of silently deadening columns.
-  - *Pros*: Two-line fix; the test permanently closes this class of bug for every layer in the registry; no schema-hash damage because the broken columns never appeared in a real export.
-  - *Cons*: None of substance; the test needs a small vocabulary constant exposed per layer (or hard-coded expected sets).
-
-**Option B**: **Centralize classification enums.** Move each layer's classification labels into a shared constants module imported by both the layer and the registry, eliminating string duplication outright.
-  - *Pros*: Structurally prevents recurrence everywhere, not just where tested.
-  - *Cons*: Touches every layer for a one-site bug; cross-module import coupling contradicts the "layers are independent scripts" paradigm.
-
-Your selection: Proceed with Option A.
+_No open issues at this time._

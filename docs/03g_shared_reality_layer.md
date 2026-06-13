@@ -57,16 +57,10 @@ While extracting sub-degree gaze telemetry (`gaze_x`, `gaze_y`) from Aria glasse
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
-*(All historical issues have been integrated into the current pipeline architecture.)*
-
+1. **Per-Stride `cap.set` Seeking in `_extract_camera_shift` (Resolved - June 12)**:
+   - **Problem**: Found in the June 12 repo audit; the twin of 03f Resolved #6. `_extract_camera_shift` (`src/layer_03g_shared_reality/pipeline.py`) seeked with `cap.set(CAP_PROP_POS_FRAMES, …)` on every ~10 Hz stride step across the reaction window. On H.264 `cap.set` is keyframe-approximate — wasted keyframe re-decode plus frame↔timestamp desync risk (the failure mode that corrupted 03a scores pre-rewrite, 03a Resolved #5). This bit doubly here because each iteration's flow is *integrated* into the accumulated `total_dx/total_dy` shift vector, so any desync compounds.
+   - **Solution**: Replaced the per-step seek with the repo-standard sequential `grab()`/`read()` skip (matching `shared/climax_extraction.py` / 03a / 03f Resolved #6). **Validated bit-identical** on 3 real cached clips: `post_climax_camera_shift_vector` was unchanged vs the pre-fix output on all three.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Per-stride `cap.set` seeking in `_extract_camera_shift` (H.264 keyframe-approximate anti-pattern)
-**Status**: ⚠️ Confirmed Unresolved — Found in the June 12 repo audit; the twin of **03f Unresolved Issue 1**. `_extract_camera_shift` (`src/layer_03g_shared_reality/pipeline.py`, the `if frame_stride > 1: cap.set(CAP_PROP_POS_FRAMES, current_frame_idx)` inside the stride loop) seeks on every ~10 Hz stride step across the reaction window. On H.264 `cap.set` is keyframe-approximate: each seek re-decodes from the nearest keyframe (~10–20× wasted decode) and risks frame↔timestamp desync — the failure mode that corrupted 03a scores before its no-seek rewrite (03a Resolved #5; fix validated bit-identical there and in 02 Resolved #18). For 03g specifically, desync perturbs the *accumulated* shift vector, since each iteration's flow is integrated into `total_dx/total_dy`.
-
-**Remediation (single option — proven fix)**: Replace the per-step seek with the sequential `grab()`/`read()` skip pattern (as in `shared/climax_extraction.py` / 03a), then validate on a few cached clips that `post_climax_camera_shift_vector` is unchanged. Ideally land together with 03f Issue 1 since the loops are near-identical.
-  - *Pros*: Strictly cheaper decode; frame-accurate; pattern validated twice in this repo; no new dependency.
-  - *Cons*: None of substance — mechanical change plus a short validation run.
-
-Your selection: Proceed with Remediation.
+_None at this time._

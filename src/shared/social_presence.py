@@ -27,7 +27,12 @@ KP_RIGHT_EAR = 4
 KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6
 KEYPOINT_CONF_THRESHOLD = 0.3
-MAX_VLM_VERIFY_FRAMES = 5
+# Confirm-anywhere accounting (02 Resolved Issue #19): VLM verification runs on
+# EVERY pose-positive sampled frame until `min_consistency` confirmations land,
+# instead of only the first 5 candidates. The old cap starved long mixed-content
+# videos whose social segment is a minority of sampled frames (e.g. the ~53-min
+# Rummikub clip rejected 1/2-confirmed across 5 attempts). Still bounded: the
+# VLM only fires on pose-positive frames and stops at min_consistency.
 # Context window for the single-image YES/NO VLM gate calls. Each gate sends one
 # <=768px frame + a one-line prompt and wants a one-word answer (~a few hundred
 # image tokens + a short prompt), so the model's default 128k context allocates
@@ -434,15 +439,13 @@ class SocialPresenceDetector:
                                         return False
                                     return ([], []) if return_hands else []
 
-                            # VLM Early-Exit Verification (Option B from Resolved Issue #22):
-                            # Verify up to MAX_VLM_VERIFY_FRAMES candidate frames against a
-                            # fast VLM. Once `min_consistency` frames are VLM-confirmed, the
-                            # video has passed the gate and we stop spending VLM budget.
-                            if (
-                                self.vlm_verify
-                                and vlm_verified_count < min_consistency
-                                and vlm_attempts < MAX_VLM_VERIFY_FRAMES
-                            ):
+                            # VLM verification with confirm-anywhere accounting
+                            # (02 Resolved Issue #19): every pose-positive frame
+                            # is a candidate until `min_consistency` confirmations
+                            # land, so a clearly-social segment late in a long
+                            # solo-dominated video still reaches the threshold.
+                            # Early-exit once confirmed keeps the budget bounded.
+                            if self.vlm_verify and vlm_verified_count < min_consistency:
                                 vlm_attempts += 1
                                 if self._vlm_confirms_multiple_people(batch_frames[i]):
                                     vlm_verified_count += 1
