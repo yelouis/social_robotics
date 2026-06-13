@@ -137,17 +137,21 @@ The Attention Layer is fully operational in `src/layer_03a_attention/pipeline.py
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 1: Gap-decode floor remains — sequential grab() still decodes 100 % of clip-time
-**Status**: ⚠️ Confirmed Unresolved — Resolved #6's levers cut clip count (~54 %) and within-window YOLO (up to 8×), but for every clip that *is* processed, decode remains fully sequential over the **whole clip** (`cap.grab()` through gaps) because cv2's `cap.set` seeking is keyframe-approximate on H.264 and corrupted scores when tried (Resolved #5). With bystander windows covering only ~19 % of clip-time, up to ~81 % of decode is provably skippable. This is now the dominant per-clip cost on long reservoir clips (median ~26 min before levers).
+### Issue 1: Gap-decode floor remains — exact-seek decoder ruled out (not bit-identical)
+**Status**: ⚠️ Confirmed Unresolved — **The originally-selected Option A (PyAV exact-seek) was implemented and rejected on June 12: it fails its own mandatory bit-identical precondition.** A `_PyAvFrameReader` (seek to the keyframe at-or-before the target, decode forward, frame index recovered as `round(pts·time_base·fps)`) was built and validated. A standalone single-frame probe was **6/6 bit-identical** to cv2's sequential read, but the full in-pipeline 10-clip run diverged on **0/8 clips**, with trace lengths drifting up to ~2× (e.g. `067b03df` 773→1632, `14f5014d` 2661→3584). **Root cause (not fps — every clip is exactly 30.0 fps in both decoders):** 03a's adaptive **burst stride** samples at 32 FPS on a 30 FPS clip, so the *same integer frame index is requested on consecutive samples*; cv2 (sequential `grab`/`retrieve` with buffer reuse) and PyAV (a decode generator that always yields the *next* frame) resolve that repeat differently, and the resulting score difference cascades through the burst-trigger logic into wholly different downstream sampling. Because 03a is chaotically sensitive to exact per-frame content, **any decoder whose frame *indexing* differs from cv2's sequential read — hardware decode included — risks the same divergence.** PyAV was reverted and the `av` dependency removed; the gap-decode cost (sequential `cap.grab()` over ~81 % bystander-free clip-time on processed clips) therefore remains. Resolved #6 already removed the larger costs (~54 % of clips skipped, 8× fewer YOLO calls), so this floor is now a *smaller* share than when first scoped.
 
-**Option A (recommended)**: **Frame-accurate seeking decoder (PyAV / decord)** — seek to the keyframe at-or-before each window start and decode forward to the exact target PTS (frame-accurate by construction, unlike `cap.set`), one seek per window, sequential within windows.
-  - *Pros*: Removes the gap-decode floor (up to ~5× on top of Resolved #6 for sparse-window clips); the bit-identical validation protocol from Resolved #5 / 02 Resolved #18 applies directly; PyAV optionally unlocks VideoToolbox hardware decode later.
-  - *Cons*: New dependency; frame-accuracy must be verified bit-identical on the Ego4D H.264 corpus before adoption (mandatory given the `cap.set` history).
+**Option A (recommended)**: **Per-clip decode parallelism (bit-identical-safe).** Apply the spawn-safe `Pool` pattern (02 Resolved #18) across clips, each worker using the **same cv2 sequential decode** — so each clip's output is byte-for-byte unchanged — overlapping one clip's CPU decode with another clip's MPS inference.
+  - *Pros*: Bit-identical by construction (identical decoder/indexing per clip); proven pattern in this repo; real overlap on the decode share; composes with the supervised runner (03 Resolved #1) for the full-corpus pass.
+  - *Cons*: The single MPS GPU serializes inference, so the speedup is bounded by the decode fraction (not the ~5× a working seek would give); workers must be capped for MPS-memory headroom (~12 GB model set).
 
-**Option B**: **Per-clip parallelism for the decode-bound phase** — the spawn-safe Pool pattern from 02 Resolved #18, applied to 03a while a single process owns MPS inference.
-  - *Pros*: Proven pattern in this repo; multiplies CPU decode throughput without touching the decoder.
-  - *Cons*: A single MPS GPU serializes inference, so gains cap out at the decode share; cross-process frame handoff adds complexity that Option A may render unnecessary.
+**Option B**: **Accept the gap-decode floor for now.** Run the one-time full-corpus 03a under the supervised wrapper and revisit decode only if wall-clock is actually prohibitive, since Resolved #6 already cut the dominant costs.
+  - *Pros*: Zero risk, zero effort; preserves exact output; the remaining floor is a minority share post-#6.
+  - *Cons*: Leaves the gap-decode fraction unoptimized on long clips.
 
-Your selection: Proceed with Option A.
+**Option C**: **Frame-quantize the adaptive sampler, then adopt exact-seek.** Snap all sample timestamps to integer frame indices (no sub-frame burst steps), removing the repeat-index ambiguity so PyAV exact-seek becomes bit-identical-able, then land the ~5× gap-decode win.
+  - *Pros*: Unlocks the largest decode saving; burst cadence stays ~32 FPS, just frame-aligned.
+  - *Cons*: Deliberately **changes 03a output vs the v5 baseline** (a re-baseline, not bit-identical), so it requires re-validating 03e's Nyquist/medfilt contract and re-running the 03a smell test; largest blast radius.
+
+Your selection: _____
 
 
