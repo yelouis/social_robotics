@@ -128,3 +128,28 @@ def test_genuinely_solo_video_still_rejected(monkeypatch):
     det, calls = _make_detector(monkeypatch, [False] * 8)
     result = det.detect(_ExistsPath(), fast_mode=True, min_consistency=2)
     assert result is False
+
+
+def test_untracked_detections_get_unique_noncolliding_ids(monkeypatch):
+    """docs/03d Issue 1: at the 1/3 fps sampling ByteTrack leaves detections
+    untracked (box.id is None; the fakes here always do). The old fallback
+    person_id=len(frame_detections) reused small ints that collided with real
+    track ids across frames — a different body inheriting another person's id
+    (the banner-holder -> child collision that produced a confident false
+    Avoidance in 03d). Untracked detections must now get unique, negative,
+    non-colliding ids."""
+    det = SocialPresenceDetector(model_path="dummy.pt", vlm_verify=False)
+
+    class _FakeModel:
+        def track(self, frames, **kwargs):
+            return [_FakeResult(n_people=2) for _ in frames]
+    det._model = _FakeModel()
+    monkeypatch.setattr(sp.cv2, "VideoCapture", lambda *a, **k: _FakeCap(700))
+
+    detections = det.detect(_ExistsPath(), fast_mode=False)
+    ids = [d["person_id"] for frame in detections for d in frame]
+    assert ids, "expected detections across the sampled frames"
+    # Negative => cannot collide with ByteTrack's positive track-id namespace.
+    assert all(i < 0 for i in ids), f"untracked ids must be negative, got {ids}"
+    # Unique => the old cross-frame len()-collision (0,1,0,1,...) is gone.
+    assert len(ids) == len(set(ids)), f"untracked ids must be unique, got {ids}"

@@ -308,6 +308,15 @@ class SocialPresenceDetector:
             vlm_verified_count = 0
             vlm_attempts = 0
             stereo_checked = False
+            # Monotonic negative id for detections ByteTrack leaves untracked
+            # (box.id is None). Negatives can never collide with ByteTrack's
+            # positive track-id namespace, so an untracked detection can no
+            # longer borrow a real track's id via the old len()-fallback (the
+            # cause of docs/03d Resolved: a child inheriting the banner-holder's
+            # person_id across frames). Each untracked detection is its own
+            # single-observation id, which is the honest identity (no temporal
+            # association is available for it).
+            untracked_person_id = -1
 
             batch_frames = []
             batch_timestamps = []
@@ -406,8 +415,15 @@ class SocialPresenceDetector:
                                 if self._vlm_face_oriented_upward(batch_frames[i], coords):
                                     continue
 
-                            # Extract tracking ID if available
-                            person_id = int(box.id[0]) if box.id is not None else len(frame_detections)
+                            # Extract tracking ID if available. Untracked
+                            # detections get a unique negative id (see above)
+                            # rather than len(frame_detections), which collided
+                            # with real ByteTrack track ids.
+                            if box.id is not None:
+                                person_id = int(box.id[0])
+                            else:
+                                person_id = untracked_person_id
+                                untracked_person_id -= 1
 
                             frame_detections.append({
                                 "person_id": person_id,

@@ -47,7 +47,20 @@ class ProxemicKinematicsPipeline:
     # Anchored windows wider than this skip the bystander (None). All 10
     # confident June-10 vectors sat on <=12s spans, so 30s is conservative.
     MAX_ANCHOR_SPAN_SEC = 30.0
-    
+    # Issue 1 Option C (June 13): identity-continuity guard. The upstream
+    # collision-proof fallback (social_presence.py) fixes new manifests, but
+    # already-generated manifests can still carry a person_id whose detections
+    # jump between two bodies (the banner-holder -> child case). When consecutive
+    # in-window detection boxes have near-zero IoU AND a large area change, the
+    # track is not a continuously-tracked body, so its bbox/depth delta is
+    # meaningless and the vector is zeroed (identity_discontinuity). The June 13
+    # run separates cleanly: genuine vectors have min consecutive IoU >= 0.31,
+    # collisions ~0.00. A same-area position jump (IoU~0 but area ratio ~1.0) is
+    # a benign camera pan of one person and is intentionally NOT flagged.
+    IDENTITY_IOU_FLOOR = 0.1     # consecutive-box IoU at/below this is a discontinuity candidate
+    IDENTITY_AREA_LO = 0.6       # area ratio outside [LO, HI] marks a large size jump (different body)
+    IDENTITY_AREA_HI = 1.6
+
     # Auto-tune accelerator cache flush frequency based on host memory.
     # Hosts with >= 48GB can absorb the intermediate cache pressure of many videos.
     FLUSH_EVERY_N_VIDEOS = 25 if (os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')) >= 48 * 1024**3 else 1
@@ -240,9 +253,10 @@ class ProxemicKinematicsPipeline:
         
         if not bystanders or not tasks:
             print(f"No bystanders or tasks found for {video_id}.")
-            return None
-            
+            return self._sentinel(video_id, "no_bystanders" if not bystanders else "no_tasks")
+
         tasks_analyzed = []
+        skip_reasons = []  # Issue 2: why each bystander was skipped (sentinel provenance)
         for task in tasks:
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
@@ -270,17 +284,28 @@ class ProxemicKinematicsPipeline:
                     continue
 
                 # Issue 1 (June 10): per-bystander window anchoring + span.
-                window = self._bystander_measurement_window(
+                # Returns (None, None, reason) when the bystander is skipped;
+                # the reason feeds the sentinel provenance (Issue 2).
+                win_start, win_end, window_source = self._bystander_measurement_window(
                     timestamps_sec, climax_sec, start_sec, end_sec)
-                if window is None:
+                if win_start is None:
+                    skip_reasons.append(window_source)
                     continue
-                win_start, win_end, window_source = window
 
                 bbox_delta = self._calculate_bbox_scale_delta(timestamps_sec, bounding_boxes, win_start, win_end)
 
                 # Check if person is present in the window at all
                 if bbox_delta is None:
                     continue
+
+                # Issue 1 Option C (June 13): identity-continuity provenance.
+                # min_consecutive_iou is recorded on every vector below; an
+                # actual identity break is REJECTED after the chaos gate (not
+                # before), so the documented ego-motion gate keeps precedence
+                # and its attribution, and the guard targets exactly the gap it
+                # exists for: confident false positives that SURVIVE chaos.
+                min_iou, identity_break = self._window_identity_continuity(
+                    timestamps_sec, bounding_boxes, win_start, win_end)
 
                 win_key = (round(win_start, 2), round(win_end, 2))
                 if win_key not in chaos_cache:
@@ -297,7 +322,28 @@ class ProxemicKinematicsPipeline:
                         "proxemic_confidence": 0.0,
                         "optical_flow_noise": round(chaos_score, 2),
                         "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
-                        "window_source": window_source
+                        "window_source": window_source,
+                        "min_consecutive_iou": round(min_iou, 3)
+                    })
+                    continue
+
+                # Reject a chaos-surviving vector whose in-window detections jump
+                # between bodies (an upstream id collision/switch in an already-
+                # generated manifest) — the confident false positives the chaos
+                # and confidence gates cannot see (e.g. the 599f2f09 -0.48).
+                if identity_break:
+                    per_person.append({
+                        "person_id": person_id,
+                        "bbox_scale_delta_pct": round(bbox_delta, 2),
+                        "depth_anything_v2_delta": 0.0,
+                        "proxemic_vector": 0.0,
+                        "classified_action": "Neutral",
+                        "proxemic_confidence": 0.0,
+                        "optical_flow_noise": round(chaos_score, 2),
+                        "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
+                        "window_source": window_source,
+                        "identity_discontinuity": True,
+                        "min_consecutive_iou": round(min_iou, 3)
                     })
                     continue
 
@@ -328,9 +374,10 @@ class ProxemicKinematicsPipeline:
                     "proxemic_confidence": round(confidence, 2),
                     "optical_flow_noise": round(chaos_score, 2),
                     "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
-                    "window_source": window_source
+                    "window_source": window_source,
+                    "min_consecutive_iou": round(min_iou, 3)
                 })
-                
+
             if per_person:
                 tasks_analyzed.append({
                     "task_id": task_id,
@@ -338,8 +385,8 @@ class ProxemicKinematicsPipeline:
                 })
                 
         if not tasks_analyzed:
-            return None
-            
+            return self._sentinel(video_id, self._aggregate_skip_reason(skip_reasons))
+
         return {
             "video_id": video_id,
             "layer": "03d_proxemic_kinematics",
@@ -357,29 +404,95 @@ class ProxemicKinematicsPipeline:
         widen to ANCHOR_SPAN_DETECTIONS on each side (>=2 consecutive
         detections, ~6-12s).
 
-        Returns (start, end, window_source) or None when the bystander has <2
-        usable detections at all.
+        Returns (start, end, window_source); on skip returns (None, None, reason)
+        where reason is "single_detection" (<2 usable detections) or
+        "span_capped" (anchored span exceeds MAX_ANCHOR_SPAN_SEC). The reason
+        feeds the sentinel provenance in process_video (Issue 2).
         """
         in_window = sum(1 for t in timestamps if start_sec <= t <= end_sec)
         if in_window >= 2:
             return start_sec, end_sec, "reaction_window"
         if len(timestamps) < 2:
-            return None
+            return None, None, "single_detection"
         ts = sorted(timestamps)
         i = min(range(len(ts)), key=lambda k: abs(ts[k] - climax_sec))
         lo = max(0, i - self.ANCHOR_SPAN_DETECTIONS)
         hi = min(len(ts) - 1, i + self.ANCHOR_SPAN_DETECTIONS)
         if hi == lo:  # single-index span (can't happen with len>=2, defensive)
-            return None
+            return None, None, "single_detection"
         ws, we = ts[lo], ts[hi]
         if we <= ws:  # duplicate timestamps
-            return None
+            return None, None, "single_detection"
         if (we - ws) > self.MAX_ANCHOR_SPAN_SEC:
             # Span cap (June 11): on sparse tracks the neighbor-detection gap
             # can stretch the anchored span to minutes — that delta measures
             # locomotion/drift, not a task reaction. No data beats wrong data.
-            return None
+            return None, None, "span_capped"
         return ws, we, "bystander_anchored"
+
+    @staticmethod
+    def _box_area(b):
+        return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+
+    @staticmethod
+    def _iou(a, b):
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        area_a = max(0, a[2] - a[0]) * max(0, a[3] - a[1])
+        area_b = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    def _window_identity_continuity(self, timestamps, bboxes, win_start, win_end):
+        """Issue 1 Option C: detect an upstream identity collision/switch inside
+        the measurement window. Returns (min_consecutive_iou, is_discontinuous).
+
+        A continuously-tracked person's box moves/scales smoothly, so consecutive
+        in-window detections overlap (IoU well above 0). When a person_id is
+        reused for a different body, consecutive boxes have near-zero IoU AND a
+        large size change. A same-area position jump (IoU~0 but area ratio ~1.0)
+        is a benign camera pan of ONE person and is NOT flagged — that is what
+        spares real approach/recede while catching the banner-holder->child
+        collision. On the June 13 corpus genuine vectors had min IoU >= 0.31 vs
+        ~0.00 for collisions.
+        """
+        in_win = sorted((t, b) for t, b in zip(timestamps, bboxes)
+                        if win_start <= t <= win_end)
+        if len(in_win) < 2:
+            return 1.0, False
+        min_iou = 1.0
+        discontinuous = False
+        for (_, b0), (_, b1) in zip(in_win, in_win[1:]):
+            iou = self._iou(b0, b1)
+            min_iou = min(min_iou, iou)
+            a0 = self._box_area(b0)
+            ratio = (self._box_area(b1) / a0) if a0 > 0 else 1.0
+            if iou <= self.IDENTITY_IOU_FLOOR and (ratio < self.IDENTITY_AREA_LO or ratio > self.IDENTITY_AREA_HI):
+                discontinuous = True
+        return min_iou, discontinuous
+
+    @staticmethod
+    def _sentinel(video_id, reason):
+        """Sentinel record carrying a specific skip reason (Issue 2)."""
+        return {
+            "video_id": video_id,
+            "layer": "03d_proxemic_kinematics",
+            "tasks_analyzed": [],
+            "skipped_reason": reason
+        }
+
+    @staticmethod
+    def _aggregate_skip_reason(reasons):
+        """Issue 2: collapse per-bystander skip reasons into one sentinel label."""
+        if not reasons:
+            return "no_output_produced"
+        uniq = set(reasons)
+        if uniq == {"span_capped"}:
+            return "all_bystanders_span_capped"
+        if uniq == {"single_detection"}:
+            return "all_bystanders_single_detection"
+        return "mixed_skip"
 
     def _calculate_bbox_scale_delta(self, timestamps, bboxes, start_sec, end_sec):
         # Extract bboxes in the window
