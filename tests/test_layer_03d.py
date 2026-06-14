@@ -176,10 +176,11 @@ def test_measurement_window_anchor_clips_at_edges():
 
 
 def test_measurement_window_none_for_single_detection():
-    """A bystander with a single detection can never yield a delta -> None."""
+    """A bystander with a single detection can never yield a delta -> skipped
+    with the 'single_detection' reason (Issue 2 sentinel provenance)."""
     pipeline = _make_pipeline()
     assert pipeline._bystander_measurement_window(
-        [5.0], climax_sec=5.0, start_sec=4.0, end_sec=6.0) is None
+        [5.0], climax_sec=5.0, start_sec=4.0, end_sec=6.0) == (None, None, "single_detection")
 
 
 def test_measurement_window_caps_long_anchored_span():
@@ -189,7 +190,7 @@ def test_measurement_window_caps_long_anchored_span():
     is the June 10 latent case (33/112 spans >30s, max 198s)."""
     pipeline = _make_pipeline()
     assert pipeline._bystander_measurement_window(
-        [0.0, 100.0, 200.0], climax_sec=100.0, start_sec=99.0, end_sec=101.0) is None
+        [0.0, 100.0, 200.0], climax_sec=100.0, start_sec=99.0, end_sec=101.0) == (None, None, "span_capped")
 
 
 def test_measurement_window_at_cap_boundary_kept():
@@ -398,3 +399,156 @@ def test_optical_flow_noise_rejection(dummy_manifest, tmp_path, monkeypatch):
     assert per_person["proxemic_vector"] == 0.0
     assert per_person["proxemic_confidence"] == 0.0
     assert per_person["classified_action"] == "Neutral"
+
+# ------------------------------------------------------------------
+#  June 13 Issue 1 Option C: identity-continuity guard
+# ------------------------------------------------------------------
+
+def test_identity_continuity_flags_collision():
+    """The real 599f2f09 collision: person_id reused across a banner-holder
+    (large, center) and a distant child (small, left). Consecutive in-window
+    boxes have ~0 IoU AND a large area drop -> flagged discontinuous."""
+    pipeline = _make_pipeline()
+    min_iou, disc = pipeline._window_identity_continuity(
+        [9.0, 21.0], [[579, 266, 781, 660], [485, 617, 548, 859]], 9.0, 21.0)
+    assert disc is True
+    assert min_iou < pipeline.IDENTITY_IOU_FLOOR
+
+
+def test_identity_continuity_spares_camera_pan():
+    """A same-area box that jumps across the frame (IoU 0, area ratio ~1.0) is
+    one person displaced by a camera pan, NOT an identity switch -> not flagged
+    (this is what spares real approach/recede)."""
+    pipeline = _make_pipeline()
+    _, disc = pipeline._window_identity_continuity(
+        [1.0, 2.0], [[100, 100, 200, 300], [400, 100, 500, 300]], 1.0, 2.0)
+    assert disc is False
+
+
+def test_identity_continuity_spares_smooth_track():
+    """A continuously-tracked person's overlapping boxes stay well above the
+    IoU floor -> not flagged (the genuine 343f4d2d Approach behaves this way)."""
+    pipeline = _make_pipeline()
+    min_iou, disc = pipeline._window_identity_continuity(
+        [1.0, 2.0, 3.0], [[100, 100, 200, 200], [95, 95, 205, 205], [90, 90, 210, 210]], 1.0, 3.0)
+    assert disc is False
+    assert min_iou > 0.3
+
+
+def test_identity_continuity_single_box_is_safe():
+    """<2 in-window detections -> no pair to compare -> (1.0, False)."""
+    pipeline = _make_pipeline()
+    assert pipeline._window_identity_continuity([1.0], [[0, 0, 10, 10]], 1.0, 3.0) == (1.0, False)
+
+
+def test_identity_discontinuity_zeroes_vector_end_to_end(tmp_path, monkeypatch):
+    """End-to-end: a chaos-surviving colliding person_id is zeroed with
+    identity_discontinuity provenance, and the expensive depth pass never runs
+    (the guard sits after the chaos gate but before depth)."""
+    def _boom(*a, **k):
+        raise AssertionError("depth must not run for an identity-rejected vector")
+    manifest_path = tmp_path / "m.json"
+    v = tmp_path / "v.mp4"
+    v.touch()
+    manifest_path.write_text(json.dumps([{
+        "video_id": "collide",
+        "video_path": str(v),
+        "bystander_detections": [{
+            "person_id": 2,
+            "timestamps_sec": [9.0, 21.0],
+            "bounding_boxes": [[579, 266, 781, 660], [485, 617, 548, 859]],
+        }],
+        "identified_tasks": [{
+            "task_id": "t_01",
+            "task_temporal_metadata": {"task_climax_sec": 15.0, "task_reaction_window_sec": [9.0, 21.0]},
+        }],
+    }]))
+    out = tmp_path / "o.json"
+    pipeline = _make_pipeline(str(manifest_path), str(out))
+    # Low ego-motion -> survives the chaos gate, so the identity guard is what
+    # rejects it; depth must still never run.
+    monkeypatch.setattr(pipeline, "_extract_ego_motion_noise", lambda v, s, e: 2.0)
+    monkeypatch.setattr(pipeline, "_calculate_depth_delta", _boom)
+    pipeline.run()
+    rec = json.load(open(out))[0]["tasks_analyzed"][0]["per_person"][0]
+    assert rec["identity_discontinuity"] is True
+    assert rec["proxemic_vector"] == 0.0
+    assert rec["classified_action"] == "Neutral"
+    assert rec["optical_flow_noise"] == 2.0
+    assert rec["min_consecutive_iou"] < 0.1
+
+
+def test_min_consecutive_iou_emitted_on_scored_record(dummy_manifest, tmp_path, monkeypatch):
+    """Every scored vector carries min_consecutive_iou provenance, and a smooth
+    track is not flagged as a discontinuity."""
+    out = tmp_path / "o.json"
+    pipeline = _make_pipeline(str(dummy_manifest), str(out))
+    monkeypatch.setattr(pipeline, "_extract_ego_motion_noise", lambda v, s, e: 2.0)
+    monkeypatch.setattr(pipeline, "_calculate_depth_delta", lambda v, t, b, s, e: -0.25)
+    pipeline.run()
+    rec = json.load(open(out))[0]["tasks_analyzed"][0]["per_person"][0]
+    assert "min_consecutive_iou" in rec
+    assert rec["min_consecutive_iou"] > 0.3
+    assert rec.get("identity_discontinuity", False) is False
+
+# ------------------------------------------------------------------
+#  June 13 Issue 2: provenance-only sentinel reasons
+# ------------------------------------------------------------------
+
+def _sentinel_manifest(tmp_path, bystanders, tasks=None):
+    v = tmp_path / "v.mp4"
+    v.touch()
+    mp_ = tmp_path / "m.json"
+    mp_.write_text(json.dumps([{
+        "video_id": "sent",
+        "video_path": str(v),
+        "bystander_detections": bystanders,
+        "identified_tasks": tasks if tasks is not None else [{
+            "task_id": "t_01",
+            "task_temporal_metadata": {"task_climax_sec": 100.0, "task_reaction_window_sec": [99.0, 101.0]},
+        }],
+    }]))
+    return mp_
+
+
+def test_sentinel_reason_all_span_capped(tmp_path):
+    mp_ = _sentinel_manifest(tmp_path, [{
+        "person_id": 0, "timestamps_sec": [0.0, 100.0, 200.0],
+        "bounding_boxes": [[0, 0, 10, 10]] * 3,
+    }])
+    out = tmp_path / "o.json"
+    p = _make_pipeline(str(mp_), str(out))
+    p.run()
+    rec = json.load(open(out))[0]
+    assert rec["tasks_analyzed"] == []
+    assert rec["skipped_reason"] == "all_bystanders_span_capped"
+
+
+def test_sentinel_reason_all_single_detection(tmp_path):
+    mp_ = _sentinel_manifest(tmp_path, [{
+        "person_id": 0, "timestamps_sec": [5.0], "bounding_boxes": [[0, 0, 10, 10]],
+    }], tasks=[{"task_id": "t_01", "task_temporal_metadata": {
+        "task_climax_sec": 5.0, "task_reaction_window_sec": [4.0, 6.0]}}])
+    out = tmp_path / "o.json"
+    p = _make_pipeline(str(mp_), str(out))
+    p.run()
+    assert json.load(open(out))[0]["skipped_reason"] == "all_bystanders_single_detection"
+
+
+def test_sentinel_reason_mixed_skip(tmp_path):
+    mp_ = _sentinel_manifest(tmp_path, [
+        {"person_id": 0, "timestamps_sec": [0.0, 100.0, 200.0], "bounding_boxes": [[0, 0, 10, 10]] * 3},
+        {"person_id": 1, "timestamps_sec": [100.0], "bounding_boxes": [[0, 0, 10, 10]]},
+    ])
+    out = tmp_path / "o.json"
+    p = _make_pipeline(str(mp_), str(out))
+    p.run()
+    assert json.load(open(out))[0]["skipped_reason"] == "mixed_skip"
+
+
+def test_sentinel_reason_no_bystanders(tmp_path):
+    mp_ = _sentinel_manifest(tmp_path, [])
+    out = tmp_path / "o.json"
+    p = _make_pipeline(str(mp_), str(out))
+    p.run()
+    assert json.load(open(out))[0]["skipped_reason"] == "no_bystanders"
