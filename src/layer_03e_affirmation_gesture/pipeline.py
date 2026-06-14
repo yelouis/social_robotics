@@ -19,6 +19,17 @@ class AffirmationGesturePipeline:
     RMS_THRESHOLD = 0.05
     GESTURE_DECISION_THRESHOLD = 0.6
     AMBIGUITY_DELTA = 0.15
+    # Issue 2 (June 14): 03e read-window anchoring. 03a only runs gaze inference
+    # within +/-WINDOW_PAD_SEC of each bystander DETECTION, so the strict
+    # task_reaction_window_sec (wearer-climax +/-1s) is usually empty (bystander
+    # detections sit a median ~6.8s from the climax — docs/03d Resolved #1).
+    # Mirror 03d's _bystander_measurement_window: keep the reaction window when it
+    # already holds >= MIN_TRACE_POINTS samples, else anchor to the climax-nearest
+    # detection +/- ANCHOR_SPAN_DETECTIONS (padded by WINDOW_PAD_SEC), capped at
+    # MAX_ANCHOR_SPAN_SEC so a sparse track can't stretch the window to minutes.
+    ANCHOR_SPAN_DETECTIONS = 1
+    WINDOW_PAD_SEC = 2.0
+    MAX_ANCHOR_SPAN_SEC = 30.0
     # Engage the medfilt saccade suppressor at 03a's M4-Max 32 FPS burst stride.
     # 3-sample window at 32 FPS = 94 ms, comfortably below the 167 ms half-period
     # of a 3 Hz nod so the filter does not demolish genuine fast nods.
@@ -171,7 +182,14 @@ class AffirmationGesturePipeline:
             print(f"No tasks found for {video_id}.")
             return self._sentinel(video_id, "no_tasks")
 
+        # Issue 2 (June 14): map person_id -> bystander DETECTION timestamps so a
+        # person whose trace is absent from the strict reaction window can re-anchor
+        # to where 03a actually sampled (around the detections).
+        det_by_pid = {b.get('person_id'): b.get('timestamps_sec', [])
+                      for b in entry.get('bystander_detections', [])}
+
         tasks_analyzed = []
+        skip_reasons = []
         for task in tasks:
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
@@ -181,85 +199,108 @@ class AffirmationGesturePipeline:
                 continue
 
             start_sec, end_sec = reaction_window
+            climax_sec = meta.get('task_climax_sec', (start_sec + end_sec) / 2.0)
             per_person_att = att_entry.get('per_person', [])
 
             per_person_results = []
             for p_data in per_person_att:
-                person_id = p_data.get('person_id')
-                trace = p_data.get('attention_trace', [])
+                # Issue 3 (June 14): isolate per-person failures. A single short
+                # trace used to raise out of filtfilt and abort the WHOLE clip
+                # (every other person lost, no record emitted). Contain it here.
+                try:
+                    person_id = p_data.get('person_id')
+                    trace = p_data.get('attention_trace', [])
+                    trace_ts = [x['t'] for x in trace]
 
-                # Filter trace by window
-                window_trace = [t for t in trace if start_sec <= t['t'] <= end_sec]
+                    # Issue 2: align the read window with where 03a actually sampled.
+                    w_start, w_end, w_source = self._measurement_window(
+                        trace_ts, det_by_pid.get(person_id, []), climax_sec, start_sec, end_sec)
+                    if w_start is None:
+                        skip_reasons.append(w_source)
+                        continue
 
-                if len(window_trace) < self.MIN_TRACE_POINTS:
+                    window_trace = [t for t in trace if w_start <= t['t'] <= w_end]
+                    if len(window_trace) < self.MIN_TRACE_POINTS:
+                        skip_reasons.append("insufficient_trace")
+                        continue
+
+                    # Extract time, pitch, yaw
+                    timestamps = np.array([x['t'] for x in window_trace])
+                    pitch = np.array([x['pitch_rad'] for x in window_trace])
+                    yaw = np.array([x['yaw_rad'] for x in window_trace])
+
+                    # Interpolate NaNs and capture how much of each axis was bridged.
+                    # If too much of the trace was reconstructed, downstream filtering
+                    # produces fabricated oscillations from the interpolant ramp, so
+                    # short-circuit the bystander.
+                    pitch, pitch_interp_frac = self._fill_nan(pitch)
+                    yaw, yaw_interp_frac = self._fill_nan(yaw)
+                    interpolated_fraction = max(pitch_interp_frac, yaw_interp_frac)
+
+                    if len(pitch) == 0 or len(yaw) == 0:
+                        skip_reasons.append("insufficient_trace")
+                        continue
+                    if interpolated_fraction > self.MAX_INTERPOLATED_FRACTION:
+                        skip_reasons.append("over_interpolated")
+                        continue
+
+                    # Resample to a uniform grid before filtering.
+                    # 03a uses adaptive stride (0.2s or 0.5s), but scipy.signal.filtfilt
+                    # assumes uniform sampling. We interpolate onto a fixed-dt grid.
+                    duration = timestamps[-1] - timestamps[0]
+                    if duration <= 0:
+                        skip_reasons.append("insufficient_trace")
+                        continue
+                    dt = np.mean(np.diff(timestamps))
+                    if dt <= 0:
+                        skip_reasons.append("insufficient_trace")
+                        continue
+                    fps = 1.0 / dt
+                    n_uniform = max(self.MIN_TRACE_POINTS, int(duration * fps))
+                    t_uniform = np.linspace(timestamps[0], timestamps[-1], n_uniform)
+
+                    pitch_interp = interp1d(timestamps, pitch, kind='linear', fill_value='extrapolate')
+                    yaw_interp = interp1d(timestamps, yaw, kind='linear', fill_value='extrapolate')
+                    pitch_uniform = pitch_interp(t_uniform)
+                    yaw_uniform = yaw_interp(t_uniform)
+
+                    uniform_fps = (n_uniform - 1) / duration if duration > 0 else fps
+
+                    # Detect nod/shake
+                    nod_confidence, pitch_var = self._detect_oscillation(pitch_uniform, uniform_fps, axis='pitch')
+                    shake_confidence, yaw_var = self._detect_oscillation(yaw_uniform, uniform_fps, axis='yaw')
+
+                    gesture = "none"
+                    conf = 0.0
+
+                    threshold = self.GESTURE_DECISION_THRESHOLD
+                    # Tie-breaking: if both axes oscillate similarly, classify as ambiguous
+                    if (nod_confidence > threshold and shake_confidence > threshold
+                            and abs(nod_confidence - shake_confidence) < self.AMBIGUITY_DELTA):
+                        gesture = "ambiguous_wobble"
+                        conf = round((nod_confidence + shake_confidence) / 2.0, 2)
+                    elif nod_confidence > threshold and nod_confidence > shake_confidence:
+                        gesture = "affirming_nod"
+                        conf = nod_confidence
+                    elif shake_confidence > threshold:
+                        gesture = "negating_shake"
+                        conf = shake_confidence
+
+                    per_person_results.append({
+                        "person_id": person_id,
+                        "pitch_oscillation_hz": round(pitch_var, 2),
+                        "yaw_oscillation_hz": round(yaw_var, 2),
+                        "interpolated_fraction": round(interpolated_fraction, 3),
+                        "gesture_detected": gesture,
+                        "confidence": round(conf, 2),
+                        "measurement_window_sec": [round(float(w_start), 2), round(float(w_end), 2)],
+                        "window_source": w_source,
+                    })
+                except Exception as e:
+                    # One bystander's failure must not poison the rest of the clip.
+                    print(f"  per-person {p_data.get('person_id')} failed for {video_id}: {e}")
+                    skip_reasons.append("error")
                     continue
-
-                # Extract time, pitch, yaw
-                timestamps = np.array([x['t'] for x in window_trace])
-                pitch = np.array([x['pitch_rad'] for x in window_trace])
-                yaw = np.array([x['yaw_rad'] for x in window_trace])
-
-                # Interpolate NaNs and capture how much of each axis was bridged.
-                # If too much of the trace was reconstructed, downstream filtering
-                # produces fabricated oscillations from the interpolant ramp, so
-                # short-circuit the bystander.
-                pitch, pitch_interp_frac = self._fill_nan(pitch)
-                yaw, yaw_interp_frac = self._fill_nan(yaw)
-                interpolated_fraction = max(pitch_interp_frac, yaw_interp_frac)
-
-                if len(pitch) == 0 or len(yaw) == 0:
-                    continue
-                if interpolated_fraction > self.MAX_INTERPOLATED_FRACTION:
-                    continue
-
-                # Resample to a uniform grid before filtering.
-                # 03a uses adaptive stride (0.2s or 0.5s), but scipy.signal.filtfilt
-                # assumes uniform sampling. We interpolate onto a fixed-dt grid.
-                duration = timestamps[-1] - timestamps[0]
-                if duration <= 0:
-                    continue
-                dt = np.mean(np.diff(timestamps))
-                if dt <= 0:
-                    continue
-                fps = 1.0 / dt
-                n_uniform = max(self.MIN_TRACE_POINTS, int(duration * fps))
-                t_uniform = np.linspace(timestamps[0], timestamps[-1], n_uniform)
-
-                pitch_interp = interp1d(timestamps, pitch, kind='linear', fill_value='extrapolate')
-                yaw_interp = interp1d(timestamps, yaw, kind='linear', fill_value='extrapolate')
-                pitch_uniform = pitch_interp(t_uniform)
-                yaw_uniform = yaw_interp(t_uniform)
-
-                uniform_fps = (n_uniform - 1) / duration if duration > 0 else fps
-
-                # Detect nod/shake
-                nod_confidence, pitch_var = self._detect_oscillation(pitch_uniform, uniform_fps, axis='pitch')
-                shake_confidence, yaw_var = self._detect_oscillation(yaw_uniform, uniform_fps, axis='yaw')
-
-                gesture = "none"
-                conf = 0.0
-
-                threshold = self.GESTURE_DECISION_THRESHOLD
-                # Tie-breaking: if both axes oscillate similarly, classify as ambiguous
-                if (nod_confidence > threshold and shake_confidence > threshold
-                        and abs(nod_confidence - shake_confidence) < self.AMBIGUITY_DELTA):
-                    gesture = "ambiguous_wobble"
-                    conf = round((nod_confidence + shake_confidence) / 2.0, 2)
-                elif nod_confidence > threshold and nod_confidence > shake_confidence:
-                    gesture = "affirming_nod"
-                    conf = nod_confidence
-                elif shake_confidence > threshold:
-                    gesture = "negating_shake"
-                    conf = shake_confidence
-
-                per_person_results.append({
-                    "person_id": person_id,
-                    "pitch_oscillation_hz": round(pitch_var, 2),
-                    "yaw_oscillation_hz": round(yaw_var, 2),
-                    "interpolated_fraction": round(interpolated_fraction, 3),
-                    "gesture_detected": gesture,
-                    "confidence": round(conf, 2),
-                })
 
             if per_person_results:
                 tasks_analyzed.append({
@@ -268,13 +309,63 @@ class AffirmationGesturePipeline:
                 })
 
         if not tasks_analyzed:
-            return self._sentinel(video_id, "insufficient_trace")
+            return self._sentinel(video_id, self._aggregate_skip_reason(skip_reasons))
 
         return {
             "video_id": video_id,
             "layer": "03e_affirmation_gesture",
             "tasks_analyzed": tasks_analyzed
         }
+
+    def _measurement_window(self, trace_timestamps, det_timestamps, climax_sec, start_sec, end_sec):
+        """Issue 2 (June 14): align 03e's read window with where 03a sampled.
+
+        03a only runs gaze inference within +/-WINDOW_PAD_SEC of each bystander
+        DETECTION, so the strict task_reaction_window_sec (wearer-climax +/-1s)
+        usually contains zero trace points (detections sit a median ~6.8s from
+        the climax — docs/03d Resolved #1), which scored the layer 0/50. Mirrors
+        03d's _bystander_measurement_window: keep the reaction window when it
+        already holds >= MIN_TRACE_POINTS trace samples; otherwise anchor to the
+        DETECTION nearest the climax +/- ANCHOR_SPAN_DETECTIONS, padded by
+        WINDOW_PAD_SEC (03a's sampling pad) so the dense trace around those
+        detections is captured, and bounded by MAX_ANCHOR_SPAN_SEC.
+
+        Returns (start, end, source); on skip (None, None, reason) where reason
+        is 'insufficient_trace' (no usable detection to anchor on) or
+        'span_capped' (anchored span exceeds the cap).
+        """
+        in_win = sum(1 for t in trace_timestamps if start_sec <= t <= end_sec)
+        if in_win >= self.MIN_TRACE_POINTS:
+            return start_sec, end_sec, "reaction_window"
+        det = sorted(det_timestamps)
+        if not det:
+            return None, None, "insufficient_trace"
+        i = min(range(len(det)), key=lambda k: abs(det[k] - climax_sec))
+        lo = max(0, i - self.ANCHOR_SPAN_DETECTIONS)
+        hi = min(len(det) - 1, i + self.ANCHOR_SPAN_DETECTIONS)
+        ws = det[lo] - self.WINDOW_PAD_SEC
+        we = det[hi] + self.WINDOW_PAD_SEC
+        if (we - ws) > self.MAX_ANCHOR_SPAN_SEC:
+            return None, None, "span_capped"
+        return ws, we, "bystander_anchored"
+
+    @staticmethod
+    def _aggregate_skip_reason(reasons):
+        """Collapse per-person skip reasons into one sentinel reason (Issue 2)."""
+        if not reasons:
+            return "insufficient_trace"
+        return reasons[0] if len(set(reasons)) == 1 else "mixed_skip"
+
+    @staticmethod
+    def _safe_filtfilt(b, a, sig):
+        """Issue 3 (June 14): filtfilt RAISES when len(sig) <= padlen
+        (3*max(len(a),len(b)) = 15 for a 2nd-order Butterworth bandpass) instead
+        of degrading. Guard it and signal the caller to fall back to the raw
+        detrended signal + peak-finding rather than crash the whole clip."""
+        padlen = 3 * max(len(a), len(b))
+        if len(sig) <= padlen:
+            return None
+        return filtfilt(b, a, sig)
 
     def _fill_nan(self, arr):
         mask = np.isnan(arr)
@@ -307,14 +398,16 @@ class AffirmationGesturePipeline:
             low = bp_low_hz / nyq
             high = bp_high_hz / nyq
             b, a = butter(2, [low, high], btype='band')
-            filtered = filtfilt(b, a, signal_detrended)
+            ff = self._safe_filtfilt(b, a, signal_detrended)
+            filtered = ff if ff is not None else signal_detrended
         elif nyq > 1.5:
             # Nyquist is marginal: use widest possible band
             low = max(0.01, 0.5 / nyq)
             high = 0.99
             if high - low > 0.1:
                 b, a = butter(2, [low, high], btype='band')
-                filtered = filtfilt(b, a, signal_detrended)
+                ff = self._safe_filtfilt(b, a, signal_detrended)
+                filtered = ff if ff is not None else signal_detrended
             else:
                 filtered = signal_detrended
         else:

@@ -300,3 +300,107 @@ def test_nonuniform_sampling(mock_data_paths):
     person_res = res['tasks_analyzed'][0]['per_person'][0]
     assert person_res['gesture_detected'] == 'affirming_nod'
 
+
+# ------------------------------------------------------------------
+#  June 14 Issue 2: bystander-anchored read window
+# ------------------------------------------------------------------
+
+def _pipe(mock_data_paths):
+    manifest_path, output_path, attention_path = mock_data_paths
+    return AffirmationGesturePipeline(manifest_path, output_path, attention_path, force=True)
+
+
+def test_measurement_window_keeps_dense_reaction_window(mock_data_paths):
+    """>= MIN_TRACE_POINTS samples already inside the reaction window -> keep it
+    (preserves the historical strict-window behavior; backward compatible)."""
+    p = _pipe(mock_data_paths)
+    trace_ts = [0.1 * i for i in range(40)]  # 0..3.9, dense
+    win = p._measurement_window(trace_ts, [], climax_sec=2.5, start_sec=0.0, end_sec=5.0)
+    assert win == (0.0, 5.0, "reaction_window")
+
+
+def test_measurement_window_anchors_when_reaction_window_empty(mock_data_paths):
+    """Issue 2: reaction window has no trace, but a bystander detection sits far
+    from it near the climax -> anchor (padded) to that detection where 03a
+    actually sampled."""
+    p = _pipe(mock_data_paths)
+    win = p._measurement_window([], [101.0], climax_sec=51.0, start_sec=50.0, end_sec=52.0)
+    assert win == (101.0 - p.WINDOW_PAD_SEC, 101.0 + p.WINDOW_PAD_SEC, "bystander_anchored")
+
+
+def test_measurement_window_span_capped(mock_data_paths):
+    """Anchored span beyond MAX_ANCHOR_SPAN_SEC -> skip (span_capped)."""
+    p = _pipe(mock_data_paths)
+    win = p._measurement_window([], [0.0, 100.0], climax_sec=50.0, start_sec=49.0, end_sec=51.0)
+    assert win[0] is None and win[2] == "span_capped"
+
+
+def test_measurement_window_no_detection_to_anchor(mock_data_paths):
+    """Empty reaction window AND no detections -> insufficient_trace."""
+    p = _pipe(mock_data_paths)
+    win = p._measurement_window([], [], climax_sec=5.0, start_sec=4.0, end_sec=6.0)
+    assert win[0] is None and win[2] == "insufficient_trace"
+
+
+def test_anchoring_recovers_offset_trace(mock_data_paths):
+    """End-to-end Issue 2: trace lives at t=100-104 (around a bystander detection)
+    while the reaction window is [50,52]. Pre-fix this scored insufficient_trace;
+    anchoring must recover it into a real per-person result."""
+    p = _pipe(mock_data_paths)
+    ts = np.linspace(100.0, 104.0, 40)
+    pitch = 0.15 * np.sin(2 * np.pi * 1.0 * ts)
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+             for t, pp in zip(ts, pitch)]
+    p.attention_data["vid_off"] = {"video_id": "vid_off", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_off",
+             "bystander_detections": [{"person_id": 0, "timestamps_sec": [102.0]}],
+             "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {
+                 "task_reaction_window_sec": [50.0, 52.0], "task_climax_sec": 51.0}}]}
+    res = p.process_video(entry)
+    assert "skipped_reason" not in res
+    pr = res["tasks_analyzed"][0]["per_person"][0]
+    assert pr["window_source"] == "bystander_anchored"
+
+
+# ------------------------------------------------------------------
+#  June 14 Issue 3: filtfilt padlen guard + per-person isolation
+# ------------------------------------------------------------------
+
+def test_safe_filtfilt_guards_short_signal():
+    """filtfilt raises on len(sig) <= padlen(15); the guard returns None instead."""
+    from scipy.signal import butter
+    b, a = butter(2, [0.2, 0.8], btype='band')
+    assert AffirmationGesturePipeline._safe_filtfilt(b, a, np.zeros(12)) is None
+    out = AffirmationGesturePipeline._safe_filtfilt(b, a, np.sin(np.linspace(0, 10, 60)))
+    assert out is not None and len(out) == 60
+
+
+def test_short_window_does_not_crash(mock_data_paths):
+    """Issue 3: a short window that resamples below filtfilt's padlen must fall
+    back to peak-finding and return a record, not raise out and abort the clip."""
+    p = _pipe(mock_data_paths)
+    ts = np.linspace(0.0, 1.0, 10)  # ~9 fps -> nyq>3 -> bandpass branch, <16 samples
+    pitch = 0.2 * np.sin(2 * np.pi * 1.5 * ts)
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+             for t, pp in zip(ts, pitch)]
+    p.attention_data["vid_short"] = {"video_id": "vid_short", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_short",
+             "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0.0, 1.0]}}]}
+    res = p.process_video(entry)  # must not raise
+    assert res["layer"] == "03e_affirmation_gesture"
+    assert res["tasks_analyzed"][0]["per_person"][0]["person_id"] == 0
+
+
+def test_per_person_failure_isolated(mock_data_paths, monkeypatch):
+    """Issue 3: an unexpected per-person exception is contained — the clip emits a
+    sentinel (skipped_reason='error') rather than propagating and losing the run."""
+    p = _pipe(mock_data_paths)
+
+    def boom(*a, **k):
+        raise ValueError("synthetic detector failure")
+    monkeypatch.setattr(p, "_detect_oscillation", boom)
+    entry = {"video_id": "vid_nod",
+             "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0.0, 5.0]}}]}
+    res = p.process_video(entry)  # must not raise
+    assert res["skipped_reason"] == "error"
+
