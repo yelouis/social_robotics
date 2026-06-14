@@ -404,3 +404,45 @@ def test_per_person_failure_isolated(mock_data_paths, monkeypatch):
     res = p.process_video(entry)  # must not raise
     assert res["skipped_reason"] == "error"
 
+
+# ------------------------------------------------------------------
+#  June 14 Issue 2 (NoFace-zero): lost-tracking samples are missing data
+# ------------------------------------------------------------------
+
+def test_noface_samples_treated_as_missing(mock_data_paths):
+    """`target='NoFace'` samples must become NaN (missing), not a real 0.0 reading,
+    so a window dominated by NoFace is rejected (over_interpolated) instead of
+    fabricating a step-edge 'nod'."""
+    p = _pipe(mock_data_paths)
+    t_arr = np.linspace(0, 5, 25)
+    trace = []
+    for i, t in enumerate(t_arr):
+        if i < 14:  # 14/25 = 0.56 NoFace > MAX_INTERPOLATED_FRACTION (0.3)
+            trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
+        else:
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": 0.01, "yaw_rad": 0.01, "target": "Face"})
+    p.attention_data["vid_nf"] = {"video_id": "vid_nf", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_nf", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    res = p.process_video(entry)
+    assert res["skipped_reason"] == "over_interpolated"
+
+
+def test_small_noface_fraction_still_detects(mock_data_paths):
+    """A few NoFace samples are bridged (and counted in interpolated_fraction) but a
+    genuine nod still survives — NoFace is missing data, not a hard reject."""
+    p = _pipe(mock_data_paths)
+    t_arr = np.linspace(0, 5, 30)
+    pitch = 0.1 * np.sin(2 * np.pi * 1.0 * t_arr)
+    trace = []
+    for i, (t, pp) in enumerate(zip(t_arr, pitch)):
+        if i in (10, 11):  # 2/30 NoFace
+            trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
+        else:
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "target": "Face"})
+    p.attention_data["vid_sm"] = {"video_id": "vid_sm", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_sm", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    res = p.process_video(entry)
+    pr = res["tasks_analyzed"][0]["per_person"][0]
+    assert pr["interpolated_fraction"] > 0  # the NoFace samples were counted as missing
+    assert pr["gesture_detected"] == "affirming_nod"  # the real nod still detected
+

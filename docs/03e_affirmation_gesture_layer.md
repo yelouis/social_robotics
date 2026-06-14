@@ -86,7 +86,11 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
    - **Problem**: The 6 June-14 clips whose window overlapped 03a's samples (the only scorable clips) all raised `ValueError: The length of the input vector x must be greater than padlen, which is 15` from `scipy.signal.filtfilt`: a windowed + resampled per-person signal of ~11–15 samples is shorter than the 2nd-order Butterworth bandpass `padlen` (15), and filtfilt **raises** rather than degrading. With no per-person `try/except`, the exception aborted the **entire clip** (no record, not even a sentinel) — one short-trace person poisoned every co-occurring person, so the run wrote 44 records not 50 and the scorable clips yielded nothing.
    - **Solution** (Option A): Added `_safe_filtfilt()` (returns `None` when `len(sig) <= 3·max(len(a),len(b))`); `_detect_oscillation` falls back to the raw-detrended peak-finding path on a too-short signal instead of raising. Wrapped the per-person body in `try/except` so any unexpected failure records that person's skip (`error`) and can never abort the clip. **Validated: the June 14 re-run produced 50 records with 0 crashes (empty error log).**
 
-### 🧪 Test Suite Results (15/15 Passed)
+3. **NoFace / Lost-Tracking Samples Were Encoded as `pitch=yaw=0.0`, Fabricating Step-Edge "Gestures" (Resolved - June 14)**:
+   - **Problem**: With Resolved #1/#2 in place the June 14 re-run emitted 27 gestures, but spot-checking showed they were artifacts, not head motion. 03a writes lost-tracking samples into `attention_trace` as `pitch_rad = yaw_rad = 0.0` with `target = "NoFace"` (**not `NaN`**), so `_fill_nan` / `interpolated_fraction` never flagged them (all 27 reported `interpolated_fraction = 0.0`) and the step transitions in and out of those zero-plateaus were counted by `find_peaks` as rhythmic extrema. The visually-verified exemplar `0780244d` pid5 (`affirming_nod`, conf 1.0) was a flat-zero plateau + a single spike + a 0→1.05-rad step — not an oscillation.
+   - **Solution** (Option A, 03e-load-side variant — no 03a re-run): in `process_video`, samples whose `target == "NoFace"` are mapped to `NaN` when building the pitch/yaw arrays, so they flow through the existing `_fill_nan` + `interpolated_fraction` guard instead of forming real-valued steps. **Validated on the June 14 re-run against the existing 03a traces: detected gestures 27 → 6 (the NoFace step-edge false positives — including `0780244d` pid5 — are gone, that bystander now correctly `over_interpolated`); 7 clips became honest `over_interpolated` sentinels; `interpolated_fraction` now spans 0–0.27 (was uniformly 0.0).** The 6 survivors are gaze-derived and remain subject to Unresolved Issue 1. Covered by `test_noface_samples_treated_as_missing` and `test_small_noface_fraction_still_detects`.
+
+### 🧪 Test Suite Results (17/17 Passed)
 
 A comprehensive verification suite in `tests/test_layer_03e.py` validates the following:
 - **Nod/Shake/None Classification:** Synthetic sine-wave verification at ~2Hz.
@@ -97,6 +101,7 @@ A comprehensive verification suite in `tests/test_layer_03e.py` validates the fo
 - **Upstream Gaze-Model Calibration:** `MAX_INTERPOLATED_FRACTION` re-keys to 0.3 / 0.2 / 0.25 against `processing_meta.model_used` across L2CS-Net, CrossGaze, 3DGazeNet, unknown-model, fallback-only, and missing-meta branches.
 - **Read-Window Anchoring (Resolved #1):** keeps a dense reaction window, anchors (padded) to the climax-nearest detection when the window is empty, caps an over-long span, and recovers an offset trace end-to-end.
 - **filtfilt Short-Signal Guard + Per-Person Isolation (Resolved #2):** `_safe_filtfilt` returns `None` below padlen; a short window falls back without crashing; a per-person exception yields a sentinel, not a clip abort.
+- **NoFace-as-Missing (Resolved #3):** `target='NoFace'` samples become NaN — a NoFace-dominated window is rejected (`over_interpolated`), while a few NoFace samples are bridged without killing a genuine nod.
 
 ## ⚠️ Unresolved Issues & Suggestions
 
@@ -117,19 +122,4 @@ A comprehensive verification suite in `tests/test_layer_03e.py` validates the fo
 
 Your selection: Proceed with Option A.
 
-> **June 14 update:** the smell-test-blocking findings (window mismatch; `filtfilt` crash) are now **resolved above** (Resolved #1, #2). With them fixed, the June 14 re-run produces **27 detected gestures across 20 clips** — but spot-checking shows they are dominated by gaze artifacts (this Issue 1) and NoFace-zero step edges (Issue 2 below), confirming that Option A (a true head-pose source) is what makes 03e's output *trustworthy*, not merely present.
-
----
-
-### Issue 2: NoFace / Lost-Tracking Samples Are Encoded as `pitch=yaw=0.0`, Fabricating Step-Edge "Gestures"
-**Status**: ⚠️ Confirmed Unresolved — Exposed by the post-fix June 14 re-run (`e2e_reports/2026_06_14_layer03e_50/`): with Resolved #1/#2 in place, 03e emits 27 gestures (17 `affirming_nod`, 10 `ambiguous_wobble`, 0 `negating_shake`), but spot-checking shows they are artifacts, not head motion. 03a writes lost-tracking / no-face samples into `attention_trace` as `pitch_rad = yaw_rad = 0.0` with `target = "NoFace"` (**not `NaN`**), so (a) `_fill_nan` / `interpolated_fraction` never flag them — all 27 detections report `interpolated_fraction = 0.0` — and (b) the step transitions **in and out of** these zero-plateaus create sharp edges that `scipy.signal.find_peaks` counts as rhythmic extrema. Visual proof: `0780244d` pid5 (`affirming_nod`, conf 1.0, "0.97 Hz") is a flat-zero plateau with a single 1.1-rad spike and a 0→1.05-rad step — not an oscillation — while the head-crop strip shows the bystander looking around, **not nodding**. The bystander-anchored window (Resolved #1) widens the read span and so spans more NoFace plateaus, amplifying the effect. This is **distinct from Issue 1**: even a true head-pose signal would still inject step artifacts while NoFace is encoded as a real-valued 0.
-
-**Option A (recommended)**: **Treat NoFace as missing data (`NaN`), not zero.** Map `target == "NoFace"` (or `score == 0`) samples to `NaN` — either at the 03a source or on load in 03e — so they flow through the existing `_fill_nan` + `interpolated_fraction` guard (which already short-circuits over-interpolated bystanders) instead of forming real-valued step edges.
-  - *Pros*: Reuses the existing interpolation-fraction machinery; removes the step-edge false peaks at the root; cheap; makes "we didn't see the face" explicit and honest.
-  - *Cons*: Needs either a 03a output change (emit `NaN`/a `valid` flag) or a `target`-aware loader in 03e; rising NaN fractions will (correctly) push some bystanders past `MAX_INTERPOLATED_FRACTION` → fewer but more honest detections; thresholds want a re-check.
-
-**Option B**: **Require contiguous real-sample support before scoring.** Independent of encoding, reject a window whose largest NoFace/zero run exceeds a fraction of the window (a "real-coverage" guard).
-  - *Pros*: No schema change; directly targets the gap-edge artifact; complements Option A.
-  - *Cons*: Another threshold to tune; leaves the `interpolated_fraction` blind spot in place for other consumers.
-
-Your selection: _____
+> **June 14 update:** the smell-test-blocking findings (window mismatch; `filtfilt` crash) **and** the NoFace-zero step-edge artifact are now **resolved above** (Resolved #1–#3). With them fixed, the June 14 re-run yields **6 detected gestures** (down from 27) — all now gaze-derived, i.e. squarely this Issue 1. A dedicated head-pose source (Option A) is what remains to make 03e's output *trustworthy*, not merely present.

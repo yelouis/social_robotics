@@ -226,8 +226,14 @@ class AffirmationGesturePipeline:
 
                     # Extract time, pitch, yaw
                     timestamps = np.array([x['t'] for x in window_trace])
-                    pitch = np.array([x['pitch_rad'] for x in window_trace])
-                    yaw = np.array([x['yaw_rad'] for x in window_trace])
+                    # Issue 2 (June 14 post-fix finding): 03a writes lost-tracking
+                    # samples as pitch=yaw=0.0 with target='NoFace' (NOT NaN), so the
+                    # step transitions in/out of those zero-plateaus fabricate "nods"
+                    # and interpolated_fraction never flags them. Treat NoFace as the
+                    # missing data it is -> NaN, so it flows through _fill_nan + the
+                    # interpolated_fraction guard instead of forming real-valued steps.
+                    pitch = np.array([np.nan if x.get('target') == 'NoFace' else x['pitch_rad'] for x in window_trace])
+                    yaw = np.array([np.nan if x.get('target') == 'NoFace' else x['yaw_rad'] for x in window_trace])
 
                     # Interpolate NaNs and capture how much of each axis was bridged.
                     # If too much of the trace was reconstructed, downstream filtering
