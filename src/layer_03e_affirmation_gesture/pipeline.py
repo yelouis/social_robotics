@@ -334,20 +334,25 @@ class AffirmationGesturePipeline:
         is 'insufficient_trace' (no usable detection to anchor on) or
         'span_capped' (anchored span exceeds the cap).
         """
-        in_win = sum(1 for t in trace_timestamps if start_sec <= t <= end_sec)
-        if in_win >= self.MIN_TRACE_POINTS:
-            return start_sec, end_sec, "reaction_window"
-        det = sorted(det_timestamps)
-        if not det:
-            return None, None, "insufficient_trace"
-        i = min(range(len(det)), key=lambda k: abs(det[k] - climax_sec))
-        lo = max(0, i - self.ANCHOR_SPAN_DETECTIONS)
-        hi = min(len(det) - 1, i + self.ANCHOR_SPAN_DETECTIONS)
-        ws = det[lo] - self.WINDOW_PAD_SEC
-        we = det[hi] + self.WINDOW_PAD_SEC
-        if (we - ws) > self.MAX_ANCHOR_SPAN_SEC:
-            return None, None, "span_capped"
-        return ws, we, "bystander_anchored"
+        # Delegates to the shared cross-layer helper (src/shared/bystander_window.py,
+        # June 14). 03e counts the upstream 03a TRACE samples for the dense-window
+        # test (>= MIN_TRACE_POINTS), pads the anchored span by WINDOW_PAD_SEC
+        # (03a's sampling halo) so a single nearby detection is enough, and skips a
+        # trackless bystander with reason "insufficient_trace".
+        try:
+            from shared.bystander_window import bystander_measurement_window
+        except ImportError:
+            from src.shared.bystander_window import bystander_measurement_window
+        return bystander_measurement_window(
+            det_timestamps, climax_sec, start_sec, end_sec,
+            keep_timestamps=trace_timestamps,
+            min_in_reaction_window=self.MIN_TRACE_POINTS,
+            anchor_span_detections=self.ANCHOR_SPAN_DETECTIONS,
+            pad_sec=self.WINDOW_PAD_SEC,
+            max_anchor_span_sec=self.MAX_ANCHOR_SPAN_SEC,
+            allow_single_detection=True,
+            no_detection_reason="insufficient_trace",
+        )
 
     @staticmethod
     def _aggregate_skip_reason(reasons):

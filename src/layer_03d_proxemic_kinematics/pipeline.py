@@ -409,26 +409,23 @@ class ProxemicKinematicsPipeline:
         "span_capped" (anchored span exceeds MAX_ANCHOR_SPAN_SEC). The reason
         feeds the sentinel provenance in process_video (Issue 2).
         """
-        in_window = sum(1 for t in timestamps if start_sec <= t <= end_sec)
-        if in_window >= 2:
-            return start_sec, end_sec, "reaction_window"
-        if len(timestamps) < 2:
-            return None, None, "single_detection"
-        ts = sorted(timestamps)
-        i = min(range(len(ts)), key=lambda k: abs(ts[k] - climax_sec))
-        lo = max(0, i - self.ANCHOR_SPAN_DETECTIONS)
-        hi = min(len(ts) - 1, i + self.ANCHOR_SPAN_DETECTIONS)
-        if hi == lo:  # single-index span (can't happen with len>=2, defensive)
-            return None, None, "single_detection"
-        ws, we = ts[lo], ts[hi]
-        if we <= ws:  # duplicate timestamps
-            return None, None, "single_detection"
-        if (we - ws) > self.MAX_ANCHOR_SPAN_SEC:
-            # Span cap (June 11): on sparse tracks the neighbor-detection gap
-            # can stretch the anchored span to minutes — that delta measures
-            # locomotion/drift, not a task reaction. No data beats wrong data.
-            return None, None, "span_capped"
-        return ws, we, "bystander_anchored"
+        # Delegates to the shared cross-layer helper (src/shared/bystander_window.py,
+        # June 14). 03d counts DETECTIONS for the dense-window test and needs >= 2
+        # (a bbox/depth delta has two endpoints), uses no padding, and skips a
+        # sparser track with reason "single_detection".
+        try:
+            from shared.bystander_window import bystander_measurement_window
+        except ImportError:
+            from src.shared.bystander_window import bystander_measurement_window
+        return bystander_measurement_window(
+            timestamps, climax_sec, start_sec, end_sec,
+            min_in_reaction_window=2,
+            anchor_span_detections=self.ANCHOR_SPAN_DETECTIONS,
+            pad_sec=0.0,
+            max_anchor_span_sec=self.MAX_ANCHOR_SPAN_SEC,
+            allow_single_detection=False,
+            no_detection_reason="single_detection",
+        )
 
     @staticmethod
     def _box_area(b):
