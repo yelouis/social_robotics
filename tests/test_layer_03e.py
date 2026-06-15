@@ -404,3 +404,108 @@ def test_per_person_failure_isolated(mock_data_paths, monkeypatch):
     res = p.process_video(entry)  # must not raise
     assert res["skipped_reason"] == "error"
 
+
+# ------------------------------------------------------------------
+#  June 14 Issue 2 (NoFace-zero): lost-tracking samples are missing data
+# ------------------------------------------------------------------
+
+def test_noface_samples_treated_as_missing(mock_data_paths):
+    """`target='NoFace'` samples must become NaN (missing), not a real 0.0 reading,
+    so a window dominated by NoFace is rejected (over_interpolated) instead of
+    fabricating a step-edge 'nod'."""
+    p = _pipe(mock_data_paths)
+    t_arr = np.linspace(0, 5, 25)
+    trace = []
+    for i, t in enumerate(t_arr):
+        if i < 14:  # 14/25 = 0.56 NoFace > MAX_INTERPOLATED_FRACTION (0.3)
+            trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
+        else:
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": 0.01, "yaw_rad": 0.01, "target": "Face"})
+    p.attention_data["vid_nf"] = {"video_id": "vid_nf", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_nf", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    res = p.process_video(entry)
+    assert res["skipped_reason"] == "over_interpolated"
+
+
+def test_small_noface_fraction_still_detects(mock_data_paths):
+    """A few NoFace samples are bridged (and counted in interpolated_fraction) but a
+    genuine nod still survives — NoFace is missing data, not a hard reject."""
+    p = _pipe(mock_data_paths)
+    t_arr = np.linspace(0, 5, 30)
+    pitch = 0.1 * np.sin(2 * np.pi * 1.0 * t_arr)
+    trace = []
+    for i, (t, pp) in enumerate(zip(t_arr, pitch)):
+        if i in (10, 11):  # 2/30 NoFace
+            trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
+        else:
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "target": "Face"})
+    p.attention_data["vid_sm"] = {"video_id": "vid_sm", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_sm", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    res = p.process_video(entry)
+    pr = res["tasks_analyzed"][0]["per_person"][0]
+    assert pr["interpolated_fraction"] > 0  # the NoFace samples were counted as missing
+    assert pr["gesture_detected"] == "affirming_nod"  # the real nod still detected
+
+
+# ------------------------------------------------------------------
+#  June 14 Issue 1: prefer true HEAD POSE over gaze (Option A)
+# ------------------------------------------------------------------
+
+def _hp_trace(t_arr, head_pitch=None, gaze_pitch=None):
+    out = []
+    for i, t in enumerate(t_arr):
+        s = {"t": float(t), "score": 0.9, "target": "Face",
+             "pitch_rad": float(gaze_pitch[i]) if gaze_pitch is not None else 0.0,
+             "yaw_rad": 0.0}
+        if head_pitch is not None:
+            s["head_pitch_rad"] = head_pitch[i]
+            s["head_yaw_rad"] = 0.0
+        out.append(s)
+    return out
+
+
+def test_prefers_head_pose_and_ignores_gaze_oscillation(mock_data_paths):
+    """The crux of Issue 1: oscillating GAZE with a FLAT head must NOT be a nod
+    once head pose is available — 03e uses head pose and scores 'none'."""
+    p = _pipe(mock_data_paths)
+    t = np.linspace(0, 5, 30)
+    trace = _hp_trace(t, head_pitch=[0.0] * len(t), gaze_pitch=0.15 * np.sin(2 * np.pi * 2.0 * t))
+    p.attention_data["vid_hp"] = {"video_id": "vid_hp", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_hp", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    pr = p.process_video(entry)["tasks_analyzed"][0]["per_person"][0]
+    assert pr["signal_source"] == "head_pose"
+    assert pr["gesture_detected"] == "none"
+
+
+def test_head_pose_detects_real_nod(mock_data_paths):
+    """A genuine head-pitch oscillation is detected via head pose."""
+    p = _pipe(mock_data_paths)
+    t = np.linspace(0, 5, 30)
+    trace = _hp_trace(t, head_pitch=list(0.15 * np.sin(2 * np.pi * 2.0 * t)))
+    p.attention_data["vid_hn"] = {"video_id": "vid_hn", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_hn", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    pr = p.process_video(entry)["tasks_analyzed"][0]["per_person"][0]
+    assert pr["signal_source"] == "head_pose"
+    assert pr["gesture_detected"] == "affirming_nod"
+
+
+def test_falls_back_to_gaze_without_head_fields(mock_data_paths):
+    """Old 03a traces (no head_* fields) still work via gaze, unchanged."""
+    p = _pipe(mock_data_paths)
+    entry = {"video_id": "vid_nod", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    pr = p.process_video(entry)["tasks_analyzed"][0]["per_person"][0]
+    assert pr["signal_source"] == "gaze"
+    assert pr["gesture_detected"] == "affirming_nod"
+
+
+def test_null_head_pose_is_missing_not_zero(mock_data_paths):
+    """head_pitch_rad=None (FaceLandmarker tracking-loss) is treated as missing
+    (NaN) — a window mostly without head pose is over_interpolated, not a nod."""
+    p = _pipe(mock_data_paths)
+    t = np.linspace(0, 5, 25)
+    head_pitch = [None if i < 16 else 0.01 for i in range(len(t))]  # 16/25 missing
+    trace = _hp_trace(t, head_pitch=head_pitch)
+    p.attention_data["vid_hm"] = {"video_id": "vid_hm", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_hm", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    assert p.process_video(entry)["skipped_reason"] == "over_interpolated"
+

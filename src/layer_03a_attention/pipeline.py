@@ -56,6 +56,14 @@ MIN_FACE_CONF = float(_os.getenv("SR_03A_MIN_FACE_CONF", "0.5"))
 REDETECT_IOU_THRESH = float(_os.getenv("SR_03A_REDETECT_IOU", "0.1"))
 ENABLE_FACE_GATE = _os.getenv("SR_03A_FACE_GATE", "1").lower() in ("1", "true", "yes")
 ENABLE_BBOX_REDETECT = _os.getenv("SR_03A_BBOX_REDETECT", "1").lower() in ("1", "true", "yes")
+# Head pose (docs/03e Issue 1, Option A): emit head_pitch_rad/head_yaw_rad from a
+# MediaPipe FaceLandmarker run on the SAME face crop used for gaze, so 03e can
+# detect nod/shake from true head orientation instead of gaze direction. Additive
+# + gated: if the asset/mediapipe is missing, no head_* fields are emitted and 03e
+# transparently falls back to gaze. FaceLandmarker has its own tracking-loss on
+# small faces, so a present-face crop may still yield no head pose (-> null).
+HEAD_POSE_MODEL_PATH = _PROJECT_ROOT / "models" / "mediapipe" / "face_landmarker.task"
+ENABLE_HEAD_POSE = _os.getenv("SR_03A_HEAD_POSE", "1").lower() in ("1", "true", "yes")
 # Window-restricted sampling (scaling Idea 1): only ~19% of clip-time contains a
 # bystander, so process just the +/-WINDOW_PAD_SEC intervals around real bystander
 # detections and seek past the gaps. WINDOW_PAD_SEC must match the per-sample
@@ -126,6 +134,8 @@ class AttentionLayerPipeline:
         # Lazy-loaded crop-validation models (Resolved Issues 1 & 2).
         self._face_detector = None
         self._pose_model = None
+        self._head_pose_estimator = None  # docs/03e Issue 1
+        self.enable_head_pose = ENABLE_HEAD_POSE and HEAD_POSE_MODEL_PATH.exists()
         # Resolved Issue 6 (A'): instance-level so tests (and callers running on
         # synthetic fixtures) can disable the clip gate like enable_face_gate.
         self.enable_face_quality_gate = ENABLE_FACE_QUALITY_GATE
@@ -206,6 +216,22 @@ class AttentionLayerPipeline:
             print(f"[03a] Face gate error (passing crop through): {e}")
             return True  # an outage must not silently zero out every bystander
 
+    def _estimate_head_pose(self, crop_bgr):
+        """(head_pitch_rad, head_yaw_rad) for the crop, or None (docs/03e Issue 1).
+
+        None means "no head pose for this sample" — the caller emits null head_*
+        fields and 03e treats them as missing (NaN), never as a real 0.0.
+        """
+        if not self.enable_head_pose:
+            return None
+        if self._head_pose_estimator is None:
+            try:
+                from shared.head_pose import HeadPoseEstimator
+            except ImportError:
+                from src.shared.head_pose import HeadPoseEstimator
+            self._head_pose_estimator = HeadPoseEstimator(HEAD_POSE_MODEL_PATH)
+        return self._head_pose_estimator.estimate(crop_bgr)
+
     @staticmethod
     def _iou(a, b):
         ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
@@ -249,6 +275,12 @@ class AttentionLayerPipeline:
         if getattr(self, '_pose_model', None) is not None:
             del self._pose_model
             self._pose_model = None
+        if getattr(self, '_head_pose_estimator', None) is not None:
+            try:
+                self._head_pose_estimator.close()
+            except Exception:
+                pass
+            self._head_pose_estimator = None
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
@@ -728,7 +760,8 @@ class AttentionLayerPipeline:
                     if not self._crop_has_face(crop):
                         traces[pid].append({
                             "t": round(current_t, 2), "score": 0.0,
-                            "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"
+                            "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace",
+                            "head_pitch_rad": None, "head_yaw_rad": None
                         })
                         if last_scores[pid] >= 0.0 and abs(0.0 - last_scores[pid]) > self.BURST_DELTA_THRESHOLD:
                             burst_until_t[pid] = current_t + self.BURST_DURATION_SEC
@@ -770,6 +803,12 @@ class AttentionLayerPipeline:
 
             for idx, (pid, cx, cy, x1, y1, x2, y2) in enumerate(batch_info):
                 pitch_rad, yaw_rad = batch_results[idx]
+                # docs/03e Issue 1: true head orientation from the SAME crop the
+                # gaze model used. None when FaceLandmarker finds no face (its own
+                # tracking-loss) -> null head_* -> 03e treats it as missing (NaN).
+                hp = self._estimate_head_pose(batch_crops[idx])
+                head_pitch_rad = round(hp[0], 4) if hp else None
+                head_yaw_rad = round(hp[1], 4) if hp else None
                 score = 0.0
                 target_label = "Unknown"
 
@@ -841,7 +880,9 @@ class AttentionLayerPipeline:
                     "score": score,
                     "pitch_rad": round(pitch_rad, 4),
                     "yaw_rad": round(yaw_rad, 4),
-                    "target": target_label
+                    "target": target_label,
+                    "head_pitch_rad": head_pitch_rad,
+                    "head_yaw_rad": head_yaw_rad
                 })
 
                 if last_scores[pid] >= 0.0 and abs(score - last_scores[pid]) > self.BURST_DELTA_THRESHOLD:
