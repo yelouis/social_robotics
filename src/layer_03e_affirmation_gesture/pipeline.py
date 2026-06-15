@@ -232,8 +232,20 @@ class AffirmationGesturePipeline:
                     # and interpolated_fraction never flags them. Treat NoFace as the
                     # missing data it is -> NaN, so it flows through _fill_nan + the
                     # interpolated_fraction guard instead of forming real-valued steps.
-                    pitch = np.array([np.nan if x.get('target') == 'NoFace' else x['pitch_rad'] for x in window_trace])
-                    yaw = np.array([np.nan if x.get('target') == 'NoFace' else x['yaw_rad'] for x in window_trace])
+                    # docs/03e Issue 1 (Option A): prefer true HEAD POSE
+                    # (head_pitch_rad/head_yaw_rad from 03a's FaceLandmarker) over
+                    # gaze — gaze moves with eye saccades while the head is still.
+                    # A sample's head pose is null when FaceLandmarker found no face
+                    # (its own tracking-loss) or the sample was NoFace, so treat
+                    # null as missing (NaN) exactly like the gaze NoFace handling.
+                    if any(x.get('head_pitch_rad') is not None for x in window_trace):
+                        signal_source = 'head_pose'
+                        pitch = np.array([x['head_pitch_rad'] if x.get('head_pitch_rad') is not None else np.nan for x in window_trace])
+                        yaw = np.array([x['head_yaw_rad'] if x.get('head_yaw_rad') is not None else np.nan for x in window_trace])
+                    else:
+                        signal_source = 'gaze'
+                        pitch = np.array([np.nan if x.get('target') == 'NoFace' else x['pitch_rad'] for x in window_trace])
+                        yaw = np.array([np.nan if x.get('target') == 'NoFace' else x['yaw_rad'] for x in window_trace])
 
                     # Interpolate NaNs and capture how much of each axis was bridged.
                     # If too much of the trace was reconstructed, downstream filtering
@@ -301,6 +313,7 @@ class AffirmationGesturePipeline:
                         "confidence": round(conf, 2),
                         "measurement_window_sec": [round(float(w_start), 2), round(float(w_end), 2)],
                         "window_source": w_source,
+                        "signal_source": signal_source,
                     })
                 except Exception as e:
                     # One bystander's failure must not poison the rest of the clip.
