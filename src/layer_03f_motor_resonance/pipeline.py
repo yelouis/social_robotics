@@ -37,6 +37,14 @@ class MotorResonancePipeline:
     KPT_CONFIDENCE_THRESHOLD = 0.5
     VELOCITY_NORMALIZER = 0.5
     VELOCITY_CAP = 10.0
+    # Camera-motion-through-bbox gate (docs/03f Resolved #10): pose velocity is
+    # only trusted when at least this many GENUINE Node-02 detections fall inside
+    # the measurement window. With a single carried bbox (or an over-sparse,
+    # mostly-interpolated track) the box is effectively fixed/drifting, so a
+    # panning camera drags the *scene* through it and YOLO-pose reports apparent
+    # keypoint velocity that is time-locked to the jolt by construction — a
+    # camera-motion self-correlation, not the bystander's own body motion.
+    MIN_GENUINE_DETECTIONS = 2
     RESONANCE_WINDOW_SEC = 0.5
     # Issue 1 (June 15, Option A): a flinch must be IMPULSIVE — the peak velocity
     # must exceed the bystander's OWN median velocity by this ratio. Sustained
@@ -513,6 +521,17 @@ class MotorResonancePipeline:
             return True, delay
         return False, 0.0
 
+    @staticmethod
+    def _has_dense_track(timestamps, w_start, w_end, min_detections):
+        """Camera-motion-through-bbox gate (docs/03f Resolved #10): pose velocity
+        is only trustworthy when at least `min_detections` GENUINE Node-02
+        detections fall inside the measurement window `[w_start, w_end]`. A single
+        carried bbox (or an over-sparse, mostly-interpolated track) is effectively
+        a fixed/drifting box: a panning camera drags the scene through it and
+        manufactures apparent keypoint velocity time-locked to the jolt. Counts
+        the genuine detections — not the dense interpolated samples."""
+        return sum(1 for t in timestamps if w_start <= t <= w_end) >= min_detections
+
     def _extract_and_correlate_pose(self, video_path, timestamps, bboxes,
                                     start_sec, end_sec, climax_sec, ego_spikes,
                                     vertical_flow_timeline):
@@ -649,7 +668,16 @@ class MotorResonancePipeline:
         if not pose_velocities and not pose_spine_angles:
             return None
 
-        if pose_velocities:
+        # Camera-motion-through-bbox gate (docs/03f Resolved #10): only trust
+        # velocity when the bystander has >= MIN_GENUINE_DETECTIONS genuine
+        # in-window detections. A single carried bbox / over-sparse track lets a
+        # panning camera manufacture keypoint velocity time-locked to the jolt by
+        # construction, so sparser tracks emit velocity 0 / no resonance (honest).
+        # Mirroring (spine-angle correlation) is a separate signal, left untouched.
+        dense_track = self._has_dense_track(
+            timestamps, w_start, w_end, self.MIN_GENUINE_DETECTIONS,
+        )
+        if pose_velocities and dense_track:
             max_vel = 0.0
             peak_t = None
             for t, vel in pose_velocities:
