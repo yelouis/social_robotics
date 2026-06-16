@@ -193,7 +193,7 @@ def test_keypoint_alignment_uses_dict_not_list(pipeline_instance, tmp_path):
         timestamps = [0.5, 1.0]
         bboxes = [[0, 0, 200, 200], [0, 0, 200, 200]]
         result = pipeline_instance._extract_and_correlate_pose(
-            video_path, timestamps, bboxes, 0.0, 2.0, [{'time': 0.5, 'v_flow': 0.0}], []
+            video_path, timestamps, bboxes, 0.0, 2.0, 1.0, [{'time': 0.5, 'v_flow': 0.0}], []
         )
 
         if result is not None:
@@ -203,6 +203,18 @@ def test_keypoint_alignment_uses_dict_not_list(pipeline_instance, tmp_path):
             assert result['velocity_peak'] >= 0
     finally:
         pipeline_instance.model = original_model
+
+
+def test_interp_bbox_midpoint_and_carry():
+    """Issue 1 dense sampling: the bbox is linearly interpolated between sparse
+    Node-02 detections, and carried at the endpoints outside the detected range."""
+    from src.layer_03f_motor_resonance.pipeline import MotorResonancePipeline as P
+    ts = [0.0, 10.0]
+    bb = [[0, 0, 100, 100], [100, 100, 300, 300]]
+    assert P._interp_bbox(5.0, ts, bb) == [50.0, 50.0, 200.0, 200.0]   # halfway
+    assert P._interp_bbox(-1.0, ts, bb) == [0, 0, 100, 100]            # before first -> carry
+    assert P._interp_bbox(99.0, ts, bb) == [100, 100, 300, 300]        # after last -> carry
+    assert P._interp_bbox(5.0, [], []) is None                         # no detections
 
 
 # ---------------------------------------------------------------------------
