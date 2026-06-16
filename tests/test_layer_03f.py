@@ -217,6 +217,31 @@ def test_interp_bbox_midpoint_and_carry():
     assert P._interp_bbox(5.0, [], []) is None                         # no detections
 
 
+def test_resonance_decision_rejects_sustained_and_nondominant():
+    """Issue 1 Option A gate: a resonance must be an IMPULSIVE flinch time-locked
+    to the single DOMINANT ego spike — not sustained motion (eating) and not a
+    coincidence with a weaker spike."""
+    from src.layer_03f_motor_resonance.pipeline import MotorResonancePipeline as P
+    floor, ratio, win = 0.5, 3.0, 0.5
+    spikes = [{'time': 10.0, 'score': 0.4}, {'time': 12.0, 'score': 0.9}]  # dominant @ 12.0
+
+    # Impulsive flinch (low baseline, sharp peak) 0.1 s after the DOMINANT spike -> detect
+    impulsive = [(11.8, 0.1), (12.1, 5.0), (12.3, 0.1), (12.5, 0.1)]
+    det, delay = P._resonance_decision(12.1, 5.0, impulsive, spikes, floor, ratio, win)
+    assert det is True and round(delay, 2) == 0.1
+
+    # Sustained motion (eating): high but FLAT -> peak ~ baseline -> reject
+    sustained = [(12.0, 4.0), (12.1, 5.0), (12.2, 4.5), (12.3, 4.2)]
+    assert P._resonance_decision(12.1, 5.0, sustained, spikes, floor, ratio, win)[0] is False
+
+    # Impulsive but near only the WEAK spike (@10.0); the gate checks the dominant (@12.0) -> reject
+    near_weak = [(9.9, 0.1), (10.1, 5.0), (10.3, 0.1)]
+    assert P._resonance_decision(10.1, 5.0, near_weak, spikes, floor, ratio, win)[0] is False
+
+    # Below the magnitude floor -> reject
+    assert P._resonance_decision(12.1, 0.3, [(12.0, 0.0), (12.1, 0.3)], spikes, floor, ratio, win)[0] is False
+
+
 # ---------------------------------------------------------------------------
 # 4. Full pipeline schema validation
 # ---------------------------------------------------------------------------
