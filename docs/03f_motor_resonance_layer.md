@@ -99,5 +99,20 @@ Videos that legitimately produce no output (missing file, no bystanders/tasks, n
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_None at this time._
+### Issue 1: 03f Scores 0/50 — Bystander Pose Needs ≥2 Detections in the Strict Wearer-Climax Window, but Detections Are ~6 s-Cadenced and ~10 s-Offset
+**Status**: ⚠️ Confirmed Unresolved — The June 14 50-clip smell test (`e2e_reports/2026_06_14_layer03f_50/`) scored **0/50 `motor_resonance_detected` and 0/50 `mirroring_detected`**: **44/50** records are `no_pose_data` sentinels, and the 6 "scored" clips all carry `bystander_pose_velocity_peak = 0.0` / `empathy_scalar = 0.0`. Root cause is the wearer-vs-bystander window mismatch — the same family as 03b (Resolved #2), 03d (Resolved #1), and 03e (Resolved #4) — that 03f never received: `process_video` extracts bystander pose only at the Node-02 detection timestamps that fall **inside the strict `task_reaction_window_sec`** (the wearer's optical-flow climax ±~1 s), but bystander detections sit a **median 10.1 s (max 112.8 s)** from the climax, so **41/50 clips have their nearest detection > 1 s away** → the window holds **0** bystander detections → `no_pose_data`. Even the ≤ 7 clips with an in-window detection get only **1** (Node-02's ~6 s cadence vs a 2 s window), and `bystander_pose_velocity_peak` needs **≥ 2** consecutive keypoint frames within `PREV_KPTS_CARRY_FORWARD_SEC` → velocity 0.0 (e.g. `044a7a23`: a large bystander is plainly present at t = 192 s, but a single in-window detection yields no velocity). The wearer side is healthy — `ego_kinetic_chaos_score` is 0.97–1.0 — so only the bystander-pose half is starved. **NB:** 03f's resonance premise requires the bystander pose **temporally near** the wearer's jolt, so a naive 03e-style bystander-anchor that moves the window away from the climax would measure motion but not *resonance*.
+
+**Option A (recommended)**: **Dense in-window pose sampling (decouple from Node-02 detections).** 03f already decodes the video, so sample YOLO-pose at a fixed cadence (e.g. a new `TARGET_POSE_FPS`) across the reaction window on the bystander's bbox interpolated/carried between Node-02 detections, instead of only at the sparse detection timestamps. This yields ≥ 2 pose frames for velocity wherever the bystander is visible during the jolt, while keeping the climax-centered window. The window selection should reuse the shared `bystander_measurement_window` helper (`src/shared/bystander_window.py` — docs/03 Cross-Layer § Shared Helper), making 03f its third consumer alongside 03d/03e.
+  - *Pros*: Restores velocity computation **and** preserves the resonance premise (window stays on the wearer's jolt); reuses the decode 03f already performs; no upstream Node-02 change; degrades honestly when the bystander is genuinely absent at the jolt.
+  - *Cons*: More YOLO-pose inferences per clip (MPS cost); needs bbox interpolation/tracking between sparse detections; thresholds (`VELOCITY_NORMALIZER`, `RESONANCE_WINDOW_SEC`) want a re-check against the denser sampling.
+
+**Option B**: **Widen the pose-pairing window around the climax.** Expand pairing to climax ± `RESONANCE_PAIRING_SEC` (a few seconds) so the median-~10 s-away detections are captured, pairing any bystander flinch in that wider span with the wearer spike.
+  - *Pros*: Simple; captures nearby detections; keeps a (looser) temporal link to the jolt.
+  - *Cons*: A flinch seconds after the jolt is a weaker "resonance" and dilutes the causal co-occurrence claim; still ≤ 1 detection per clip on the sparse cadence unless combined with Option A.
+
+**Option C**: **Accept as an honest modality limit.** Motor resonance requires the bystander to be pose-resolvable *during* the wearer's jolt, which is rare in egocentric footage; keep emitting honest `no_pose_data` and treat 03f as low-yield on this corpus.
+  - *Pros*: Zero change or risk; fully honest.
+  - *Cons*: The layer contributes nothing on this corpus; the (healthy) ego-chaos extraction is wasted.
+
+Your selection: _____
 
