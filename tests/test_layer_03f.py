@@ -242,6 +242,25 @@ def test_resonance_decision_rejects_sustained_and_nondominant():
     assert P._resonance_decision(12.1, 0.3, [(12.0, 0.0), (12.1, 0.3)], spikes, floor, ratio, win)[0] is False
 
 
+def test_has_dense_track_gates_single_and_sparse():
+    """Camera-motion-through-bbox gate (Resolved #10): velocity is only trusted
+    when >= min_detections GENUINE detections fall inside the measurement window.
+    A single carried bbox (or a track whose only in-window detection is one) lets
+    a panning camera manufacture keypoint velocity through a fixed box."""
+    from src.layer_03f_motor_resonance.pipeline import MotorResonancePipeline as P
+
+    # Single in-window detection -> fixed/carried box -> gated (the 66d4121f case)
+    assert P._has_dense_track([12.0], 11.0, 13.0, 2) is False
+    # Two in-window detections -> a real track -> trusted
+    assert P._has_dense_track([11.5, 12.5], 11.0, 13.0, 2) is True
+    # Boundaries are inclusive
+    assert P._has_dense_track([11.0, 13.0], 11.0, 13.0, 2) is True
+    # Detections OUTSIDE the window do not count: only 12.5 is in [11, 13] -> gated
+    assert P._has_dense_track([0.5, 6.0, 12.5, 40.0], 11.0, 13.0, 2) is False
+    # No detections at all -> gated
+    assert P._has_dense_track([], 11.0, 13.0, 2) is False
+
+
 # ---------------------------------------------------------------------------
 # 4. Full pipeline schema validation
 # ---------------------------------------------------------------------------
