@@ -1,4 +1,5 @@
 import os
+import bisect
 import json
 import traceback
 import cv2
@@ -26,6 +27,13 @@ class MotorResonancePipeline:
     SPIKE_RELATIVE_THRESHOLD = 0.7
     FRAME_RESIZE_FACTOR = 0.5
     TARGET_FLOW_FPS = 10.0
+    # Issue 1 (June 14, Option A): bystander pose is sampled DENSELY at this
+    # cadence across the (bystander-anchored) window — decoupled from Node-02's
+    # ~6s-cadenced detections — so velocity (needs >=2 pose frames) is computable
+    # even when only one detection lands in the strict reaction window.
+    TARGET_POSE_FPS = 10.0
+    ANCHOR_SPAN_DETECTIONS = 1
+    MAX_ANCHOR_SPAN_SEC = 30.0
     KPT_CONFIDENCE_THRESHOLD = 0.5
     VELOCITY_NORMALIZER = 0.5
     VELOCITY_CAP = 10.0
@@ -176,6 +184,7 @@ class MotorResonancePipeline:
                 continue
 
             start_sec, end_sec = reaction_window
+            climax_sec = meta.get('task_climax_sec', (start_sec + end_sec) / 2.0)
 
             # Step 1: EgoMotion Extraction (returns chaos spikes for flinch
             # correlation AND a separate vertical-flow timeline that mirroring
@@ -201,7 +210,7 @@ class MotorResonancePipeline:
                 # Step 2 & 3: Pose Extraction & Correlating Resonance
                 pose_analysis = self._extract_and_correlate_pose(
                     video_path, timestamps_sec, bounding_boxes,
-                    start_sec, end_sec, ego_spikes, vertical_flow_timeline,
+                    start_sec, end_sec, climax_sec, ego_spikes, vertical_flow_timeline,
                 )
 
                 if pose_analysis:
@@ -446,9 +455,54 @@ class MotorResonancePipeline:
             return 0.0
         return float(inter / union)
 
+    @staticmethod
+    def _interp_bbox(t, timestamps, bboxes):
+        """Linear-interpolate the bystander bbox at time `t` from the sparse
+        Node-02 detections (Issue 1 dense pose sampling). Carries the nearest
+        endpoint when `t` is outside the detected range. Returns [x1,y1,x2,y2]."""
+        pairs = sorted(zip(timestamps, bboxes), key=lambda p: p[0])
+        if not pairs:
+            return None
+        if t <= pairs[0][0]:
+            return list(pairs[0][1])
+        if t >= pairs[-1][0]:
+            return list(pairs[-1][1])
+        ts_list = [p[0] for p in pairs]
+        j = bisect.bisect_right(ts_list, t)
+        t0, b0 = pairs[j - 1]
+        t1, b1 = pairs[j]
+        if t1 == t0:
+            return list(b1)
+        f = (t - t0) / (t1 - t0)
+        return [b0[k] + f * (b1[k] - b0[k]) for k in range(4)]
+
     def _extract_and_correlate_pose(self, video_path, timestamps, bboxes,
-                                    start_sec, end_sec, ego_spikes,
+                                    start_sec, end_sec, climax_sec, ego_spikes,
                                     vertical_flow_timeline):
+        # Issue 1 (June 14, Option A): the bystander's Node-02 detections are
+        # ~6s-cadenced and a median ~10s from the wearer climax, so the strict
+        # reaction window usually held 0-1 detections and velocity (needs >=2 pose
+        # frames) was always 0. Anchor the pose window to where the bystander is
+        # actually detected near the climax (shared cross-layer helper), then
+        # sample pose DENSELY at TARGET_POSE_FPS across it, interpolating the bbox
+        # between the sparse detections. Keeps the climax-centered reaction window
+        # whenever the bystander is detected there at all (min_in_reaction_window=1).
+        try:
+            from shared.bystander_window import bystander_measurement_window
+        except ImportError:
+            from src.shared.bystander_window import bystander_measurement_window
+        w_start, w_end, _ = bystander_measurement_window(
+            timestamps, climax_sec, start_sec, end_sec,
+            min_in_reaction_window=1,
+            anchor_span_detections=self.ANCHOR_SPAN_DETECTIONS,
+            pad_sec=0.0,
+            max_anchor_span_sec=self.MAX_ANCHOR_SPAN_SEC,
+            allow_single_detection=True,
+            no_detection_reason="no_pose_data",
+        )
+        if w_start is None:
+            return None
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             return None
@@ -457,23 +511,36 @@ class MotorResonancePipeline:
             if fps == 0:
                 return None
 
-            valid_frames = []
-            for t, bbox in zip(timestamps, bboxes):
-                if start_sec <= t <= end_sec:
-                    valid_frames.append((t, bbox))
-
-            valid_frames.sort(key=lambda x: x[0])
+            pose_stride = max(1, int(round(fps / self.TARGET_POSE_FPS)))
+            start_frame = max(0, int(w_start * fps))
+            end_frame = int(w_end * fps)
 
             pose_velocities = []
             pose_spine_angles = []
             prev_kpts_by_idx = None
             prev_t = None
 
-            for t, bbox in valid_frames:
-                frame_idx = int(t * fps)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            # One seek to the window start (sparse, acceptable), then a sequential
+            # grab()/read() walk — dense sampling makes per-step cap.set the
+            # keyframe-decode waste that Resolved #6 removed from ego-motion.
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            fidx = start_frame
+            while fidx <= end_frame:
+                if (fidx - start_frame) % pose_stride != 0:
+                    if not cap.grab():
+                        break
+                    fidx += 1
+                    continue
                 ret, frame = cap.read()
                 if not ret:
+                    break
+                t = fidx / fps
+                fidx += 1
+
+                # Interpolate the bbox at this dense timestamp from the sparse
+                # Node-02 detections (carry the nearest endpoint outside range).
+                bbox = self._interp_bbox(t, timestamps, bboxes)
+                if bbox is None:
                     continue
 
                 x1, y1, x2, y2 = map(int, bbox)
