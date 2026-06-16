@@ -286,27 +286,6 @@ class TestDehydratedExport(unittest.TestCase):
         self.assertTrue(row['03e_affirmation_gesture_any_nod_detected'])
         self.assertFalse(row['03e_affirmation_gesture_any_shake_detected'])
 
-    def test_layer_03g_summary_scalars_surface_as_columns(self):
-        path = self.temp_dir_path / "03g_shared_reality_result.json"
-        with open(path, 'w') as f:
-            json.dump([
-                {
-                    "video_id": "vid1",
-                    "layer": "03g_shared_reality",
-                    "tasks_analyzed": [
-                        {"task_id": "t_01",
-                         "post_climax_camera_shift_vector": [12.0, 3.0],
-                         "bystander_centered_in_fov": True,
-                         "social_reference_sought": True}
-                    ],
-                }
-            ], f)
-
-        df = DataAggregator(str(self.temp_dir_path)).aggregate()
-        row = df[df['video_id'] == 'vid1'].iloc[0]
-        self.assertTrue(row['03g_shared_reality_any_social_reference'])
-        self.assertTrue(row['03g_shared_reality_any_bystander_centered'])
-
     # ------------------------------------------------------------------
     # Resolved Issue 11 — top-level dict flattening
     # ------------------------------------------------------------------

@@ -38,7 +38,7 @@ To exercise different YOLO-pose detection regimes and avoid Moondream gate-class
 | `handoff` | Wearer extends a tool/object; bystander reaches to receive it; their hand and face are visible. | 03f Motor Resonance, 03d Proxemic Kinematics |
 | `flinch` | Wearer drops or fumbles an object; bystander visibly startles or recoils. | 03f Motor Resonance, 03e Affirmation Gesture |
 | `nod_smile` | Wearer demonstrates something correctly; bystander nods approvingly and smiles. | 03e Affirmation Gesture, 03b Reasonable Emotion |
-| `gaze_check` | Wearer pauses mid-task and the bystander glances up to meet the wearer's gaze. | 03a Attention, 03g Shared Reality |
+| `gaze_check` | Wearer pauses mid-task and the bystander glances up to meet the wearer's gaze. | 03a Attention |
 
 Each E2E run uses a small set of 1-3 synthetic validation videos in total (with scenario tags rotated round-robin) to stay within a tractable local generation-time budget (see § 4). A scenario can fail the gate without dragging the whole synthetic-class pass rate down — Layer 02's regression alert fires only when *any* scenario tag's pass rate falls below the run-over-run baseline by more than 1 video.
 

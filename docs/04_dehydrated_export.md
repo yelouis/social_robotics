@@ -34,12 +34,12 @@ Before export, the individual layer output JSONs must be merged into a single ma
      {
        "schema_version": "1.0.0+a3f9c2",
        "export_timestamp": "2026-05-18T00:00:00Z",
-       "active_layers": ["03a", "03b", "03c", "03d", "03e", "03f", "03g"],
+       "active_layers": ["03a", "03b", "03c", "03d", "03e", "03f"],
        "pipeline_git_sha": "abc1234"
      }
      ```
    - `schema_version` follows an additive-only protocol. The minor version can be bumped, and a SHA-256 hash suffix of the sorted column names (`+<short_hash>`) is appended. This allows downstream consumers to mechanically detect schema drift between exports.
-   - **No speculative columns**: because the schema is additive-only and hash-stamped, registry columns must never be pre-wired for capabilities that have not landed (e.g. 03g Aria gaze-telemetry columns like `any_aria_gaze` were deliberately *not* added while that approach was under consideration; 03g has since formally deferred Aria — see its "Deferred Alternative" section). Whoever lands a new layer capability must update `LAYER_SUMMARY_REGISTRY` in the same change, never ahead of it — abandoned pre-wiring would permanently pollute the schema hash.
+   - **No speculative columns**: because the schema is additive-only and hash-stamped, registry columns must never be pre-wired for capabilities that have not landed (e.g. gaze-telemetry columns like `any_aria_gaze` for an approach still under consideration must *not* be added until the capability ships). Whoever lands a new layer capability must update `LAYER_SUMMARY_REGISTRY` in the same change, never ahead of it — abandoned pre-wiring would permanently pollute the schema hash.
 
 ### Memory Management & Dask Fallback
 To prevent Out-Of-Memory (OOM) failures when merging massive Parquets on a single node:
@@ -78,7 +78,5 @@ To guarantee the export structure adheres to safety standards and schema require
    - **Solution** (Option A): Corrected the literals to `any_eq:Approach_Intervention` / `any_eq:Avoidance` and renamed the second column to `any_avoidance_detected` for accuracy (additive-only is preserved — the broken columns never materialized in a real export, so the schema hash is undamaged). Added `tests/test_layer_04.py::TestRegistryEnumSync`, which asserts every `any_eq:` literal in the registry is in the emitting layer's pinned classification vocabulary (03d + 03e), so future enum drift fails the suite instead of silently deadening a column. Centralizing enums into a shared module (Option B) was declined to preserve the "layers are independent scripts" paradigm.
 
 ## ⚠️ Unresolved Issues & Suggestions
-
-*(June 12 cleanup: the former "Aria Gaze Pre-Wiring" deferral entry referenced a 03g Unresolved Issue that no longer exists — 03g integrated the Aria deferral into its design ("Deferred Alternative" section). The underlying rule — never pre-wire speculative registry columns — is now documented under Aggregation Logic §6 above.)*
 
 _No open issues at this time._

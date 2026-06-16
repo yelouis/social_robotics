@@ -46,7 +46,6 @@ The heart of the project. Independent modules analyze the filtered video chunks 
 | **03d** | **Proxemic Kinematics** | Relative depth & physical spacing | Depth Anything V1-Large + SAM ViT-Huge |
 | **03e** | **Affirmation Gesture** | Head nodding & shaking detection | SciPy / Signal Processing |
 | **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | YOLOv8-pose |
-| **03g** | **Shared Reality** | Social referencing & validation seeking | Saliency / Optical Flow |
 
 ### 4. Dehydrated Export
 The final output is a **Dehydrated Social Metadata Dataset**. We never export raw pixels. Instead, we provide:
@@ -74,7 +73,6 @@ The final output is a **Dehydrated Social Metadata Dataset**. We never export ra
     -   [03d: Proxemic Kinematics Layer](docs/03d_proxemic_kinematics_layer.md)
     -   [03e: Affirmation Gesture Layer](docs/03e_affirmation_gesture_layer.md)
     -   [03f: Motor Resonance Layer](docs/03f_motor_resonance_layer.md)
-    -   [03g: Shared Reality Layer](docs/03g_shared_reality_layer.md)
 -   [ML Dependencies & Models](docs/ml_dependencies.md)
 
 ---
