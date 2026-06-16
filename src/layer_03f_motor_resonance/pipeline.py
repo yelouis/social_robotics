@@ -38,6 +38,11 @@ class MotorResonancePipeline:
     VELOCITY_NORMALIZER = 0.5
     VELOCITY_CAP = 10.0
     RESONANCE_WINDOW_SEC = 0.5
+    # Issue 1 (June 15, Option A): a flinch must be IMPULSIVE — the peak velocity
+    # must exceed the bystander's OWN median velocity by this ratio. Sustained
+    # motion (eating, walking) is high-but-flat (ratio ~1) and is rejected; a
+    # defensive flinch is a brief spike above an otherwise-low baseline.
+    RESONANCE_IMPULSE_RATIO = 3.0
     EMPATHY_NORMALIZER = 5.0
     MIRRORING_VFLOW_THRESHOLD = -1.0
     MIRRORING_TIME_WINDOW_SEC = 0.5
@@ -380,7 +385,7 @@ class MotorResonancePipeline:
             return [], vertical_flow_timeline, float(norm_max_chaos)
 
         threshold = max_chaos_score * self.SPIKE_RELATIVE_THRESHOLD
-        spikes = [{'time': ts, 'v_flow': v}
+        spikes = [{'time': ts, 'score': score, 'v_flow': v}
                   for ts, score, v in chaos_scores if score > threshold]
 
         return spikes, vertical_flow_timeline, float(norm_max_chaos)
@@ -475,6 +480,38 @@ class MotorResonancePipeline:
             return list(b1)
         f = (t - t0) / (t1 - t0)
         return [b0[k] + f * (b1[k] - b0[k]) for k in range(4)]
+
+    @staticmethod
+    def _resonance_decision(peak_t, max_vel, pose_velocities, ego_spikes,
+                            vel_floor, impulse_ratio, window_sec):
+        """Issue 1 (June 15, Option A): a motor resonance is an IMPULSIVE flinch
+        time-locked to the single DOMINANT ego jolt — not ordinary motion that
+        coincides with one of the egocentric camera's many spikes.
+
+        (a) Impulsive: the peak velocity must clear `vel_floor` AND exceed the
+            bystander's OWN median velocity by `impulse_ratio` (sustained motion
+            like eating/walking is high-but-flat -> ratio ~1 -> rejected).
+        (b) Dominant-jolt: correlate only with the strongest ego spike (max
+            chaos score), not the whole relative-threshold spike list.
+
+        Returns (resonance_detected, delay_sec)."""
+        if peak_t is None or not pose_velocities:
+            return False, 0.0
+        baseline_vel = float(np.median([v for _, v in pose_velocities]))
+        if not (max_vel >= vel_floor and max_vel >= impulse_ratio * baseline_vel):
+            return False, 0.0
+        dominant = max(
+            ego_spikes,
+            key=lambda s: (s.get('score', 0.0) if isinstance(s, dict) else 0.0),
+            default=None,
+        )
+        if dominant is None:
+            return False, 0.0
+        spike_t = dominant['time'] if isinstance(dominant, dict) else dominant
+        delay = peak_t - spike_t
+        if 0 < delay <= window_sec:
+            return True, delay
+        return False, 0.0
 
     def _extract_and_correlate_pose(self, video_path, timestamps, bboxes,
                                     start_sec, end_sec, climax_sec, ego_spikes,
@@ -626,20 +663,10 @@ class MotorResonancePipeline:
             peak_t = None
             norm_peak_vel = 0.0
 
-        resonance_detected = False
-        min_delay = float('inf')
-
-        if peak_t is not None:
-            for spike in ego_spikes:
-                spike_t = spike['time'] if isinstance(spike, dict) else spike
-                delay = peak_t - spike_t
-                if 0 < delay <= self.RESONANCE_WINDOW_SEC:
-                    resonance_detected = True
-                    if delay < min_delay:
-                        min_delay = delay
-
-        if not resonance_detected:
-            min_delay = 0.0
+        resonance_detected, min_delay = self._resonance_decision(
+            peak_t, max_vel, pose_velocities, ego_spikes,
+            self.VELOCITY_NORMALIZER, self.RESONANCE_IMPULSE_RATIO, self.RESONANCE_WINDOW_SEC,
+        )
 
         empathy_scalar = 0.0
         if resonance_detected:
