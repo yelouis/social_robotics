@@ -54,10 +54,6 @@ LAYER_SUMMARY_REGISTRY = {
         ("per_person.mirroring_scalar", "max", "max_mirroring_scalar"),
         ("per_person.mirroring_detected", "any", "any_mirroring"),
     ],
-    "03g_shared_reality": [
-        ("social_reference_sought", "any", "any_social_reference"),
-        ("bystander_centered_in_fov", "any", "any_bystander_centered"),
-    ],
 }
 
 # Resolved Issue 13: Pandas DataFrame in-memory footprint is typically 5-10x
