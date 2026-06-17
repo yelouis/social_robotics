@@ -332,6 +332,51 @@ class TestDehydratedExport(unittest.TestCase):
         self.assertNotEqual(df.attrs['schema_version'], df2.attrs['schema_version'])
 
     # ------------------------------------------------------------------
+    # Publish-time column rename — strip the internal 03x_ layer-id prefix
+    # ------------------------------------------------------------------
+    def test_export_strips_layer_id_prefix_from_published_columns(self):
+        """Publishing drops the internal 03x_ layer-id token from headers
+        (03f_motor_resonance_max_ego_chaos_score -> motor_resonance_max_ego_chaos_score),
+        keeps the descriptive layer name + metric, leaves manifest columns alone,
+        and recomputes the schema hash on the published names so the metadata
+        fingerprint matches the Parquet."""
+        df = pd.DataFrame([{
+            "video_id": "ego4d_real",
+            "source_dataset": "ego4d",
+            "03f_motor_resonance_max_ego_chaos_score": 0.5,
+            "03c_acoustic_prosody_avg_prosody_scalar": 0.2,
+            "03a_attention_per_person_raw": "[]",
+        }])
+        agg = DataAggregator(str(self.temp_dir_path))
+        df = agg.add_export_metadata(df, active_layers=["03a", "03c", "03f"])
+        pq, meta = DehydratedExporter(str(self.temp_dir_path)).export_parquet(df, filename="renamed.parquet")
+
+        out = pd.read_parquet(pq)
+        prefixes = ("03a_", "03b_", "03c_", "03d_", "03e_", "03f_", "03g_")
+        self.assertFalse(any(c[:4] in prefixes for c in out.columns),
+                         f"published columns still carry a layer-id prefix: {list(out.columns)}")
+        self.assertIn("motor_resonance_max_ego_chaos_score", out.columns)
+        self.assertIn("acoustic_prosody_avg_prosody_scalar", out.columns)
+        self.assertIn("attention_per_person_raw", out.columns)
+        # Manifest columns (no prefix) are untouched.
+        self.assertIn("video_id", out.columns)
+        self.assertIn("source_dataset", out.columns)
+        # The schema-version hash is computed on the PUBLISHED column names.
+        import hashlib
+        m = json.loads(Path(meta).read_text())
+        expected = hashlib.sha256(",".join(sorted(out.columns)).encode("utf-8")).hexdigest()[:6]
+        self.assertTrue(m["schema_version"].endswith("+" + expected),
+                        f"{m['schema_version']} should end with +{expected}")
+
+    def test_export_rename_collision_raises(self):
+        """If stripping 03x_ would merge two columns into one header, publishing
+        must fail loudly rather than silently drop a column."""
+        df = pd.DataFrame([{"video_id": "v", "03a_dup": 1, "03b_dup": 2}])
+        with self.assertRaises(ValueError) as cm:
+            DehydratedExporter(str(self.temp_dir_path)).export_parquet(df, filename="collide.parquet")
+        self.assertIn("collided", str(cm.exception))
+
+    # ------------------------------------------------------------------
     # Resolved Issue 15 — graceful handling of records without video_id
     # ------------------------------------------------------------------
     def test_record_missing_video_id_is_skipped_not_crash(self):

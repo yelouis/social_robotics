@@ -33,9 +33,9 @@ def rehydrate(metadata_path: str, raw_videos_dir: str):
             matched_count += 1
             print(f"Matched video: {video_id}")
             # Example of extracting trace data if 03a_attention ran
-            if '03a_attention_per_person_raw' in row and pd.notna(row['03a_attention_per_person_raw']):
+            if 'attention_per_person_raw' in row and pd.notna(row['attention_per_person_raw']):
                 try:
-                    per_person = json.loads(row['03a_attention_per_person_raw'])
+                    per_person = json.loads(row['attention_per_person_raw'])
                     print(f"  - Features: Found {len(per_person)} people tracked.")
                 except:
                     pass
