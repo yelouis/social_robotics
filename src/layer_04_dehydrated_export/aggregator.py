@@ -131,6 +131,15 @@ def _apply_aggregation(values: list, agg: str) -> Optional[Any]:
     raise ValueError(f"Unknown aggregation '{agg}'")
 
 
+def schema_column_hash(columns) -> str:
+    """6-char SHA-256 of the sorted column names — the schema-drift fingerprint
+    embedded in ``schema_version`` (Resolved Issue 14). Shared by
+    ``add_export_metadata`` and the publishing export so the fingerprint always
+    matches the columns actually written to the Parquet (e.g. after the
+    publish-time ``03x_`` prefix strip)."""
+    return hashlib.sha256(",".join(sorted(columns)).encode("utf-8")).hexdigest()[:6]
+
+
 def _compute_inflation_factor(parquet_path: Path) -> Optional[Tuple[float, str]]:
     """Measure the empirical ``source_json_bytes → in-memory Pandas DataFrame``
     inflation ratio for a completed export, alongside the schema hash from
@@ -359,9 +368,7 @@ class DataAggregator:
     def add_export_metadata(self, df: pd.DataFrame, active_layers: List[str], git_sha: str = "unknown") -> pd.DataFrame:
         """Attach export provenance to ``df.attrs``. The export script reads
         these attrs and writes them to ``export_metadata.json``."""
-        column_hash = hashlib.sha256(
-            ",".join(sorted(df.columns)).encode("utf-8")
-        ).hexdigest()[:6]
+        column_hash = schema_column_hash(df.columns)
         # Resolved Issue 14: the SemVer prefix preserves human-readable
         # versioning for documented column add/remove changes; the hash
         # suffix lets downstream consumers detect schema drift mechanically
