@@ -253,6 +253,57 @@ def test_hf_upload_raises_on_synthetic_video_id(tmp_path):
         upload_to_huggingface(str(tmp_path), repo_id="dummy/repo", token="dummy")
 
 
+def _seed_export_bundle(tmp_path):
+    """A minimal, non-synthetic export bundle ready to upload."""
+    pd.DataFrame([{"video_id": "ego4d_real"}]).to_parquet(tmp_path / "social_metadata.parquet")
+    (tmp_path / "export_metadata.json").write_text("{}")
+
+
+def test_hf_upload_falls_back_to_credential_store(tmp_path):
+    """token=None must resolve via get_token() (the `hf auth login` store, not
+    just HF_TOKEN env) and proceed — previously it skipped unless HF_TOKEN was
+    set in the environment."""
+    _seed_export_bundle(tmp_path)
+    mock_api = MagicMock()
+    with patch("layer_04_dehydrated_export.huggingface_upload.HfApi", return_value=mock_api), \
+         patch("layer_04_dehydrated_export.huggingface_upload.get_token", return_value="stored-token"):
+        result = upload_to_huggingface(str(tmp_path), repo_id="dummy/repo")  # no token arg
+    mock_api.create_repo.assert_called_once()
+    assert mock_api.upload_file.call_count == 4
+    assert result == ["social_metadata.parquet", "export_metadata.json", "README.md", "rehydrate_dataset.py"]
+
+
+def test_hf_upload_skips_only_when_no_token_anywhere(tmp_path):
+    """With no token arg AND get_token() empty, publishing is unconfigured ->
+    skip (return None) without ever constructing HfApi."""
+    _seed_export_bundle(tmp_path)
+    with patch("layer_04_dehydrated_export.huggingface_upload.get_token", return_value=None), \
+         patch("layer_04_dehydrated_export.huggingface_upload.HfApi") as mock_api_cls:
+        result = upload_to_huggingface(str(tmp_path), repo_id="dummy/repo")
+    assert result is None
+    mock_api_cls.assert_not_called()
+
+
+def test_hf_upload_raises_on_upload_failure(tmp_path):
+    """A real upload failure must propagate, not be swallowed as a warning."""
+    _seed_export_bundle(tmp_path)
+    mock_api = MagicMock()
+    mock_api.upload_file.side_effect = RuntimeError("network down")
+    with patch("layer_04_dehydrated_export.huggingface_upload.HfApi", return_value=mock_api):
+        with pytest.raises(RuntimeError, match="network down"):
+            upload_to_huggingface(str(tmp_path), repo_id="dummy/repo", token="tok")
+
+
+def test_hf_upload_raises_on_repo_auth_failure(tmp_path):
+    """A present-but-rejected token (create_repo 401) must propagate, not skip."""
+    _seed_export_bundle(tmp_path)
+    mock_api = MagicMock()
+    mock_api.create_repo.side_effect = RuntimeError("401 Unauthorized")
+    with patch("layer_04_dehydrated_export.huggingface_upload.HfApi", return_value=mock_api):
+        with pytest.raises(RuntimeError, match="401"):
+            upload_to_huggingface(str(tmp_path), repo_id="dummy/repo", token="badtoken")
+
+
 # ---------------------------------------------------------------------------
 # Registry fallback when a synthetic clip has no provenance sidecar
 # ---------------------------------------------------------------------------
