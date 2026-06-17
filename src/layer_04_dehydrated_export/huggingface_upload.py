@@ -1,54 +1,61 @@
-import os
 import logging
 from pathlib import Path
-from huggingface_hub import HfApi
+
+from huggingface_hub import HfApi, get_token
 
 logger = logging.getLogger(__name__)
 
+
 def upload_to_huggingface(output_dir: str, repo_id: str, token: str = None):
-    """
-    Uploads the dehydrated metadata to Hugging Face.
+    """Upload the dehydrated dataset bundle to a Hugging Face dataset repo.
+
+    Token resolution order: the explicit ``token`` argument, then
+    ``huggingface_hub.get_token()`` — which reads the ``HF_TOKEN`` /
+    ``HUGGING_FACE_HUB_TOKEN`` env vars AND the ``hf auth login`` credential
+    store. If no token is found anywhere, publishing is treated as unconfigured
+    and skipped (returns ``None``).
+
+    Failures are loud, not swallowed: a token that is present but rejected, an
+    unreadable Parquet, or any repo-create / file-upload error propagates, so an
+    automated caller cannot mistake a failed publish for a successful one.
+
+    Returns the list of uploaded filenames on success, or ``None`` when skipped.
     """
     if not token:
-        token = os.environ.get("HF_TOKEN")
+        # Falls back to the `hf auth login` credential store, not just HF_TOKEN.
+        token = get_token()
         if not token:
             logger.warning(
-                "HF_TOKEN environment variable or token parameter is missing. "
-                "Skipping Hugging Face upload. To enable upload, set the HF_TOKEN environment variable. "
-                "Local files will remain intact."
+                "No Hugging Face token found (pass token=, set HF_TOKEN, or run "
+                "`hf auth login`). Skipping upload; local files remain intact."
             )
-            return
-            
+            return None
+
     output_dir = Path(output_dir)
     parquet_path = output_dir / "social_metadata.parquet"
     metadata_path = output_dir / "export_metadata.json"
     rehydrate_path = Path(__file__).parent / "rehydrate_dataset.py"
-    
+
     if not parquet_path.exists():
         raise FileNotFoundError(f"Parquet file not found at {parquet_path}")
 
-    # Validate that no synthetic validation videos are included in the Parquet file to upload
-    try:
-        import pandas as pd
-        df = pd.read_parquet(parquet_path)
-        if 'video_id' in df.columns:
-            synthetic_ids = df[df['video_id'].astype(str).str.startswith("synthetic_")]['video_id'].tolist()
-            if synthetic_ids:
-                raise ValueError(f"HF upload validation failed: Parquet file contains synthetic validation video IDs: {synthetic_ids}!")
-    except Exception as e:
-        if isinstance(e, ValueError):
-            raise
-        logger.warning(f"Could not read Parquet file for validation before upload: {e}")
+    # Dehydration gate: never publish synthetic-validation rows. A Parquet we
+    # cannot even read is likewise unsafe to publish, so read errors propagate
+    # rather than being downgraded to a warning that proceeds with the upload.
+    import pandas as pd
+    df = pd.read_parquet(parquet_path)
+    if 'video_id' in df.columns:
+        synthetic_ids = df[df['video_id'].astype(str).str.startswith("synthetic_")]['video_id'].tolist()
+        if synthetic_ids:
+            raise ValueError(
+                f"HF upload validation failed: Parquet file contains synthetic validation video IDs: {synthetic_ids}!"
+            )
 
     api = HfApi()
-    
-    try:
-        api.create_repo(repo_id=repo_id, repo_type="dataset", token=token, exist_ok=True)
-    except Exception as e:
-        if "401" in str(e) or "Unauthorized" in str(e):
-            logger.warning(f"Hugging Face authentication failed: {e}. Skipping upload. Local files remain intact.")
-            return
-        logger.warning(f"Could not create repo (might already exist): {e}")
+    # exist_ok keeps re-publishing idempotent. A 401/permission error (or any
+    # other create_repo failure) is a real, loud failure now — previously it was
+    # caught and turned into a silent warning + early return.
+    api.create_repo(repo_id=repo_id, repo_type="dataset", token=token, exist_ok=True)
 
     # Generate Dataset Card (README.md)
     readme_content = f"""---
@@ -76,21 +83,22 @@ It does **NOT** contain any raw video pixels or audio tracks, strictly adhering 
         f.write(readme_content)
 
     logger.info(f"Uploading files to {repo_id}...")
-    
+
     files_to_upload = [parquet_path, metadata_path, readme_path, rehydrate_path]
-    
-    try:
-        for file_path in files_to_upload:
-            if file_path.exists():
-                api.upload_file(
-                    path_or_fileobj=str(file_path),
-                    path_in_repo=file_path.name,
-                    repo_id=repo_id,
-                    repo_type="dataset",
-                    token=token
-                )
-                logger.info(f"Uploaded {file_path.name}")
-                
-        logger.info("Upload complete.")
-    except Exception as e:
-        logger.warning(f"Hugging Face upload failed: {e}. Local files remain intact at {output_dir}.")
+    uploaded = []
+    # Upload errors propagate — a swallowed failure looks like success to a
+    # caller that only checks for an exception.
+    for file_path in files_to_upload:
+        if file_path.exists():
+            api.upload_file(
+                path_or_fileobj=str(file_path),
+                path_in_repo=file_path.name,
+                repo_id=repo_id,
+                repo_type="dataset",
+                token=token,
+            )
+            logger.info(f"Uploaded {file_path.name}")
+            uploaded.append(file_path.name)
+
+    logger.info("Upload complete.")
+    return uploaded
