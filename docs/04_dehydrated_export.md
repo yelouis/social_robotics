@@ -67,6 +67,11 @@ Merge the final state of the layered results database into a highly compressed A
 ### 3. Posting to Hugging Face
 If the local `result_file` review looks good, write an automated script leveraging the `huggingface_hub` Python package to initialize the dataset repository, upload the `social_metadata.parquet`, and populate a generated `README.md` Dataset Card outlining the total number of layers utilized to create the signals.
 
+### 4. Per-Layer Datasets (`per_layer.py`)
+Besides the combined master table, each layer can also be published as its own standalone Hugging Face dataset via `src/layer_04_dehydrated_export/per_layer.py` (`publish_all_layers` scans the same `03*_result.json` results directory the aggregator uses, builds one dataset per layer, and optionally creates the public repos + uploads). Each per-layer dataset carries the manifest base columns + only that layer's feature columns (with the `03x_` prefix stripped, per Aggregation Logic §3 above), plus a detailed, column-accurate interpretation card. Two behaviors are **layer-specific** and deliberately NOT applied to the combined export:
+- **Unmeasured rows are dropped** (`drop_unmeasured_rows`): a video with no measured signal for *this* layer — absent, or present only as a `skipped_reason` sentinel whose sole content is an empty-JSON `[]` — is dead weight in a single-layer dataset, so it is removed, and any column left entirely empty afterward (e.g. the now-vestigial `*_skipped_reason`) is pruned. In the *combined* table that same row may still be useful (another layer scored it), so it is kept there.
+- The dataset card's column table is generated from the **actual published columns** of the filtered DataFrame, so the card always matches the parquet after row/column pruning.
+
 ## Verification & Validation Check
 To guarantee the export structure adheres to safety standards and schema requirements:
 - **Singular Video Test**: Load the final `social_metadata.parquet` into a Pandas DataFrame inside a standalone Jupyter notebook or script. Select one random row (a single video) and attempt to cleanly follow the `rehydrate_dataset.py` instructions to rebuild the social context. If any keys are mismatched, it fails.
