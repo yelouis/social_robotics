@@ -33,9 +33,16 @@ VALID_TIERS = ("small", "medium", "large")
 _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
     # Layer 03b: Reasonable Emotion
     "layer_03b_ollama": {
+        # `gemma4:26b` was registered for the 64 GB host but was never installed
+        # (only `gemma4:latest`, the ~8B build, is pulled locally) — so 03b
+        # silently failed every clip on "model not found" and fell back to
+        # rule-based classification (the likely cause of its 2/50 yield). Point
+        # medium/large at the installed `gemma4:latest`; the 8B build is adequate
+        # for the JSON emotion-reasoning task. Re-pull a 26B-class tag here if a
+        # higher-fidelity reasoner is wanted (docs/03b Resolved Issue).
         "small":  ("gemma4:e4b", "~2.5 GB", 2_500_000_000),
-        "medium": ("gemma4:26b", "~15 GB", 15_000_000_000),
-        "large":  ("gemma4:26b", "~15 GB", 15_000_000_000),
+        "medium": ("gemma4:latest", "~9.6 GB", 9_600_000_000),
+        "large":  ("gemma4:latest", "~9.6 GB", 9_600_000_000),
     },
     "layer_03b_face_emotion": {
         "small":  ("enet_b0_8", "~30 MB", 30_000_000),

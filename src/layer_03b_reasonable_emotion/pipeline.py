@@ -53,11 +53,22 @@ ENABLE_FACE_GATE = _os.getenv("SR_03B_FACE_GATE", "1").lower() in ("1", "true", 
 # noise. Default 0.4 sits just above the ~0.38 noise ceiling observed on Ego4D.
 MIN_EMOTION_CONF = float(_os.getenv("SR_03B_MIN_EMOTION_CONF", "0.4"))
 
-# Optional dependency: Ollama
+# Optional dependency: Ollama (kept for the fast local `.list()` availability
+# probe only — the actual chat calls go through the enforced-timeout httpx path).
 try:
     import ollama as ollama_client
 except ImportError:
     ollama_client = None
+
+# Enforced-timeout HTTP path for the LLM calls. ollama-python ignores its own
+# client timeout (sends timeout=None per request), so a wedged generation would
+# hang the unattended batch — the same failure 02's VLM gate hit (docs/02
+# Resolved #20). vlm_client.ollama_chat posts to /api/chat via httpx with a real
+# timeout that closes the socket and cancels the generation on expiry.
+try:
+    from shared.vlm_client import ollama_chat
+except ImportError:
+    from src.shared.vlm_client import ollama_chat
 
 # ---------------------------------------------------------------------------
 #  Pydantic schemas for LLM output validation (Limitation #2 fix)
@@ -111,13 +122,16 @@ DEFAULT_EXPECTATIONS = {
 }
 
 # LLM configuration. The 03b reasoning chain (Step 1 expectation generation +
-# Step 3 cumulative-history evaluation) is a multi-step structured-output
-# regime where the 27B-class model measurably reduces JSON drift; the
-# Mac Studio (M4 Max, 64 GB) has ample headroom for its ~15 GB resident set.
-# Resolved by the tier-per-host config: `medium`/`large` -> `gemma4:26b`,
-# `small` -> the legacy `gemma4:e4b` for the 24 GB Mac mini fallback.
+# Step 3 cumulative-history evaluation) is a multi-step structured-output regime.
+# The tier-per-host config points `medium`/`large` at the installed `gemma4:latest`
+# (~8B) — `gemma4:26b` was registered but never pulled on this host (Resolved
+# Issue #9); re-pull a 26B-class tag here for higher reasoning fidelity.
 OLLAMA_MODEL = get_model("layer_03b_ollama")
 LLM_MAX_RETRIES = 3
+# Generous per-call bound (JSON reasoning runs longer than a one-word gate);
+# enforced via httpx in vlm_client.ollama_chat so a stuck generation can't hang
+# the batch. On timeout the call raises and the retry/fallback path handles it.
+LLM_REQUEST_TIMEOUT = 300
 
 
 class ReasonableEmotionPipeline:
@@ -233,13 +247,11 @@ class ReasonableEmotionPipeline:
 
         for attempt in range(1, LLM_MAX_RETRIES + 1):
             try:
-                response = ollama_client.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    format="json",
+                raw_text = ollama_chat(
+                    OLLAMA_MODEL, prompt, fmt="json",
                     options={"temperature": 0.3 + (attempt - 1) * 0.2},
-                )
-                raw_text = response.message.content.strip()
+                    timeout=LLM_REQUEST_TIMEOUT,
+                ).strip()
                 parsed = json.loads(raw_text)
                 validated = ExpectationSchema(**parsed)
                 return validated.model_dump()
@@ -283,13 +295,11 @@ class ReasonableEmotionPipeline:
 
         for attempt in range(1, LLM_MAX_RETRIES + 1):
             try:
-                response = ollama_client.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    format="json",
+                raw_text = ollama_chat(
+                    OLLAMA_MODEL, prompt, fmt="json",
                     options={"temperature": 0.3 + (attempt - 1) * 0.2},
-                )
-                raw_text = response.message.content.strip()
+                    timeout=LLM_REQUEST_TIMEOUT,
+                ).strip()
                 parsed = json.loads(raw_text)
                 validated = TransitionEvalSchema(**parsed)
                 return validated.model_dump()
