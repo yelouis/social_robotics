@@ -55,6 +55,13 @@ VLM_NUM_CTX = 4096
 # per request — which is why the gate calls the HTTP API directly via httpx.)
 VLM_REQUEST_TIMEOUT = 180
 
+# VLM-gate budget + parallelism (perf — the gate dominates 02 at ~6 s/call).
+# Bound the number of gate calls per clip and run each batch's calls
+# concurrently against an ollama server set to OLLAMA_NUM_PARALLEL>1.
+MAX_CHIN_VLM_CALLS = 8            # wearer-chin checks per clip (verdict cached per track id)
+MAX_VLM_CONFIRM_ATTEMPTS = 30     # multi-person confirm attempts per clip; unconfirmed -> drop
+VLM_GATE_MAX_PARALLEL = 3         # concurrent gate calls per chunk (match OLLAMA_NUM_PARALLEL)
+
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -257,6 +264,18 @@ class SocialPresenceDetector:
             default_on_error=False,
         )
 
+    def _vlm_confirm_parallel(self, frames):
+        """Run `_vlm_confirms_multiple_people` over several frames concurrently
+        (perf — pair with an ollama server set to OLLAMA_NUM_PARALLEL>1). Each
+        call carries its own 180 s httpx timeout, so the bounded ThreadPool wait
+        cannot stall. Returns a list of bools (one per frame, input order)."""
+        if len(frames) <= 1:
+            return [self._vlm_confirms_multiple_people(f) for f in frames]
+        import concurrent.futures
+        workers = min(len(frames), VLM_GATE_MAX_PARALLEL)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            return list(ex.map(self._vlm_confirms_multiple_people, frames))
+
     def detect(self, video_path: Path, sample_rate_fps=1/3.0, fast_mode=False, min_consistency=2, return_hands=False):
         """
         Detect persons in a video.
@@ -318,6 +337,10 @@ class SocialPresenceDetector:
             # single-observation id, which is the honest identity (no temporal
             # association is available for it).
             untracked_person_id = -1
+            # VLM-gate budget state (perf): cache wearer-chin verdicts per track
+            # id, cap total chin checks, and bound multi-person confirm attempts.
+            chin_cache = {}
+            chin_vlm_calls = 0
 
             batch_frames = []
             batch_timestamps = []
@@ -342,6 +365,7 @@ class SocialPresenceDetector:
                     # Use YOLO internal batching with ByteTrack
                     results = self.model.track(batch_frames, classes=[0], verbose=False, conf=0.5, batch=len(batch_frames), persist=True, tracker="bytetrack.yaml")
 
+                    batch_confirm_candidates = []  # pose-positive frames to VLM-confirm in parallel after this loop
                     for i, result in enumerate(results):
                         timestamp = batch_timestamps[i]
                         frame_detections = []
@@ -406,25 +430,35 @@ class SocialPresenceDetector:
                                 # treat as a non-confirmable bystander and skip.
                                 continue
 
-                            # Gaze-direction wearer-chin gate (Resolved Issue #11).
-                            # When a detection sits in the bottom 20% of the
-                            # frame, ask the VLM whether the face is angled
-                            # upward — the signature of the wearer's own face
-                            # peeking into the frame from below. Skip the
-                            # detection on YES.
-                            if self.vlm_verify and y2 > 0.80 * img_h:
-                                if self._vlm_face_oriented_upward(batch_frames[i], coords):
-                                    continue
-
-                            # Extract tracking ID if available. Untracked
-                            # detections get a unique negative id (see above)
-                            # rather than len(frame_detections), which collided
-                            # with real ByteTrack track ids.
+                            # Extract tracking ID first (needed to cache the
+                            # wearer-chin verdict per track). Untracked detections
+                            # get a unique negative id (see above) rather than
+                            # len(frame_detections), which collided with real
+                            # ByteTrack track ids.
                             if box.id is not None:
                                 person_id = int(box.id[0])
                             else:
                                 person_id = untracked_person_id
                                 untracked_person_id -= 1
+
+                            # Gaze-direction wearer-chin gate (Resolved Issue #11),
+                            # now budget-bounded (perf): a detection in the bottom
+                            # 20% may be the wearer's own up-angled face. VLM-check
+                            # ONCE per track id (cached) and cap total checks per
+                            # clip; past the cap, fall back to the geometric
+                            # prefilter (is_limb/is_ghost) already applied above.
+                            if self.vlm_verify and y2 > 0.80 * img_h:
+                                is_chin = chin_cache.get(person_id)
+                                if is_chin is None:
+                                    if chin_vlm_calls < MAX_CHIN_VLM_CALLS:
+                                        is_chin = self._vlm_face_oriented_upward(batch_frames[i], coords)
+                                        chin_vlm_calls += 1
+                                        if person_id >= 0:  # only cache stable track ids
+                                            chin_cache[person_id] = is_chin
+                                    else:
+                                        is_chin = False
+                                if is_chin:
+                                    continue
 
                             frame_detections.append({
                                 "person_id": person_id,
@@ -456,16 +490,12 @@ class SocialPresenceDetector:
                                         return False
                                     return ([], []) if return_hands else []
 
-                            # VLM verification with confirm-anywhere accounting
-                            # (02 Resolved Issue #19): every pose-positive frame
-                            # is a candidate until `min_consistency` confirmations
-                            # land, so a clearly-social segment late in a long
-                            # solo-dominated video still reaches the threshold.
-                            # Early-exit once confirmed keeps the budget bounded.
+                            # Confirm-anywhere candidate (02 Resolved Issue #19):
+                            # collect every pose-positive frame; they are
+                            # VLM-verified in a budget-bounded PARALLEL batch after
+                            # this frame loop (perf), not one blocking call per frame.
                             if self.vlm_verify and vlm_verified_count < min_consistency:
-                                vlm_attempts += 1
-                                if self._vlm_confirms_multiple_people(batch_frames[i]):
-                                    vlm_verified_count += 1
+                                batch_confirm_candidates.append(batch_frames[i])
 
                         if frame_detections or (return_hands and hand_boxes):
                             all_detections.append(frame_detections)
@@ -473,6 +503,26 @@ class SocialPresenceDetector:
                                 "timestamp_sec": timestamp,
                                 "hand_boxes": hand_boxes
                             })
+
+                    # Multi-person confirm for this batch — PARALLEL chunks with
+                    # early-exit (perf + 02 Resolved Issue #19 confirm-anywhere):
+                    # verify candidates VLM_GATE_MAX_PARALLEL at a time, stopping
+                    # the moment min_consistency confirmations land or the per-clip
+                    # attempt budget (MAX_VLM_CONFIRM_ATTEMPTS) is spent. Chunking
+                    # keeps "confirm anywhere" (a late-in-clip confirmation is still
+                    # reached) while bounding cost and parallelizing each round.
+                    ci = 0
+                    while (self.vlm_verify and ci < len(batch_confirm_candidates)
+                           and vlm_verified_count < min_consistency
+                           and vlm_attempts < MAX_VLM_CONFIRM_ATTEMPTS):
+                        chunk = batch_confirm_candidates[ci: ci + VLM_GATE_MAX_PARALLEL]
+                        chunk = chunk[: MAX_VLM_CONFIRM_ATTEMPTS - vlm_attempts]
+                        if not chunk:
+                            break
+                        verdicts = self._vlm_confirm_parallel(chunk)
+                        vlm_attempts += len(chunk)
+                        vlm_verified_count += sum(1 for v in verdicts if v)
+                        ci += len(chunk)
 
                     batch_frames = []
                     batch_timestamps = []
