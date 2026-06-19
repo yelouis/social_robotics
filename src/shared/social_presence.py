@@ -10,6 +10,11 @@ from ultralytics import YOLO
 from pathlib import Path
 
 try:
+    from .vlm_client import ollama_chat
+except ImportError:
+    from shared.vlm_client import ollama_chat
+
+try:
     from src.models_config import get_model
 except ImportError:
     from models_config import get_model
@@ -40,12 +45,15 @@ KEYPOINT_CONF_THRESHOLD = 0.3
 # num_ctx safely above the image+prompt size to cut resident memory and per-call
 # latency with no accuracy loss for this single-turn, single-image workload.
 VLM_NUM_CTX = 4096
-# Bound a single VLM (ollama) request. The module-level `ollama.chat` has no
-# timeout, so a stuck call hangs the whole batch forever — and the supervised
-# runner relaunches on crashes, not hangs. A per-frame yes/no normally returns
-# in well under 30 s; on timeout the request raises and `_vlm_ask_yes_no`'s
-# try/except returns `default_on_error`, so the clip is handled, not stuck.
-VLM_REQUEST_TIMEOUT = 120
+# A VLM gate call normally returns in ~6 s (image prefill-bound; the answer is
+# ~1 token). This is a GENEROUS bound for a TRUE deadlock (e.g. a vision-prefill
+# wedge — observed once as a multi-hour stall), far above any legitimate call.
+# Used as the httpx request timeout in `vlm_client.ollama_chat`: on timeout the
+# call raises (-> `_vlm_ask_yes_no` returns `default_on_error`) AND the closed
+# connection cancels the server-side generation, freeing the runner for the next
+# clip. (ollama-python's own Client(timeout=) is ignored — it sends timeout=None
+# per request — which is why the gate calls the HTTP API directly via httpx.)
+VLM_REQUEST_TIMEOUT = 180
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -112,16 +120,6 @@ class SocialPresenceDetector:
             self._hand_landmarker = mp_vision.HandLandmarker.create_from_options(opts)
         return self._hand_landmarker
 
-    @property
-    def ollama_client(self):
-        if self._ollama is None:
-            import ollama
-            # A Client with an explicit request timeout (see VLM_REQUEST_TIMEOUT):
-            # the bare `ollama` module's `.chat` never times out, so one stuck
-            # VLM call would hang the entire batch.
-            self._ollama = ollama.Client(timeout=VLM_REQUEST_TIMEOUT)
-        return self._ollama
-
     def unload(self):
         """ Explicitly unload the model and clear memory """
         if self._model is not None:
@@ -170,16 +168,10 @@ class SocialPresenceDetector:
             os.close(fd)
             try:
                 cv2.imwrite(tmp_path, frame_bgr)
-                response = self.ollama_client.chat(
-                    model=self.vlm_model,
-                    messages=[{
-                        'role': 'user',
-                        'content': prompt,
-                        'images': [tmp_path],
-                    }],
-                    options={"num_ctx": VLM_NUM_CTX},
-                )
-                content = response['message']['content'].strip().upper()
+                content = ollama_chat(
+                    self.vlm_model, prompt, image_paths=[tmp_path],
+                    options={"num_ctx": VLM_NUM_CTX}, timeout=VLM_REQUEST_TIMEOUT,
+                ).strip().upper()
                 return content.startswith("YES")
             finally:
                 try:

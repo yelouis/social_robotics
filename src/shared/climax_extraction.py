@@ -27,9 +27,15 @@ from typing import Callable, Iterable, Optional
 import cv2
 import numpy as np
 
-# Bound the climax-refinement VLM request so a stuck ollama call can't hang the
-# climax pass (mirrors social_presence.VLM_REQUEST_TIMEOUT).
-CLIMAX_VLM_REQUEST_TIMEOUT = 120
+try:
+    from .vlm_client import ollama_chat
+except ImportError:
+    from shared.vlm_client import ollama_chat
+
+# Generous safety bound for a TRUE VLM deadlock during climax refinement (a
+# normal call is a few seconds); used as the enforced httpx timeout in
+# ollama_chat. On timeout the connection closes and the generation is cancelled.
+CLIMAX_VLM_REQUEST_TIMEOUT = 180
 
 
 def _reaction_window(climax_sec: float, velocity: str, duration_sec: float) -> list:
@@ -149,8 +155,6 @@ def compute_task_climax_for_video(
             candidates = sorted(flow_data, key=lambda x: x[1], reverse=True)[:3]
             candidates = sorted(candidates, key=lambda x: x[0])
             try:
-                import ollama
-                client = ollama.Client(timeout=CLIMAX_VLM_REQUEST_TIMEOUT)
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_path = Path(temp_dir)
                     img_paths = []
@@ -175,11 +179,10 @@ def compute_task_climax_for_video(
                             "best represents the 'climax' or the most critical moment of this action? "
                             "If you are unsure, pick the one with the most active motion."
                         )
-                        response = client.chat(
-                            model=vlm_model,
-                            messages=[{'role': 'user', 'content': prompt, 'images': img_paths}],
-                        )
-                        content = response['message']['content'].strip()
+                        content = ollama_chat(
+                            vlm_model, prompt, image_paths=img_paths,
+                            timeout=CLIMAX_VLM_REQUEST_TIMEOUT,
+                        ).strip()
                         matches = re.findall(r'[1-3]', content)
                         if matches:
                             choice = int(matches[0]) - 1
