@@ -85,12 +85,17 @@ def _make_detector(monkeypatch, vlm_confirm_sequence):
             return [_FakeResult(n_people=2) for _ in frames]
     det._model = _FakeModel()
 
+    import threading
     calls = {"n": 0}
     seq = list(vlm_confirm_sequence)
+    _lock = threading.Lock()
 
     def fake_confirm(frame_bgr):
-        i = calls["n"]
-        calls["n"] += 1
+        # Thread-safe: confirm calls now run in parallel chunks (perf), so the
+        # call counter must be atomic to map verdicts to the sequence correctly.
+        with _lock:
+            i = calls["n"]
+            calls["n"] += 1
         return seq[i] if i < len(seq) else False
     monkeypatch.setattr(det, "_vlm_confirms_multiple_people", fake_confirm)
     # Never let the stereo / chin gates fire for this geometry/aspect ratio.
