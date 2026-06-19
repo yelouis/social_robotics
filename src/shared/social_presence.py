@@ -40,6 +40,12 @@ KEYPOINT_CONF_THRESHOLD = 0.3
 # num_ctx safely above the image+prompt size to cut resident memory and per-call
 # latency with no accuracy loss for this single-turn, single-image workload.
 VLM_NUM_CTX = 4096
+# Bound a single VLM (ollama) request. The module-level `ollama.chat` has no
+# timeout, so a stuck call hangs the whole batch forever — and the supervised
+# runner relaunches on crashes, not hangs. A per-frame yes/no normally returns
+# in well under 30 s; on timeout the request raises and `_vlm_ask_yes_no`'s
+# try/except returns `default_on_error`, so the clip is handled, not stuck.
+VLM_REQUEST_TIMEOUT = 120
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -110,7 +116,10 @@ class SocialPresenceDetector:
     def ollama_client(self):
         if self._ollama is None:
             import ollama
-            self._ollama = ollama
+            # A Client with an explicit request timeout (see VLM_REQUEST_TIMEOUT):
+            # the bare `ollama` module's `.chat` never times out, so one stuck
+            # VLM call would hang the entire batch.
+            self._ollama = ollama.Client(timeout=VLM_REQUEST_TIMEOUT)
         return self._ollama
 
     def unload(self):
