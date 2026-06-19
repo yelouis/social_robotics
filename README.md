@@ -40,17 +40,25 @@ The heart of the project. Independent modules analyze the filtered video chunks 
 
 | Layer ID | Name | Focus | Model / Technique |
 | :--- | :--- | :--- | :--- |
-| **03a** | **Attention** | Gaze tracking & engagement scores | L2CS-Net |
-| **03b** | **Reasonable Emotion** | Context-aware emotional analysis | HSEmotion-PyTorch / Gemma 4 |
-| **03c** | **Acoustic Prosody** | Non-verbal vocal cues & tone | emotion2vec+ / SenseVoice |
-| **03d** | **Proxemic Kinematics** | Relative depth & physical spacing | Depth Anything V1-Large + SAM ViT-Huge |
-| **03e** | **Affirmation Gesture** | Head nodding & shaking detection | SciPy / Signal Processing |
-| **03f** | **Motor Resonance** | Sympathetic flinch & startle detection | YOLOv8-pose |
+| **03a** | [**Attention**](https://huggingface.co/datasets/louisye/social-robotics-attention) | Gaze tracking & engagement scores | L2CS-Net |
+| **03b** | [**Reasonable Emotion**](https://huggingface.co/datasets/louisye/social-robotics-reasonable-emotion) | Context-aware emotional analysis | HSEmotion-PyTorch / Gemma 4 |
+| **03c** | [**Acoustic Prosody**](https://huggingface.co/datasets/louisye/social-robotics-acoustic-prosody) | Non-verbal vocal cues & tone | emotion2vec+ / SenseVoice |
+| **03d** | [**Proxemic Kinematics**](https://huggingface.co/datasets/louisye/social-robotics-proxemic-kinematics) | Relative depth & physical spacing | Depth Anything V1-Large + SAM ViT-Huge |
+| **03e** | [**Affirmation Gesture**](https://huggingface.co/datasets/louisye/social-robotics-affirmation-gesture) | Head nodding & shaking detection | SciPy / Signal Processing |
+| **03f** | [**Motor Resonance**](https://huggingface.co/datasets/louisye/social-robotics-motor-resonance) | Sympathetic flinch & startle detection | YOLOv8-pose |
 
 ### 4. Dehydrated Export
 The final output is a **Dehydrated Social Metadata Dataset**. We never export raw pixels. Instead, we provide:
 -   **Identifying Metadata**: Rehydration instructions for original video sources.
 -   **Social Signals**: The exact time-series data of gaze, prosody, and emotion derived by our layers.
+
+The processed datasets are published and hosted on Hugging Face:
+-   📊 [louisye/social-robotics-attention](https://huggingface.co/datasets/louisye/social-robotics-attention) (Layer 03a)
+-   📊 [louisye/social-robotics-reasonable-emotion](https://huggingface.co/datasets/louisye/social-robotics-reasonable-emotion) (Layer 03b)
+-   📊 [louisye/social-robotics-acoustic-prosody](https://huggingface.co/datasets/louisye/social-robotics-acoustic-prosody) (Layer 03c)
+-   📊 [louisye/social-robotics-proxemic-kinematics](https://huggingface.co/datasets/louisye/social-robotics-proxemic-kinematics) (Layer 03d)
+-   📊 [louisye/social-robotics-affirmation-gesture](https://huggingface.co/datasets/louisye/social-robotics-affirmation-gesture) (Layer 03e)
+-   📊 [louisye/social-robotics-motor-resonance](https://huggingface.co/datasets/louisye/social-robotics-motor-resonance) (Layer 03f)
 
 ---
 
