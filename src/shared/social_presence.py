@@ -372,32 +372,13 @@ class SocialPresenceDetector:
                         has_bystander_in_frame = False
                         img_h, img_w = batch_frames[i].shape[:2]
 
-                        # MediaPipe Hand Detection is only needed when the caller
-                        # asks for `return_hands` (i.e. Node 02 building the
-                        # `hand_detections` schema field for Layer 03a). YOLO-pose
-                        # keypoint validation below makes hand-overlap suppression
-                        # redundant, so skipping MediaPipe entirely on the Node 01
-                        # streaming filter is a real per-batch perf win.
+                        # Hand boxes (Layer 03a `hand_detections`) are computed
+                        # AFTER the box loop and ONLY on bystander-bearing frames
+                        # (perf — 02 Resolved Issue #21). 03a matches the nearest
+                        # hand entry to each bystander-gaze sample, so frames with
+                        # no bystander never need hands; this skips MediaPipe on the
+                        # (often many) solo-wearer sampled frames of a long clip.
                         hand_boxes = []
-                        if return_hands:
-                            # Tasks API: wrap the BGR frame as `mp.Image` in
-                            # SRGB layout (i.e. RGB byte order). The result's
-                            # `hand_landmarks` is a list-of-lists of normalized
-                            # landmarks — each landmark has `.x`/`.y` in [0, 1]
-                            # relative to the input image, matching the legacy
-                            # solutions API's coordinate shape.
-                            frame_rgb = cv2.cvtColor(batch_frames[i], cv2.COLOR_BGR2RGB)
-                            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-                            hand_results = self.hand_landmarker.detect(mp_image)
-                            for hand_landmarks in hand_results.hand_landmarks:
-                                x_min, y_min = img_w, img_h
-                                x_max, y_max = 0, 0
-                                for lm in hand_landmarks:
-                                    x, y = int(lm.x * img_w), int(lm.y * img_h)
-                                    x_min, y_min = min(x_min, x), min(y_min, y)
-                                    x_max, y_max = max(x_max, x), max(y_max, y)
-                                pad = 20
-                                hand_boxes.append((max(0, x_min - pad), max(0, y_min - pad), min(img_w, x_max + pad), min(img_h, y_max + pad)))
 
                         # YOLO-pose keypoint tensors. The boxes and keypoints arrays
                         # are co-indexed: result.boxes[k] corresponds to result.keypoints[k].
@@ -470,6 +451,25 @@ class SocialPresenceDetector:
 
                         if has_bystander_in_frame:
                             detected_frames_count += 1
+
+                            # MediaPipe hands — only now that the frame has a
+                            # bystander (perf, Resolved Issue #21). Tasks API: wrap
+                            # the BGR frame as `mp.Image` in SRGB (RGB byte order);
+                            # `hand_landmarks` is a list-of-lists of normalized
+                            # `.x`/`.y` landmarks, matching the legacy solutions API.
+                            if return_hands:
+                                frame_rgb = cv2.cvtColor(batch_frames[i], cv2.COLOR_BGR2RGB)
+                                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                                hand_results = self.hand_landmarker.detect(mp_image)
+                                for hand_landmarks in hand_results.hand_landmarks:
+                                    x_min, y_min = img_w, img_h
+                                    x_max, y_max = 0, 0
+                                    for lm in hand_landmarks:
+                                        x, y = int(lm.x * img_w), int(lm.y * img_h)
+                                        x_min, y_min = min(x_min, x), min(y_min, y)
+                                        x_max, y_max = max(x_max, x), max(y_max, y)
+                                    pad = 20
+                                    hand_boxes.append((max(0, x_min - pad), max(0, y_min - pad), min(img_w, x_max + pad), min(img_h, y_max + pad)))
 
                             # Side-by-side stereo VLM gate (Resolved Issue #10):
                             # Stereo format is a video-wide property of the
