@@ -149,6 +149,44 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
 
 > **`hand_detections` contract**: One entry per sampled frame that contained MediaPipe-detected wearer hands. `timestamp_sec` matches a sampled frame timestamp from `bystander_detections`, and `hand_boxes` is a list of `[x1, y1, x2, y2]` integer pixel coordinates. Frames with no detected hands are simply omitted. Layer 03a (Attention) consumes this field for occlusion suppression — never remove or rename it.
 
+## 🏃 Running Node 02 (large unattended batches)
+
+Node 02 over a multi-hundred-clip registry is a multi-hour-to-multi-day job, so it must be launched to **survive both per-clip crashes and the agent/session lifecycle**. The June-2026 clean 1000-clip run established this recipe.
+
+**Entrypoint.** `FilteringPipeline(registry_json, output_manifest_json, force=False).run()` (see `src/filtering_and_labeling/run_verification.py`, or a thin runner). It iterates the registry, **skips already-processed `video_id`s** (resume-by-default), and writes the output manifest **atomically per video** — so an interrupted run loses nothing and a relaunch continues where it stopped. `force=True` reprocesses everything; "fresh" is better guaranteed by pointing the output at a new/empty manifest, not by `force`.
+
+**Pre-flight.**
+- **Ollama**: the social-presence gate + task labeling use `qwen2.5vl:7b` — confirm it's installed (`ollama list`); alias from the installed tag if needed (`ollama cp qwen2.5vl:latest qwen2.5vl:7b`).
+- **VLM-gate parallelism (Resolved #20)**: set `OLLAMA_NUM_PARALLEL` ≥ 2 on the ollama server so the gate's parallel confirm-chunks actually run concurrently. macOS: `launchctl setenv OLLAMA_NUM_PARALLEL 3` then restart Ollama; verify with `grep OLLAMA_NUM_PARALLEL ~/.ollama/logs/server.log`.
+- Ego4D metadata present (`config.EGO4D_METADATA_PATH`) for task labeling / solo-skip; the Extreme SSD mounted.
+
+**Launch — supervised AND detached. Do NOT use a tracked/agent background task.** Two layers of durability are required:
+1. `tools/run_supervised.sh` wraps the runner with `caffeinate -dimsu` (no sleep), `PYTHONFAULTHANDLER`, **relaunch-on-crash**, and a poison-clip abort — this recovers the recurring macOS *"Python quit unexpectedly"* native crash.
+2. **Detach the run into its own session** so it is NOT a child of the launching shell/agent. A background task in the launcher's process tree gets **reaped after ~1–2 h** by the harness/session lifecycle (observed repeatedly on the 1000-clip run: the whole group killed together, no supervisor relaunch, with ~40 GB free + **zero** OS jetsam — i.e. not the machine). A `setsid` double-fork reparents the run to launchd (**PPID 1**), outside that tree, so it runs to completion untouched (verified: **~24 h+ uninterrupted** vs ~1–2 h before).
+
+```python
+# daemonize.py — macOS has no `setsid` binary, so detach in Python:
+#   usage: daemonize.py <logfile> <cmd> [args...]
+import os, sys
+logfile, cmd = sys.argv[1], sys.argv[2:]
+if os.fork() > 0: os._exit(0)          # parent returns to the caller
+os.setsid()                            # new session: escape the caller's process group
+if os.fork() > 0: os._exit(0)          # grandchild is the daemon, reparented to launchd (PPID 1)
+fd = os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+os.dup2(fd, 1); os.dup2(fd, 2); os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+os.execvp(cmd[0], cmd)
+```
+```bash
+RUN="/Volumes/Extreme SSD/social_robotics/full_run_<date>"
+SR_SUPERVISE_LOG="$RUN/supervise_02.log" ./venv/bin/python "$RUN/daemonize.py" "$RUN/run_02.log" \
+  bash tools/run_supervised.sh "$RUN/filtered_manifest_full.json" \
+  ./venv/bin/python "$RUN/run_02.py" "$RUN/registry.json" "$RUN/filtered_manifest_full.json"
+# verify it detached (supervisor PPID must be 1):
+ps -Ao pid,ppid,command | grep -v grep | grep run_supervised
+```
+
+**Monitor (a detached run sends no completion signal).** Poll the output manifest's record count for progress; 02 is **done** when `supervise_02.log` logs `runner exited 0 (clean)`. Resuming after any stop is just the same launch command again — it skips processed clips and continues. Recall that 02 emits `task_temporal_metadata = {}`; climax is populated by the first Layer 03 (Resolved #8).
+
 ## Verification & Validation Check
 To ensure the filtering mechanisms are robust and correct:
 - **Singular Video Test**: Execute the filter module against a single chosen `.mp4` video that is visually verified to have multiple interacting people. Inspect the generated JSON output to confirm the `bystander_detections` bounding boxes accurately surround the actors.
