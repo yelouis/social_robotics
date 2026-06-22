@@ -27,6 +27,7 @@ Instead of transcribing words, we run a State-of-the-Art Speech Emotion Recognit
   - High `angry` + high `fearful` + Sudden Volume Spike = **Alarming / Deterrent**
   - High `happy` + high `surprised` + Melodic Pitch Contour = **Soothing / Encouraging**
   - High `sad` or high `disgusted` + Low Volume = **Discouraging / Negative**
+- **Volume-bonus task gating**: the "Sudden Volume Spike" term in the Alarming rule is **withheld when the task label is an inherently-loud activity** (cooking, cleaning, laundry, blacksmithing, construction, power tools, …; the `high_volume_expected_task_keywords` set). In egocentric footage the loudest sound is usually the wearer's own object-manipulation, so raw loudness is a poor alarm proxy — without this gate, loud mechanical clatter fabricated false **Alarming** classifications on otherwise-calm clips (Resolved #2).
 - **SER-Confidence Floor**: Any non-Neutral tone additionally requires the dominant SER class to clear `min_ser_confidence` (default 0.5) — a sub-floor softmax is effectively guessing, and bonus terms (pitch variance, volume) must not assemble a tone out of noise. The pitch-variance term itself only contributes when `happy` clears the floor. Mirrors 03b's `MIN_EMOTION_CONF` honesty gate.
 
 ### 3. Supplementary Audio Event Detection (SenseVoice)
