@@ -13,6 +13,8 @@ The **Proxemic Kinematics Layer** investigates "Approach vs. Avoidance." In deve
 
 ## 🛠️ Implementation Strategy
 
+**Measurement window (bystander-anchored).** Both methods below measure a *delta over time*, so each needs ≥ 2 bystander detections inside the measurement interval. Node-02 emits bystander detections at a ~6 s median cadence while `task_reaction_window_sec` is only ~2 s wide, so a strict reaction window holds at most one detection and would yield **nothing by construction**. The interval is therefore computed by `_bystander_measurement_window` (the shared `src/shared/bystander_window.py` helper — see docs/03 Cross-Layer § Shared Helper): the strict reaction window is kept when it already holds ≥ 2 detections, otherwise it re-anchors to the bystander's climax-nearest detection ± 1 detection — **capped at `MAX_ANCHOR_SPAN_SEC = 30 s`** so a sparse track cannot read minutes of locomotion/drift as a "reaction." Every record carries `measurement_window_sec` + `window_source` provenance. *(Rationale and validation: the geometry mismatch that made ≥ 2 detections impossible is Resolved #1; the span cap that prevents minutes-long false vectors is Resolved #3.)*
+
 We can track depth/proximity changes via two complementary methods:
 
 ### 1. Bounding Box Scaling (Fast / Heuristic)

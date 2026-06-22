@@ -58,7 +58,7 @@ graph LR
 ```
 
 ### Shared Helper: Bystander Measurement-Window Anchoring
-Several layers hit the **same geometry problem**: the task's `task_reaction_window_sec` is anchored to the **wearer's** optical-flow climax (±~1 s), but Node-02 bystander detections arrive at a **~6 s cadence** and sit a **median ~7–10 s from that climax** — so the strict window usually holds **0–1 bystander detections**, starving any metric that needs the bystander sampled there. Each affected layer independently re-discovered and fixed this (03b Resolved #2, 03d Resolved #1/#3, 03e Resolved #1, and 03f's open Issue 1), so the canonical implementation now lives **once** in **`src/shared/bystander_window.py::bystander_measurement_window`**.
+Several layers hit the **same geometry problem**: the task's `task_reaction_window_sec` is anchored to the **wearer's** optical-flow climax (±~1 s), but Node-02 bystander detections arrive at a **~6 s cadence** and sit a **median ~7–10 s from that climax** — so the strict window usually holds **0–1 bystander detections**, starving any metric that needs the bystander sampled there. Each affected layer independently re-discovered and fixed this (03b Resolved #2, 03d Resolved #1/#3, 03e Resolved #1, 03f Resolved #8), so the canonical implementation now lives **once** in **`src/shared/bystander_window.py::bystander_measurement_window`**.
 
 **The rule it encodes:** keep the strict reaction window when it already holds enough samples; otherwise re-anchor to the bystander detection nearest the climax (widened `± anchor_span_detections` indices, padded `± pad_sec`), bounded by `max_anchor_span_sec` (a measurement spanning minutes is locomotion/drift, not a task reaction). Returns `(start, end, source)` — `source ∈ {"reaction_window", "bystander_anchored"}` — or `(None, None, reason)` on skip.
 
@@ -68,9 +68,9 @@ Several layers hit the **same geometry problem**: the task's `task_reaction_wind
 |---|---|---|---|---|---|
 | **03d** (proxemic delta) | bystander detections | 2 | 0 s | no — a delta needs 2 endpoints | `single_detection` |
 | **03e** (gesture signal) | upstream 03a trace samples | 5 | ±2 s | yes — padded span suffices | `insufficient_trace` |
-| **03f** (motor resonance) | *intended next consumer — docs/03f Issue 1* | | | | |
+| **03f** (motor resonance) | bystander detections | 1 | 0 s | yes — dense pose is interpolated across the span | `no_pose_data` |
 
-03d's `_bystander_measurement_window` and 03e's `_measurement_window` are now thin wrappers over this helper (their behavior is pinned by `tests/test_bystander_window.py` plus each layer's own suite). 03b uses a related but distinct *forward-fixed-width* presence anchor that predates the helper and is intentionally left as-is.
+03d's `_bystander_measurement_window` and 03e's `_measurement_window` are thin wrappers over this helper, and 03f calls it directly (their behavior is pinned by `tests/test_bystander_window.py` plus each layer's own suite). 03b uses a related but distinct *forward-fixed-width* presence anchor that predates the helper and is intentionally left as-is.
 
 ---
 
