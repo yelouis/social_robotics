@@ -188,7 +188,12 @@ class MotorResonancePipeline:
         any_ego_spikes = False
         any_pose_data = False
         tasks_analyzed = []
-        for task in tasks:
+        # Bystander-aware multi-window climax: one reaction segment per cluster.
+        try:
+            from shared.climax_extraction import expand_task_segments
+        except ImportError:
+            from src.shared.climax_extraction import expand_task_segments
+        for task in expand_task_segments(tasks):
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
             reaction_window = meta.get('task_reaction_window_sec')

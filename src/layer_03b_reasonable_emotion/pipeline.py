@@ -465,7 +465,13 @@ class ReasonableEmotionPipeline:
             return None
 
         tasks_analyzed = []
-        for task in identified_tasks:
+        # Bystander-aware multi-window climax: process one reaction segment per
+        # bystander cluster (each pseudo-task carries a single-window metadata).
+        try:
+            from shared.climax_extraction import expand_task_segments
+        except ImportError:
+            from src.shared.climax_extraction import expand_task_segments
+        for task in expand_task_segments(identified_tasks):
             task_result = self._process_task(cap, fps, task, bystanders, video_id)
             if task_result:
                 tasks_analyzed.append(task_result)

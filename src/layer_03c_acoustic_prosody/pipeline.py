@@ -517,9 +517,13 @@ class AcousticProsodyPipeline:
                 
             identified_tasks = video_data.get("identified_tasks", [])
             tasks_analyzed = []
-            
+            # Bystander-aware multi-window climax: one reaction segment per cluster.
             try:
-                for task in identified_tasks:
+                from shared.climax_extraction import expand_task_segments
+            except ImportError:
+                from src.shared.climax_extraction import expand_task_segments
+            try:
+                for task in expand_task_segments(identified_tasks):
                     task_res = self._process_task(video_path, task)
                     if task_res:
                         tasks_analyzed.append(task_res)
