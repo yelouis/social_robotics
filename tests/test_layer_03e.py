@@ -362,6 +362,35 @@ def test_anchoring_recovers_offset_trace(mock_data_paths):
     assert pr["window_source"] == "bystander_anchored"
 
 
+def test_dedup_and_untracked_filter(mock_data_paths):
+    """Multi-window guardrails (Resolved #6): an UNTRACKED (negative-id) bystander
+    is skipped, and a positive-id bystander whose multiple segments re-anchor to
+    the SAME measurement window is scored once (not once per segment)."""
+    p = _pipe(mock_data_paths)
+    ts = np.linspace(100.0, 104.0, 40)
+    pitch = 0.15 * np.sin(2 * np.pi * 1.0 * ts)
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+             for t, pp in zip(ts, pitch)]
+    p.attention_data["vid_dd"] = {"video_id": "vid_dd", "per_person": [
+        {"person_id": 0, "attention_trace": trace},     # genuine (tracked)
+        {"person_id": -1, "attention_trace": trace},    # untracked -> must be skipped
+    ]}
+    # Two reaction segments at different climaxes; person 0's only detection is at
+    # 102 s, so BOTH segments anchor to the same window -> must dedup to one record.
+    entry = {"video_id": "vid_dd",
+             "bystander_detections": [{"person_id": 0, "timestamps_sec": [102.0]},
+                                      {"person_id": -1, "timestamps_sec": [102.0]}],
+             "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {
+                 "reaction_segments": [
+                     {"task_climax_sec": 101.0, "task_reaction_window_sec": [50.0, 52.0]},
+                     {"task_climax_sec": 103.0, "task_reaction_window_sec": [60.0, 62.0]},
+                 ]}}]}
+    res = p.process_video(entry)
+    pids = [pp["person_id"] for t in res["tasks_analyzed"] for pp in t["per_person"]]
+    assert -1 not in pids               # untracked fragment filtered
+    assert pids.count(0) == 1           # genuine track scored once across the 2 collapsing segments
+
+
 # ------------------------------------------------------------------
 #  June 14 Issue 3: filtfilt padlen guard + per-person isolation
 # ------------------------------------------------------------------
