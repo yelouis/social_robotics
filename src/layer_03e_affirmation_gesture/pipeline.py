@@ -190,7 +190,14 @@ class AffirmationGesturePipeline:
 
         tasks_analyzed = []
         skip_reasons = []
-        for task in tasks:
+        # Bystander-aware multi-window climax: expand each task into one
+        # pseudo-task per reaction segment (single-window metadata), so this
+        # per-task loop transparently processes every social-moment window.
+        try:
+            from shared.climax_extraction import expand_task_segments
+        except ImportError:
+            from src.shared.climax_extraction import expand_task_segments
+        for task in expand_task_segments(tasks):
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
             reaction_window = meta.get('task_reaction_window_sec')
@@ -324,6 +331,8 @@ class AffirmationGesturePipeline:
             if per_person_results:
                 tasks_analyzed.append({
                     "task_id": task_id,
+                    "segment_index": task.get('segment_index', 0),
+                    "reaction_window_sec": [round(float(start_sec), 2), round(float(end_sec), 2)],
                     "per_person": per_person_results
                 })
 
