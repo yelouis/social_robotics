@@ -471,8 +471,13 @@ class ReasonableEmotionPipeline:
             from shared.climax_extraction import expand_task_segments
         except ImportError:
             from src.shared.climax_extraction import expand_task_segments
+        # Cross-layer multi-window guardrail (docs/03 § Multi-Window Reaction
+        # Segments): a sparse bystander's segments collapse onto the same
+        # presence-anchored window, so score each distinct (person, window) once
+        # per clip rather than re-counting the identical reaction per segment.
+        scored_windows = set()
         for task in expand_task_segments(identified_tasks):
-            task_result = self._process_task(cap, fps, task, bystanders, video_id)
+            task_result = self._process_task(cap, fps, task, bystanders, video_id, scored_windows)
             if task_result:
                 tasks_analyzed.append(task_result)
 
@@ -487,7 +492,7 @@ class ReasonableEmotionPipeline:
             "tasks_analyzed": tasks_analyzed
         }
 
-    def _process_task(self, cap, fps, task, bystanders, video_id):
+    def _process_task(self, cap, fps, task, bystanders, video_id, scored_windows=None):
         task_id = task.get('task_id', 'unknown')
         task_label = task.get('task_label', '')
         task_temporal = task.get('task_temporal_metadata', {})
@@ -506,7 +511,7 @@ class ReasonableEmotionPipeline:
         # bystander-presence-anchored windows (Resolved Issue #2) and a face
         # gate (Resolved Issue #3). Returns {person_id: timeseries(>=2 samples)}.
         bystander_timeseries = self._collect_emotion_timeseries(
-            cap, fps, task, bystanders, climax_sec, [start_sec, end_sec]
+            cap, fps, task, bystanders, climax_sec, [start_sec, end_sec], scored_windows
         )
 
         per_person = []
@@ -643,6 +648,12 @@ class ReasonableEmotionPipeline:
     # ------------------------------------------------------------------
     SAMPLE_DT = 0.33      # ~3 FPS within the reaction window
     MATCH_TOL = 2.0       # max gap (s) between a sample time and a bystander detection
+    # Skip a bystander whose nearest detection is more than this from the segment
+    # climax: it was not present at the task moment, so scoring it is wrong (not a
+    # reaction to THIS task) and, on long clips with bystanders scattered across the
+    # whole duration, it stretched 03b's single decode pass across the entire clip
+    # (08a946f4: 192 bystanders over 0-5982s -> ~1.8M frame grabs). Mirrors 03d.
+    MAX_ANCHOR_SPAN_SEC = 30.0
 
     def _face_detector_inst(self):
         if self._face_detector is None and self.enable_face_gate:
@@ -699,7 +710,7 @@ class ReasonableEmotionPipeline:
         return {"t": round(t, 2), "emotion": rng.choice(["joy", "anger", "surprise"]),
                 "magnitude": rng.uniform(0.8, 1.0)}
 
-    def _collect_emotion_timeseries(self, cap, fps, task, bystanders, climax_sec, window_sec):
+    def _collect_emotion_timeseries(self, cap, fps, task, bystanders, climax_sec, window_sec, scored_windows=None):
         """Single decode pass over the union of all bystanders' sampling windows
         (Issue #1). Each bystander's window is anchored to where it is actually
         detected near the climax (Issue #2), and each crop is gated to a real
@@ -711,14 +722,32 @@ class ReasonableEmotionPipeline:
         win = {}
         for b in bystanders:
             pid = b.get('person_id')
+            # Cross-layer guardrail — untracked-track filter (docs/03 § Multi-Window
+            # Reaction Segments): skip untracked negative-id fragments (03d Resolved
+            # #4); they have no real track and, multiplied across segments, inject
+            # phantom emotion trajectories.
+            if pid is None or pid < 0:
+                continue
             ts = b.get('timestamps_sec') or []
             if not ts or not b.get('bounding_boxes'):
                 continue
             if any(s - self.MATCH_TOL <= t <= e + self.MATCH_TOL for t in ts):
-                win[pid] = (s, e)
+                w = (s, e)
             else:
                 t_near = min(ts, key=lambda t: abs(t - climax_sec))
-                win[pid] = (t_near, t_near + width)
+                # Anchor-distance bound (MAX_ANCHOR_SPAN_SEC): a bystander detected far
+                # from this segment's climax was not present at the task — skip it.
+                if abs(t_near - climax_sec) > self.MAX_ANCHOR_SPAN_SEC:
+                    continue
+                w = (t_near, t_near + width)
+            # Cross-layer guardrail — distinct-window dedup: a sparse bystander's
+            # segments collapse onto the same anchored window; score it once per clip.
+            if scored_windows is not None:
+                key = (pid, round(w[0], 1), round(w[1], 1))
+                if key in scored_windows:
+                    continue
+                scored_windows.add(key)
+            win[pid] = w
         if not win:
             return {}
 
@@ -738,10 +767,14 @@ class ReasonableEmotionPipeline:
         rng = random.Random(int(sum(sum(bb) for b in bystanders
                                     for bb in (b.get('bounding_boxes') or []))) or 1)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Start the sequential decode AT the first sample, not frame 0: on a long
+        # clip a late segment would otherwise grab every frame from 0 to the window
+        # (~90k frames for a task at t=3000s). One seek + a local grab walk instead.
+        first_frame = int(sorted_ts[0] * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
         if not cap.grab():
             return {}
-        cur = 1
+        cur = first_frame + 1
         for t in sorted_ts:
             target = int(t * fps)
             broke = False
