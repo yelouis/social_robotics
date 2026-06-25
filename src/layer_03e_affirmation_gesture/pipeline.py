@@ -256,26 +256,25 @@ class AffirmationGesturePipeline:
 
                     # Extract time, pitch, yaw
                     timestamps = np.array([x['t'] for x in window_trace])
-                    # Issue 2 (June 14 post-fix finding): 03a writes lost-tracking
-                    # samples as pitch=yaw=0.0 with target='NoFace' (NOT NaN), so the
-                    # step transitions in/out of those zero-plateaus fabricate "nods"
-                    # and interpolated_fraction never flags them. Treat NoFace as the
-                    # missing data it is -> NaN, so it flows through _fill_nan + the
-                    # interpolated_fraction guard instead of forming real-valued steps.
-                    # docs/03e Issue 1 (Option A): prefer true HEAD POSE
-                    # (head_pitch_rad/head_yaw_rad from 03a's FaceLandmarker) over
-                    # gaze — gaze moves with eye saccades while the head is still.
-                    # A sample's head pose is null when FaceLandmarker found no face
-                    # (its own tracking-loss) or the sample was NoFace, so treat
-                    # null as missing (NaN) exactly like the gaze NoFace handling.
-                    if any(x.get('head_pitch_rad') is not None for x in window_trace):
-                        signal_source = 'head_pose'
-                        pitch = np.array([x['head_pitch_rad'] if x.get('head_pitch_rad') is not None else np.nan for x in window_trace])
-                        yaw = np.array([x['head_yaw_rad'] if x.get('head_yaw_rad') is not None else np.nan for x in window_trace])
-                    else:
-                        signal_source = 'gaze'
-                        pitch = np.array([np.nan if x.get('target') == 'NoFace' else x['pitch_rad'] for x in window_trace])
-                        yaw = np.array([np.nan if x.get('target') == 'NoFace' else x['yaw_rad'] for x in window_trace])
+                    # docs/03e Resolved #11: HEAD POSE ONLY — gaze is discarded.
+                    # Corpus validation proved gaze-derived gestures are noise: 0.25%
+                    # precision vs head pose, and gaze fabricated a "nod" on 57% of
+                    # non-nod windows — because the vestibulo-ocular reflex stabilises
+                    # gaze AGAINST head rotation, so gaze and head-nod are physiologically
+                    # decoupled. A 6DoF-model recovery of the missing head pose was tested
+                    # and did NOT validate (Resolved #11). So a window with no
+                    # FaceLandmarker head-pose sample is reported UNMEASURED
+                    # ('no_head_pose') — never a false neutral that would dilute the
+                    # reward signal. (A null head_pitch_rad WITHIN a head-pose window is
+                    # treated as missing/NaN so it flows through _fill_nan + the
+                    # interpolated_fraction guard rather than forming a real-valued step;
+                    # that guard is what restricts gestures to DENSE head-pose windows.)
+                    if not any(x.get('head_pitch_rad') is not None for x in window_trace):
+                        skip_reasons.append("no_head_pose")
+                        continue
+                    signal_source = 'head_pose'
+                    pitch = np.array([x['head_pitch_rad'] if x.get('head_pitch_rad') is not None else np.nan for x in window_trace])
+                    yaw = np.array([x['head_yaw_rad'] if x.get('head_yaw_rad') is not None else np.nan for x in window_trace])
 
                     # Interpolate NaNs and capture how much of each axis was bridged.
                     # If too much of the trace was reconstructed, downstream filtering
