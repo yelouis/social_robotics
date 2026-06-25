@@ -197,6 +197,11 @@ class AffirmationGesturePipeline:
             from shared.climax_extraction import expand_task_segments
         except ImportError:
             from src.shared.climax_extraction import expand_task_segments
+        # Distinct-window dedup (per clip, Resolved #6): the multi-window climax can
+        # re-anchor several segments onto the SAME per-person measurement window for
+        # a sparse track, which would otherwise report the identical reaction once
+        # per segment (one 4 s window was emitted up to 70x).
+        scored_windows = set()
         for task in expand_task_segments(tasks):
             task_id = task.get('task_id', 'unknown')
             meta = task.get('task_temporal_metadata', {})
@@ -216,15 +221,33 @@ class AffirmationGesturePipeline:
                 # (every other person lost, no record emitted). Contain it here.
                 try:
                     person_id = p_data.get('person_id')
+                    dets = det_by_pid.get(person_id, [])
+                    # Genuine-track filter (Resolved #6): skip UNTRACKED fragments —
+                    # Node-02 gives an untracked box a unique NEGATIVE person_id
+                    # (03d Resolved #4), and these phantoms (e.g. `person -124`,
+                    # measured 70x) dominate the raw counts. A positive-id track is a
+                    # genuine bystander and is kept — even a brief single-detection
+                    # one (preserving the single-detection anchoring of Resolved #1);
+                    # its windows are still collapsed by the distinct-window dedup below.
+                    if person_id is None or person_id < 0:
+                        skip_reasons.append("untracked_track")
+                        continue
                     trace = p_data.get('attention_trace', [])
                     trace_ts = [x['t'] for x in trace]
 
                     # Issue 2: align the read window with where 03a actually sampled.
                     w_start, w_end, w_source = self._measurement_window(
-                        trace_ts, det_by_pid.get(person_id, []), climax_sec, start_sec, end_sec)
+                        trace_ts, dets, climax_sec, start_sec, end_sec)
                     if w_start is None:
                         skip_reasons.append(w_source)
                         continue
+
+                    # Distinct-window dedup: this segment re-anchored to a window
+                    # already scored for this person -> same reaction, skip it.
+                    win_key = (person_id, round(w_start, 1), round(w_end, 1))
+                    if win_key in scored_windows:
+                        continue
+                    scored_windows.add(win_key)
 
                     window_trace = [t for t in trace if w_start <= t['t'] <= w_end]
                     if len(window_trace) < self.MIN_TRACE_POINTS:

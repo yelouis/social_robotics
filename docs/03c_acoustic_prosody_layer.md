@@ -6,7 +6,7 @@ The **Acoustic Prosody Layer** draws on developmental psychology, specifically h
 ---
 
 ## 📥 Input Requirements
-- **`filtered_manifest.json`** (required): Needs the `task_reaction_window_sec` for each task so we know exactly when to slice the audio.
+- **`filtered_manifest.json`** (required): Needs the `task_reaction_window_sec` for each task so we know exactly when to slice the audio. With the multi-window climax (docs/03 § Multi-Window Reaction Segments) the task expands into one audio slice per reaction segment, yielding an ambient-prosody *trajectory* through the task. (03c is per-task *ambient* audio, not per-bystander, so the genuine-track filter doesn't apply; and it slices each segment's own window directly — no re-anchoring collapse, so no distinct-window dedup is needed.)
 - **Raw Audio Chunk**: Extracted from the source `.mp4` file explicitly within the bounded task reaction window.
 - **Cross-layer (optional)**: None. This layer evaluates ambient sound regardless of visual attention.
 

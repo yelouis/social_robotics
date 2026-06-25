@@ -16,6 +16,7 @@ The **Affirmation Gesture Layer** parses the most explicit non-verbal heuristic 
 ### 1. Data Reuse Pipeline
 Do not re-run inference on the videos. Load the raw 3D head pose arrays from Layer 03a. For each sample in the reaction window, we have `(timestamp, pitch, yaw)`.
 - **Window anchoring**: 03e does **not** read the wearer-climax reaction window directly — 03a only sampled each bystander where it was *detected*, so an unaligned window holds no trace samples and the layer scored **0/50** before this was fixed. It anchors via the shared `bystander_measurement_window` helper (`src/shared/bystander_window.py`; counts upstream 03a trace samples, `min = 5`, `± 2 s` pad), re-anchoring to the bystander-detection span when the strict window is too sparse (Resolved #1; see docs/03 Cross-Layer § Shared Helper).
+- **Per-segment scoring + guardrails**: 03e scores one reaction *segment* at a time (the multi-window climax — docs/03 Cross-Layer § Multi-Window Reaction Segments), so a bystander's per-segment gestures form a reaction *trajectory* through the task rather than one label. It applies the two mandatory multi-window guardrails: **untracked** bystanders are skipped (Node-02 gives an untracked box a negative person id — 03d Resolved #4; positive-id tracks, even brief single-detection ones, are kept, preserving the single-detection anchoring of Resolved #1), and each **distinct `(person, measurement_window)` is scored once** (a segment that re-anchors to an already-scored window is dropped). Without these, a single untracked window was emitted up to **70×** (Resolved #6).
 
 ### 2. Time-Series Signal Processing (SciPy)
 Nodding and shaking have distinct frequency signatures—they are rhythmic oscillations occurring roughly between 1Hz and 3Hz.
@@ -24,6 +25,7 @@ Nodding and shaking have distinct frequency signatures—they are rhythmic oscil
 - **Saccade Suppression (FPS-Gated Median Smoothing)**: We consume the bystander's pitch/yaw signal (head-pose preferred, L2CS gaze as fallback — see Input Requirements / Resolved #4); the gaze-fallback path in particular conflates rapid eye saccades with head rotation. To suppress saccadic impulses from aliasing into the 1-3Hz band, we apply a rank-order `medfilt(kernel_size=3)`. *Why it is gated:* This is strictly gated to activate only at high sampling rates (`fps >= 32.0`). At lower cadences, a 3-sample median window spans too much of a genuine nod's period and physically demolishes the tone.
 - **Dynamic Bandpass Filtering**: We isolate human communication gestures (1-3Hz). However, because the effective FPS can be low, a static 1.5Hz cutoff might mathematically erase genuine 2.0Hz nods. We use a three-tier Nyquist-aware strategy that dynamically adjusts the frequency band based on the effective sampling rate.
 - **Nodding & Shaking Detection**: Look for rhythmic variance. Use peak-finding (`find_peaks`) to identify rhythmic extrema on Pitch (nodding) and Yaw (shaking).
+- **No frequency gate (it does not work here)**: a 1–3 Hz band gate on the detected `pitch_oscillation_hz` was tried and **rejected** — at this corpus's low / variable sampling a genuine 1 Hz nod is detected at ~**0.7 Hz** (the trustworthy *head-pose* nods too, median 0.73 Hz), overlapping slow drift, so any threshold rejects real nods along with the noise. Gesture trustworthiness is instead carried by the `signal_source` provenance — head-pose-derived vs gaze-fallback (Resolved #5/#6).
 - **Ambiguous Gesture Classification**: If simultaneous pitch and yaw oscillations occur (a diagonal wobble), the gesture is classified as `ambiguous_wobble` when both confidence scores exceed `0.6` and are within a `0.15` delta. This prevents arbitrary bias toward nods or shakes.
 - **Energy-Weighted Confidence**: A purely count-based confidence score treats vigorous nods and imperceptible micro-nods identically. The pipeline computes the RMS amplitude of the bandpass-filtered signal and applies it as a normalized multiplicative factor to the count-based confidence score.
 
@@ -44,6 +46,8 @@ To optimize resume cycles and make filtering decisions explicit, skipped videos 
   "tasks_analyzed": [
     {
       "task_id": "t_01",
+      "segment_index": 0,
+      "reaction_window_sec": [12.0, 15.0],
       "per_person": [
         {
           "person_id": 0,
@@ -51,7 +55,9 @@ To optimize resume cycles and make filtering decisions explicit, skipped videos 
           "yaw_oscillation_hz": 0.2,
           "interpolated_fraction": 0.04,
           "gesture_detected": "affirming_nod",
-          "confidence": 0.94
+          "confidence": 0.94,
+          "measurement_window_sec": [12.0, 15.0],
+          "signal_source": "head_pose"
         }
       ]
     }
@@ -59,6 +65,8 @@ To optimize resume cycles and make filtering decisions explicit, skipped videos 
 }
 ```
 *(Sentinel Example: `{"video_id": "clip_2", "layer": "03e_affirmation_gesture", "tasks_analyzed": [], "skipped_reason": "no_attention_data"}`)*
+
+> **Per-segment trajectory**: a task expands into one `tasks_analyzed` entry per reaction segment (`segment_index` + `reaction_window_sec`), so a bystander's entries across a task's segments form its **reaction trajectory** through the task (docs/03 § Multi-Window Reaction Segments). After the distinct-window dedup + genuine-track filter, each entry is a genuine moment, not a duplicate. A consumer wanting one per-task verdict aggregates a bystander's segment gestures (e.g. recency-weighted).
 
 ## Verification & Validation Check
 - **Singular Video Test**: Plot the Pitch and Yaw arrays explicitly on a matplotlib line graph for a known head-nod video. Visually identify the sine-wave signature of the nod on the Pitch axis and verify the SciPy peak-finding logic successfully counted the nods.
@@ -98,6 +106,10 @@ The Affirmation Gesture Layer has been implemented successfully in `src/layer_03
 5. **Head-Pose Coverage Is Sparse on Small Bystander Faces — Accepted as the Honest Gaze-Fallback Floor (Resolved - June 14)**:
    - **Problem**: The June 14 head-pose run (`e2e_reports/2026_06_14_layer03e_headpose/`) showed MediaPipe FaceLandmarker resolves head pose on only **~8%** of trace samples (42% `NoFace`, **50% face-present-but-no-landmarks** on small / steeply-angled / motion-blurred bystander faces), so most per-person windows fall back to gaze or `over_interpolated`. Resolved #4 therefore rejects gaze artifacts only *where head pose exists*, which is rare on this egocentric corpus.
    - **Solution** (Option C — accept the honest floor): **No code change.** 03e already emits per-vector `signal_source` provenance (Resolved #4), so head-pose-derived gestures (`signal_source="head_pose"`) and the lower-confidence gaze-fallback gestures (`signal_source="gaze"`) are explicitly distinguishable, letting downstream consumers (Layer 04) weight gaze-derived gestures lower or filter them. The recovery alternatives (crop-upscaling, a small-face 6DoF model) were considered not worth the added compute/dependency given this corpus's low absolute gesture yield. The sparse-coverage characteristic is an accepted modality floor, not a defect — 03e stays honest (provenance, no false confidence) about what it could and could not measure.
+
+6. **Multi-Window Over-Counting — Distinct-Window Dedup + Untracked-Track Filter (Resolved - June 24)**:
+   - **Problem**: The bystander-aware multi-window climax (02 Resolved #22) expands each task into ~13 reaction segments, and 03e re-anchors every segment to the bystander's nearest detection (Resolved #1) — so for a sparse track *all* its segments collapse onto the **same** measurement window. On the top-200 (climax-populated) re-run this reported the identical reaction once per segment: **34,781 "nods"** that were only ~1,701 distinct `(clip, person)` reactions counted a median **13× (max 70×)** each — e.g. `1fe55d7f` person `-124` (an *untracked* negative-id box, 03d Resolved #4) was the same 4 s window scored **70 times**. Nod:shake ran ~37:1, implausible for real affirmation.
+   - **Solution**: Two cross-layer guardrails in the per-segment loop (docs/03 § Multi-Window Reaction Segments): **(1) distinct-window dedup** — a per-clip `(person_id, measurement_window)` set; a segment that re-derives an already-scored window is skipped; **(2) untracked-track filter** — skip negative person ids (untracked boxes), keeping genuine positive-id tracks even when brief (preserving the single-detection anchoring of Resolved #1, since the dedup already prevents over-counting). A **frequency gate** (reject sub-1 Hz "nods") was prototyped and **rejected**: the detected `pitch_oscillation_hz` is biased low at this corpus's variable sampling — a genuine 1 Hz nod, *including the trustworthy head-pose ones*, is detected at ~**0.7 Hz** — so it overlaps slow drift and cannot separate them. **Validated on the top-200 re-run**: nods **34,781 → 1,023** (one per genuine `(clip, person)`; per-person cross-segment count median 13× → **1×**; **0** untracked nods), runtime **4,070 s → 37 s**, suite **33/33** (`test_dedup_and_untracked_filter`). The residual 1,023 nods are **1,013 gaze-fallback / 10 head-pose** — i.e. the multi-window over-count is fixed and what remains is the known sparse-head-pose gaze-fallback floor (Resolved #5), flagged via `signal_source` for downstream weighting, *not* a multi-window artifact.
 
 ### 🧪 Test Suite Results (25/25 Passed across `test_layer_03e.py` + `test_head_pose.py`)
 
