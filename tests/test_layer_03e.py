@@ -61,21 +61,21 @@ def mock_data_paths():
         pitch_nod = 0.1 * np.sin(2 * np.pi * 2.0 * t_arr)
         yaw_nod = 0.01 * np.random.randn(len(t_arr))
         
-        trace_nod = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)} 
+        trace_nod = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)} 
                      for t, p, y in zip(t_arr, pitch_nod, yaw_nod)]
                      
         # Shake: Yaw oscillating at ~2Hz, Pitch flat
         pitch_shake = 0.01 * np.random.randn(len(t_arr))
         yaw_shake = 0.1 * np.sin(2 * np.pi * 2.0 * t_arr)
         
-        trace_shake = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)} 
+        trace_shake = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)} 
                        for t, p, y in zip(t_arr, pitch_shake, yaw_shake)]
                        
         # None: Both relatively flat
         pitch_none = 0.01 * np.random.randn(len(t_arr))
         yaw_none = 0.01 * np.random.randn(len(t_arr))
         
-        trace_none = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)} 
+        trace_none = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)} 
                       for t, p, y in zip(t_arr, pitch_none, yaw_none)]
                       
         attention_data = [
@@ -150,7 +150,7 @@ def test_nan_resilience(mock_data_paths):
     pitch_nod[5:10] = np.nan
     yaw_nod[12:15] = np.nan
     
-    trace_nod = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)} 
+    trace_nod = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)} 
                  for t, p, y in zip(t_arr, pitch_nod, yaw_nod)]
                  
     pipeline.attention_data["vid_nan"] = {
@@ -210,7 +210,7 @@ def test_simultaneous_nod_shake_ambiguous(mock_data_paths):
     pitch_both = 0.1 * np.sin(2 * np.pi * 2.0 * t_arr)
     yaw_both = 0.1 * np.sin(2 * np.pi * 2.0 * t_arr)
     
-    trace_both = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)}
+    trace_both = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)}
                   for t, p, y in zip(t_arr, pitch_both, yaw_both)]
     
     pipeline.attention_data["vid_both"] = {
@@ -286,7 +286,7 @@ def test_nonuniform_sampling(mock_data_paths):
     pitch = 0.15 * np.sin(2 * np.pi * 1.0 * timestamps)
     yaw = np.zeros_like(timestamps)
     
-    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y)}
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(p), "yaw_rad": float(y), "head_pitch_rad": float(p), "head_yaw_rad": float(y)}
              for t, p, y in zip(timestamps, pitch, yaw)]
     
     pipeline.attention_data["vid_nonuniform"] = {
@@ -349,7 +349,7 @@ def test_anchoring_recovers_offset_trace(mock_data_paths):
     p = _pipe(mock_data_paths)
     ts = np.linspace(100.0, 104.0, 40)
     pitch = 0.15 * np.sin(2 * np.pi * 1.0 * ts)
-    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "head_pitch_rad": float(pp), "head_yaw_rad": 0.0}
              for t, pp in zip(ts, pitch)]
     p.attention_data["vid_off"] = {"video_id": "vid_off", "per_person": [{"person_id": 0, "attention_trace": trace}]}
     entry = {"video_id": "vid_off",
@@ -369,7 +369,7 @@ def test_dedup_and_untracked_filter(mock_data_paths):
     p = _pipe(mock_data_paths)
     ts = np.linspace(100.0, 104.0, 40)
     pitch = 0.15 * np.sin(2 * np.pi * 1.0 * ts)
-    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "head_pitch_rad": float(pp), "head_yaw_rad": 0.0}
              for t, pp in zip(ts, pitch)]
     p.attention_data["vid_dd"] = {"video_id": "vid_dd", "per_person": [
         {"person_id": 0, "attention_trace": trace},     # genuine (tracked)
@@ -410,7 +410,7 @@ def test_short_window_does_not_crash(mock_data_paths):
     p = _pipe(mock_data_paths)
     ts = np.linspace(0.0, 1.0, 10)  # ~9 fps -> nyq>3 -> bandpass branch, <16 samples
     pitch = 0.2 * np.sin(2 * np.pi * 1.5 * ts)
-    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0}
+    trace = [{"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "head_pitch_rad": float(pp), "head_yaw_rad": 0.0}
              for t, pp in zip(ts, pitch)]
     p.attention_data["vid_short"] = {"video_id": "vid_short", "per_person": [{"person_id": 0, "attention_trace": trace}]}
     entry = {"video_id": "vid_short",
@@ -449,7 +449,7 @@ def test_noface_samples_treated_as_missing(mock_data_paths):
         if i < 14:  # 14/25 = 0.56 NoFace > MAX_INTERPOLATED_FRACTION (0.3)
             trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
         else:
-            trace.append({"t": float(t), "score": 0.9, "pitch_rad": 0.01, "yaw_rad": 0.01, "target": "Face"})
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": 0.01, "yaw_rad": 0.01, "target": "Face", "head_pitch_rad": 0.01, "head_yaw_rad": 0.01})
     p.attention_data["vid_nf"] = {"video_id": "vid_nf", "per_person": [{"person_id": 0, "attention_trace": trace}]}
     entry = {"video_id": "vid_nf", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
     res = p.process_video(entry)
@@ -467,7 +467,7 @@ def test_small_noface_fraction_still_detects(mock_data_paths):
         if i in (10, 11):  # 2/30 NoFace
             trace.append({"t": float(t), "score": 0.0, "pitch_rad": 0.0, "yaw_rad": 0.0, "target": "NoFace"})
         else:
-            trace.append({"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "target": "Face"})
+            trace.append({"t": float(t), "score": 0.9, "pitch_rad": float(pp), "yaw_rad": 0.0, "target": "Face", "head_pitch_rad": float(pp), "head_yaw_rad": 0.0})
     p.attention_data["vid_sm"] = {"video_id": "vid_sm", "per_person": [{"person_id": 0, "attention_trace": trace}]}
     entry = {"video_id": "vid_sm", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
     res = p.process_video(entry)
@@ -518,13 +518,20 @@ def test_head_pose_detects_real_nod(mock_data_paths):
     assert pr["gesture_detected"] == "affirming_nod"
 
 
-def test_falls_back_to_gaze_without_head_fields(mock_data_paths):
-    """Old 03a traces (no head_* fields) still work via gaze, unchanged."""
+def test_gaze_only_window_is_unmeasured_not_scored(mock_data_paths):
+    """Resolved #11: gaze is DISCARDED (proven 0.25% precision vs head pose). A
+    window with a face but NO head-pose sample is reported unmeasured
+    ('no_head_pose'), never scored — even a strong gaze oscillation is not a nod."""
     p = _pipe(mock_data_paths)
-    entry = {"video_id": "vid_nod", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
-    pr = p.process_video(entry)["tasks_analyzed"][0]["per_person"][0]
-    assert pr["signal_source"] == "gaze"
-    assert pr["gesture_detected"] == "affirming_nod"
+    t = np.linspace(0, 5, 30)
+    trace = [{"t": float(tt), "score": 0.9, "target": "Face",            # strong gaze nod, NO head_* fields
+              "pitch_rad": float(pp), "yaw_rad": 0.0}
+             for tt, pp in zip(t, 0.15 * np.sin(2 * np.pi * 2.0 * t))]
+    p.attention_data["vid_g"] = {"video_id": "vid_g", "per_person": [{"person_id": 0, "attention_trace": trace}]}
+    entry = {"video_id": "vid_g", "identified_tasks": [{"task_id": "t1", "task_temporal_metadata": {"task_reaction_window_sec": [0, 5]}}]}
+    res = p.process_video(entry)
+    assert res["tasks_analyzed"] == []
+    assert "no_head_pose" in res["skipped_reason"]
 
 
 def test_null_head_pose_is_missing_not_zero(mock_data_paths):
