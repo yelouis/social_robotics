@@ -217,7 +217,7 @@ def test_late_stage_weighted_math():
         }
     }
 
-    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec):
+    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec, scored_windows=None):
         return {0: [
             {"t": 6.2, "emotion": "neutral", "magnitude": 1.0},
             {"t": 6.7, "emotion": "anger", "magnitude": 1.0},
@@ -275,7 +275,7 @@ def test_surprise_classified_as_neutral():
         }
     }
 
-    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec):
+    def mock_collect(cap, fps, task, bystanders, climax_sec, window_sec, scored_windows=None):
         return {0: [
             {"t": 1.0, "emotion": "neutral", "magnitude": 0.85},
             {"t": 1.5, "emotion": "surprise", "magnitude": 0.85}
