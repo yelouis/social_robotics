@@ -196,7 +196,8 @@ def test_audio_chunk_extraction_mock(mock_mkstemp, mock_run):
 
     with patch("os.close") as mock_close, \
          patch("os.path.exists", return_value=True), \
-         patch("os.path.getsize", return_value=1024):
+         patch("os.path.getsize", return_value=1024), \
+         patch.object(pipeline, "_audio_duration", return_value=float("inf")):
         wav_path = pipeline._extract_audio_chunk("dummy.mp4", 1.0, 3.0)
 
     mock_close.assert_called_once_with(99)
