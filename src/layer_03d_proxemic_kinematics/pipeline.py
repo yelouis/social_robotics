@@ -47,6 +47,15 @@ class ProxemicKinematicsPipeline:
     # Anchored windows wider than this skip the bystander (None). All 10
     # confident June-10 vectors sat on <=12s spans, so 30s is conservative.
     MAX_ANCHOR_SPAN_SEC = 30.0
+    # Track-explosion cap (June 26): Node-02 fragments bystander tracking into many
+    # short spurious positive-id tracks — median 48, up to 829 "persons"/clip,
+    # median 4 detections each. 03d's per-bystander Depth-Anything + SAM is far too
+    # expensive to pay on all of them (18,497 tracks corpus-wide -> a multi-day run)
+    # and they are not real people. Process only the N longest tracks per clip (the
+    # genuine, sustained bystanders a scene actually has); short fragments sort to
+    # the bottom and are dropped. Bounds the run to ~1,945 tracks. 03f needs the
+    # same cap.
+    MAX_BYSTANDERS_PER_CLIP = 10
     # Issue 1 Option C (June 13): identity-continuity guard. The upstream
     # collision-proof fallback (social_presence.py) fixes new manifests, but
     # already-generated manifests can still carry a person_id whose detections
@@ -261,6 +270,13 @@ class ProxemicKinematicsPipeline:
         # Segments): a sparse bystander's segments can re-anchor onto the SAME
         # measurement window, so score each distinct (person, window) once per clip.
         scored_windows = set()
+        # Track-explosion cap (see MAX_BYSTANDERS_PER_CLIP): keep only the longest
+        # tracks (genuine sustained bystanders). Sorting by detection count puts the
+        # real bystanders first; short untracked negative-id fragments sort to the
+        # bottom and are dropped here (the untracked filter below is the safety net).
+        bystanders = sorted(
+            bystanders, key=lambda b: len(b.get('timestamps_sec', [])), reverse=True
+        )[:self.MAX_BYSTANDERS_PER_CLIP]
         # Bystander-aware multi-window climax: one reaction segment per cluster.
         try:
             from shared.climax_extraction import expand_task_segments
