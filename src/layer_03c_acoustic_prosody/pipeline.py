@@ -9,7 +9,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.layer_03c_acoustic_prosody.config import Layer03cConfig
+try:
+    from src.layer_03c_acoustic_prosody.config import Layer03cConfig
+except ImportError:
+    from layer_03c_acoustic_prosody.config import Layer03cConfig
 try:
     from src.models_config import get_model
 except ImportError:
@@ -160,6 +163,32 @@ class AcousticProsodyPipeline:
             except Exception as e:
                 logger.error(f"Error reading existing results: {e}")
 
+    def _audio_duration(self, video_path: str) -> float:
+        """Audio-stream duration in seconds; 0.0 when the clip has no audio stream,
+        +inf when a stream exists but its length is unknown (let ffmpeg try). Cached
+        per clip — one ffprobe replaces a failed ffmpeg on every no-audio segment
+        (the corpus is ~36% audio-less, and long clips' audio can end before a late
+        reaction window)."""
+        cache = self.__dict__.setdefault("_audio_dur_cache", {})
+        if video_path in cache:
+            return cache[video_path]
+        dur = 0.0
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a:0",
+                 "-show_entries", "stream=duration", "-of", "csv=p=0", video_path],
+                capture_output=True, text=True, timeout=30)
+            s = out.stdout.strip()
+            if s.upper() == "N/A":
+                dur = float("inf")          # audio present, unknown length -> don't skip
+            elif s:
+                dur = float(s)              # audio present, known length
+            # empty stdout -> no audio stream -> dur stays 0.0
+        except Exception:
+            dur = float("inf")              # probe failed -> let ffmpeg decide
+        cache[video_path] = dur
+        return dur
+
     def _extract_audio_chunk(self, video_path: str, start_sec: float, end_sec: float) -> Optional[str]:
         """Extract a chunk of audio from the video using ffmpeg and save it to a temporary 16kHz wav file.
         
@@ -169,7 +198,13 @@ class AcousticProsodyPipeline:
         if start_sec >= end_sec:
             logger.warning(f"Invalid time window: start={start_sec}, end={end_sec}")
             return None
-            
+
+        # Skip cleanly when the clip has no audio stream, or the window starts past
+        # the audio's end (long clip, late reaction window) — the caller emits the
+        # explicit audio_present=False marker. Avoids a failed ffmpeg + error spam.
+        if start_sec >= self._audio_duration(video_path):
+            return None
+
         # Use mkstemp for a guaranteed-unique, process-safe temporary file
         fd, out_wav = tempfile.mkstemp(suffix=".wav", prefix="prosody_")
         os.close(fd)  # Close the file descriptor; ffmpeg will write to the path
@@ -199,7 +234,7 @@ class AcousticProsodyPipeline:
                 self._safe_remove(out_wav)
                 return None
         except subprocess.CalledProcessError as e:
-            logger.error(f"ffmpeg failed to extract audio from {video_path}: {e}")
+            logger.warning(f"ffmpeg failed to extract audio from {video_path}: {e}")
             self._safe_remove(out_wav)
             return None
         except FileNotFoundError:
@@ -515,6 +550,7 @@ class AcousticProsodyPipeline:
                 logger.warning(f"Video missing or invalid path: {video_path}")
                 continue
                 
+            print(f"[03c] processing {video_id}", flush=True)
             identified_tasks = video_data.get("identified_tasks", [])
             tasks_analyzed = []
             # Bystander-aware multi-window climax: one reaction segment per cluster.
