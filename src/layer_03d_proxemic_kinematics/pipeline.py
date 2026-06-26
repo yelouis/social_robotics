@@ -257,6 +257,10 @@ class ProxemicKinematicsPipeline:
 
         tasks_analyzed = []
         skip_reasons = []  # Issue 2: why each bystander was skipped (sentinel provenance)
+        # Cross-layer multi-window guardrail (docs/03 § Multi-Window Reaction
+        # Segments): a sparse bystander's segments can re-anchor onto the SAME
+        # measurement window, so score each distinct (person, window) once per clip.
+        scored_windows = set()
         # Bystander-aware multi-window climax: one reaction segment per cluster.
         try:
             from shared.climax_extraction import expand_task_segments
@@ -282,6 +286,12 @@ class ProxemicKinematicsPipeline:
             per_person = []
             for bystander in bystanders:
                 person_id = bystander.get('person_id')
+                # Cross-layer guardrail: skip UNTRACKED bystanders — a negative
+                # person_id is an untracked box (Resolved #4), a phantom with no
+                # real track to read a proxemic vector from.
+                if person_id is None or person_id < 0:
+                    skip_reasons.append("untracked_track")
+                    continue
                 timestamps_sec = bystander.get('timestamps_sec', [])
                 bounding_boxes = bystander.get('bounding_boxes', [])
 
@@ -296,6 +306,15 @@ class ProxemicKinematicsPipeline:
                 if win_start is None:
                     skip_reasons.append(window_source)
                     continue
+
+                # Distinct-window dedup: this (person, window) was already scored
+                # in an earlier segment (the sparse track re-anchored to the same
+                # window) — same vector, don't recompute/emit it. Also saves the
+                # depth + Farneback cost on the duplicate.
+                dedup_key = (person_id, round(win_start, 2), round(win_end, 2))
+                if dedup_key in scored_windows:
+                    continue
+                scored_windows.add(dedup_key)
 
                 bbox_delta = self._calculate_bbox_scale_delta(timestamps_sec, bounding_boxes, win_start, win_end)
 
