@@ -34,6 +34,11 @@ class MotorResonancePipeline:
     TARGET_POSE_FPS = 10.0
     ANCHOR_SPAN_DETECTIONS = 1
     MAX_ANCHOR_SPAN_SEC = 30.0
+    # Track-explosion cap (cross-layer, mirrors 03d): Node-02 fragments tracking
+    # into many short spurious positive-id tracks (median 48, up to 829/clip).
+    # 03f's per-bystander YOLO-pose can't pay all of them and they aren't real
+    # people — process only the N longest tracks (genuine sustained bystanders).
+    MAX_BYSTANDERS_PER_CLIP = 10
     KPT_CONFIDENCE_THRESHOLD = 0.5
     VELOCITY_NORMALIZER = 0.5
     VELOCITY_CAP = 10.0
@@ -185,6 +190,15 @@ class MotorResonancePipeline:
             print(f"No bystanders or tasks found for {video_id}.")
             return self._sentinel(video_id, "no_bystanders_or_tasks")
 
+        # Track-explosion cap (see MAX_BYSTANDERS_PER_CLIP): keep only the longest
+        # tracks (genuine sustained bystanders); short spurious fragments sort out.
+        bystanders = sorted(
+            bystanders, key=lambda b: len(b.get('timestamps_sec', [])), reverse=True
+        )[:self.MAX_BYSTANDERS_PER_CLIP]
+        # Distinct-window dedup (cross-layer): a sparse bystander's segments can
+        # re-anchor onto the same pose window; score each (person, window) once.
+        scored_windows = set()
+
         any_ego_spikes = False
         any_pose_data = False
         tasks_analyzed = []
@@ -224,6 +238,29 @@ class MotorResonancePipeline:
 
                 if not timestamps_sec or not bounding_boxes:
                     continue
+
+                # Distinct-window dedup: skip if this (person, pose window) was
+                # already scored in an earlier segment (same flinch). The helper is
+                # cheap (no decode); _extract_and_correlate_pose re-derives the same
+                # window internally — args mirror that call exactly.
+                try:
+                    from shared.bystander_window import bystander_measurement_window
+                except ImportError:
+                    from src.shared.bystander_window import bystander_measurement_window
+                _ws, _we, _ = bystander_measurement_window(
+                    timestamps_sec, climax_sec, start_sec, end_sec,
+                    min_in_reaction_window=1,
+                    anchor_span_detections=self.ANCHOR_SPAN_DETECTIONS,
+                    pad_sec=0.0,
+                    max_anchor_span_sec=self.MAX_ANCHOR_SPAN_SEC,
+                    allow_single_detection=True,
+                    no_detection_reason="no_pose_data",
+                )
+                if _ws is not None:
+                    _dk = (person_id, round(_ws, 2), round(_we, 2))
+                    if _dk in scored_windows:
+                        continue
+                    scored_windows.add(_dk)
 
                 # Step 2 & 3: Pose Extraction & Correlating Resonance
                 pose_analysis = self._extract_and_correlate_pose(
