@@ -105,16 +105,35 @@ tools/run_supervised.sh e2e_reports/<run>/03d_result_50.json ./venv/bin/python t
 ```
 It wraps each attempt in `caffeinate -dimsu` (blocks system/disk sleep), exports `PYTHONFAULTHANDLER=1` (a native fault dumps a Python traceback into the log instead of vanishing), and relaunches the resumable runner until it exits 0. A **no-progress guard** counts records in `<result_json>` between attempts and aborts after **2 consecutive relaunches that add zero records** — this both breaks a deterministic *poison-clip* crash-loop (layer pipelines mark a `video_id` processed only *after* success, unlike the acquisition orchestrator which marks *before* scoring) and surfaces it loudly. `caffeinate` is auto-skipped on non-macOS hosts; `SR_SUPERVISE_MAX_ATTEMPTS` / `SR_SUPERVISE_LOG` tune the ceiling and log path.
 
-### Parallel Execution (heavy per-bystander layers: 03d, 03f)
-The depth/SAM (03d) and YOLO-pose (03f) layers alternate, single-threaded, between slow random-seek video decode (CPU) and MPS inference, leaving the M4 Max **~90% idle** (~1.3 / 16 cores, single-digit RAM %). `tools/run_parallel_layer.py` shards the clips across **N isolated subprocess workers** that share the single MPS GPU — each worker's decode overlaps the others' inference, filling the GPU's idle gaps. Gains saturate around **N = 3–4** (one physical GPU); measured **~3×** at N=3 on the full top-200.
+### Parallel Execution — how to run the heavy layers (03d, 03f)
 
+**When to use this.** The depth/SAM (03d) and YOLO-pose (03f) layers alternate, single-threaded, between slow random-seek video decode (CPU) and MPS inference, leaving the M4 Max **~90 % idle** (~1.3 / 16 cores, single-digit RAM %). `tools/run_parallel_layer.py` shards the clips across **N isolated subprocess workers** that share the single MPS GPU — each worker's decode overlaps the others' inference, filling the GPU's idle gaps. Gains saturate around **N = 3–4** (one physical GPU); measured **~3×** at N=3 on the full top-200 (03f: ~7.4 h → ~2.5 h). The lighter layers (03b LLM, 03c audio, 03e trace-only) do **not** need this — run them with the supervised runner above.
+
+**Prerequisite — the per-clip bystander cap (in the pipeline, not the harness).** Node-02 fragments tracking into many short spurious positive-id tracks (median 48, up to **829/clip**); 03d/03f already cap to the `MAX_BYSTANDERS_PER_CLIP = 10` longest tracks (03d Resolved #6, 03f Resolved #11). Without it, one clip's per-bystander Depth/pose alone is a multi-day job and the parallel runner cannot save you.
+
+**1 — Stress-test the heaviest clips first, on a CLEAN GPU.** Never launch the full run blind, and never stress-test while another MPS run is active (the GPU contention is itself the crash risk). `--max-clips 6` selects the 6 heaviest clips (most bystanders):
+```bash
+python tools/run_parallel_layer.py --layer 03d \
+    --manifest "$RUN/03a/input_top200.json" \
+    --output   "$RUN/03a/_stress/03d_stress.json" \
+    --max-clips 6 --workers 3 --force
+```
+During the peak (all N workers loaded) watch `memory_pressure | grep "free percentage"`. Pass only if every shard exits 0 and free RAM stays comfortable — validated: **N=3 held 80 % free on Depth-Large + SAM-Huge, 89 % on YOLO-pose, no crash**. If RAM tightens or a worker dies, lower `--workers`.
+
+**2 — Run the full layer.** Same command without `--max-clips`, pointed at the real output:
 ```bash
 python tools/run_parallel_layer.py --layer 03f \
     --manifest "$RUN/03a/input_top200.json" \
     --output   "$RUN/03a/03f_motor_resonance_result.json" \
-    --workers 3            # add --max-clips 6 to stress-test the heaviest clips first
+    --workers 3
 ```
-**Safety** (Apple MPS multi-process is unusual, so this is deliberate): isolated subprocess workers (own MPS context, crash-isolated — no fork-after-MPS-init hazard); **staggered** startup so N × ~4 GB model loads don't spike memory at once; a **pre-launch free-RAM floor**; weighted sharding (balanced); per-shard outputs merged; resumable. **Always stress-test on the heaviest clips first** (`--max-clips` / `--only-clips`) while watching `memory_pressure` before committing to a full parallel run — validated at N=3 with 80 % RAM free on the worst-case Depth-Large + SAM-Huge config.
+The orchestrator weight-balances clips into N shards, **staggers** worker startup (`--stagger-sec`, default 30) so N × ~4 GB model loads don't spike at once, **holds** the next launch while free RAM is below `--min-free-ram` (default 20 %), then **merges** the per-shard outputs into the final result on completion.
+
+**3 — Monitor.** The merged output appears only at the end, so track per-shard progress in `<output>.parallel/shard{i}.result.json` (+ `shard{i}.log`); confirm all worker PIDs stay alive, `memory_pressure` holds, and there are zero tracebacks.
+
+**4 — Resume if interrupted.** Everything is resumable: re-run the *same* orchestrator command (sharding is deterministic; each worker skips clips already in its shard output). If a reaped parent orphaned the workers, `pkill -f _shard_worker.py` first, then re-run.
+
+**Knobs:** `--workers` (3), `--stagger-sec` (30), `--min-free-ram` (20), `--max-clips` / `--only-clips <ids>` (stress-test subset), `--force` (ignore existing output). Full detail in the `run_parallel_layer.py` / `_shard_worker.py` docstrings. **Safety rationale** (Apple MPS multi-process is unusual): subprocess isolation gives each worker its own MPS context (crash-isolated, no fork-after-MPS-init hazard); the stagger + RAM floor prevent a model-load memory spike; sharding+merge keeps it resumable.
 
 ---
 
