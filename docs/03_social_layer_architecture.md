@@ -105,6 +105,17 @@ tools/run_supervised.sh e2e_reports/<run>/03d_result_50.json ./venv/bin/python t
 ```
 It wraps each attempt in `caffeinate -dimsu` (blocks system/disk sleep), exports `PYTHONFAULTHANDLER=1` (a native fault dumps a Python traceback into the log instead of vanishing), and relaunches the resumable runner until it exits 0. A **no-progress guard** counts records in `<result_json>` between attempts and aborts after **2 consecutive relaunches that add zero records** — this both breaks a deterministic *poison-clip* crash-loop (layer pipelines mark a `video_id` processed only *after* success, unlike the acquisition orchestrator which marks *before* scoring) and surfaces it loudly. `caffeinate` is auto-skipped on non-macOS hosts; `SR_SUPERVISE_MAX_ATTEMPTS` / `SR_SUPERVISE_LOG` tune the ceiling and log path.
 
+### Parallel Execution (heavy per-bystander layers: 03d, 03f)
+The depth/SAM (03d) and YOLO-pose (03f) layers alternate, single-threaded, between slow random-seek video decode (CPU) and MPS inference, leaving the M4 Max **~90% idle** (~1.3 / 16 cores, single-digit RAM %). `tools/run_parallel_layer.py` shards the clips across **N isolated subprocess workers** that share the single MPS GPU — each worker's decode overlaps the others' inference, filling the GPU's idle gaps. Gains saturate around **N = 3–4** (one physical GPU); measured **~3×** at N=3 on the full top-200.
+
+```bash
+python tools/run_parallel_layer.py --layer 03f \
+    --manifest "$RUN/03a/input_top200.json" \
+    --output   "$RUN/03a/03f_motor_resonance_result.json" \
+    --workers 3            # add --max-clips 6 to stress-test the heaviest clips first
+```
+**Safety** (Apple MPS multi-process is unusual, so this is deliberate): isolated subprocess workers (own MPS context, crash-isolated — no fork-after-MPS-init hazard); **staggered** startup so N × ~4 GB model loads don't spike memory at once; a **pre-launch free-RAM floor**; weighted sharding (balanced); per-shard outputs merged; resumable. **Always stress-test on the heaviest clips first** (`--max-clips` / `--only-clips`) while watching `memory_pressure` before committing to a full parallel run — validated at N=3 with 80 % RAM free on the worst-case Depth-Large + SAM-Huge config.
+
 ---
 
 ## 🧪 Resolved Issues & Implementation Refinements
