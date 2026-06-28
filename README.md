@@ -60,15 +60,17 @@ The processed datasets are published and hosted on Hugging Face:
 -   📊 [louisye/social-robotics-affirmation-gesture](https://huggingface.co/datasets/louisye/social-robotics-affirmation-gesture) (Layer 03e)
 -   📊 [louisye/social-robotics-motor-resonance](https://huggingface.co/datasets/louisye/social-robotics-motor-resonance) (Layer 03f)
 
-### 5. Signal Visualizer (Local Hydration & QA)
-A **local, interactive visualizer** that does the inverse of the dehydrated export: it
-**hydrates** a clip — joining `filtered_manifest.json` with every `03*_result.json` layer output —
-and **plays the source video with all extracted signals overlaid in real time** (bounding boxes,
-gaze vectors, emotion transitions, proxemic approach, nods, flinches), synced to playback with
-per-layer toggles and a multi-lane signal timeline. It exists to make **silent degradation
-visible** — a misjoined `video_id`, a phantom track, a re-anchored window — by putting the JSON
-back onto the pixels. It runs **purely local** (reads the Extreme SSD videos, exports no pixels)
-and is **excluded** from the Hugging Face surface. See [05: Signal Visualizer](docs/05_signal_visualizer.md).
+### 5. Social-Signal Video Renderer (Local Hydration & QA)
+A **local tool** that does the inverse of the dehydrated export: it **hydrates** a clip — joining
+`filtered_manifest.json` with every `03*_result.json` layer output — and **renders an annotated copy
+of the source video** with every extracted signal *burned into the pixels* (bounding boxes, gaze
+vectors, emotion transitions, proxemic approach, nods, flinches), plus a burned-in signal timeline
+and live readout panel. The output is an ordinary `.mp4` you open in **any media player** — so the
+signals appear in real time, frame-accurately synced, as it plays — and it is trivially **shareable
+with the team** (no server to run). It exists to make **silent degradation visible** — a misjoined
+`video_id`, a phantom track, a re-anchored window — by putting the JSON back onto the pixels.
+Ego4D-only; runs **purely local** and the annotated video is **internal-only** (contains source
+pixels), excluded from the Hugging Face surface. See [05: Social-Signal Video Renderer](docs/05_signal_visualizer.md).
 
 ---
 
@@ -92,7 +94,7 @@ and is **excluded** from the Hugging Face surface. See [05: Signal Visualizer](d
     -   [03e: Affirmation Gesture Layer](docs/03e_affirmation_gesture_layer.md)
     -   [03f: Motor Resonance Layer](docs/03f_motor_resonance_layer.md)
 -   [Dehydrated Export](docs/04_dehydrated_export.md)
--   [Signal Visualizer (Local Hydration & QA)](docs/05_signal_visualizer.md)
+-   [Social-Signal Video Renderer (Local Hydration & QA)](docs/05_signal_visualizer.md)
 -   [ML Dependencies & Models](docs/ml_dependencies.md)
 
 ---

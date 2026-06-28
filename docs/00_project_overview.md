@@ -40,8 +40,8 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 4. **Dehydrated Export** (`04_dehydrated_export.md`)
    - Merges the extraction schemas, removes any underlying raw data (pixels/audio), and prepares the output `.parquet` and dataset cards for Hugging Face or other platforms.
 
-5. **Signal Visualizer** (`05_signal_visualizer.md`)
-   - A **local, interactive QA/debug tool** (not a pipeline-output stage). It *hydrates* a clip — joining `filtered_manifest.json` with every `03*_result.json` layer output — and plays the **local** source video with all extracted signals overlaid in real time, synced to playback. It is the inverse of Node 04 (which *de*hydrates for distribution): Node 05 *re*hydrates locally so an operator can *see* what the layers saw and catch silent degradation. It exports no pixels and is explicitly excluded from the Hugging Face surface.
+5. **Social-Signal Video Renderer** (`05_signal_visualizer.md`)
+   - A **local QA/debug tool** (not a pipeline-output stage). It *hydrates* a clip — joining `filtered_manifest.json` with every `03*_result.json` layer output — and **renders an annotated copy of the local source video** with every extracted signal burned into the pixels (boxes, gaze, emotion, proxemics, nods, flinches) plus a burned-in timeline. The output is an ordinary `.mp4` that plays the signals in real time in any media player and is easy to share with the team. It is the inverse of Node 04 (which *de*hydrates for distribution): Node 05 *re*hydrates locally so an operator can *see* what the layers saw and catch silent degradation. Ego4D-only; the annotated video contains source pixels and is **internal-only**, explicitly excluded from the Hugging Face surface. Built as an **offline OpenCV renderer** (no server/UI) for implementation simplicity and shareability.
 
 ## 🐍 Virtual Environments System
 
