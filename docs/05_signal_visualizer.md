@@ -33,23 +33,26 @@ requirements, not suggestions.
 
 | # | Decision | What it means | Why |
 |---|---|---|---|
-| **D1** | **Offline renderer, not a live web app** | A Python script decodes the video frame-by-frame, draws overlays with **OpenCV (`cv2`)**, and writes a new annotated `.mp4`. There is **no web server, no browser, no JavaScript, no live scrubbing UI.** | Most straightforward to implement (one batch script, no front-end/back-end split) and easiest to share (the output is just a video file). |
+| **D1** | **Offline renderer, not a live web app** | A Python script decodes the video frame-by-frame, draws overlays with **OpenCV (`cv2`)**, and writes a new annotated `.mp4`. There is **no web server, no browser, no JavaScript, no live in-browser scrubbing player.** (D1 forbids a *web-app playback* surface; it does **not** forbid a tiny local *selection* helper — see D6.) | Most straightforward to implement (one batch script, no front-end/back-end split) and easiest to share (the output is just a video file). |
 | **D2** | **Bystander boxes use "hold-last, then hide"** | Between the sparse (~3–6 s) bystander detections, the renderer keeps drawing the **last known box** for up to `gap_tolerance_sec`, fading it as it ages, then **hides it** rather than guessing where the person moved. **No interpolation, no tracker fill.** | Never fabricates motion the detector never saw; the fade makes "this is stale" legible — the honesty a QA tool requires. |
 | **D3** | **Ego4D only** | 05 targets **Ego4D** clips exclusively. Every manifest and every layer result it consumes uses Ego4D UUID `video_id`s (e.g. `0c163d16-8c47-…`). Charades/EPIC/EgoProceL clips are out of scope for the visualizer. | Removes the mixed-ID-namespace join hazard and keeps the tool focused on the corpus the real E2E runs actually used. |
 | **D4** | **Video-first selection — you pick a video, not a manifest** | The operator's only selection input is **a video** (a `video_id`, or a pick from a printed catalog of available clips). The tool then **auto-discovers** every manifest entry and every `03*_result.json` related to that video and assembles them itself. The operator **never** types a manifest path. | The operator should not have to know which run folder holds which layer's result; "show me everything you know about *this clip*" is the natural mental model and eliminates the wrong-manifest mistake at the source. (Supersedes the original Issue 3 options.) |
 | **D5** | **Keep the original audio (+ optional loudness bar)** | The annotated `.mp4` carries the **original audio track** (copied in with one `ffmpeg` step) so you *hear* the reaction while *seeing* it, plus an optional on-frame loudness bar. Clips Ego4D ships with no audio come out silent with a clear **"no audio"** badge. | Sound is half of a social reaction; muxing it back is trivial and far more informative than picture-only. (Was Issue 4 → Option A.) |
+| **D6** | **Findings-aware clickable Tkinter table window for selection** | You don't type a `video_id` from memory. Running with no `--video-id` opens a small **Tkinter window** with a **sortable, multi-column table** (`ttk.Treeview`) of discovered clips, a **filter box**, a **detail/summary panel**, and a **Render** button. Each row is a column set: `★` (how many layers had findings), task summary, `layers` (which fired), `audio?`, `video?`, and `video_id`; click a column header to sort, type in the filter box to narrow, click a row to see its full summary, then **double-click the row or press Render**. Implemented with **Tkinter from the Python stdlib** — **no pip dependency**, no web server, no browser. | "I can't remember a UUID, and I want to *click* the clip where something actually happened." A real table window shows columns + a live summary at once (a single-line dropdown can't), and clicking is the natural gesture. Compatible with D1 (a *selection* helper, not a playback UI). |
 
-> **"Interactivity" under D1.** Because there is no live UI, anything that would have been a UI
-> toggle (which layers to show, which people, whether to show phantoms) becomes a **render-time
-> command-line flag** that selects what gets burned into the output (see § 2.6). To compare "with
-> 03d vs without," you render two files. This is the deliberate trade for D1's simplicity.
+> **"Interactivity" under D1.** Because there is no live *playback* UI, anything that would have been a
+> UI toggle (which layers to show, which people, whether to show phantoms) becomes a **render-time
+> command-line flag** that selects what gets burned into the output (see § 2.6). To compare "with 03d
+> vs without," you render two files. This is the deliberate trade for D1's simplicity.
 >
-> **What "selecting a video" means under D1 (D4).** There is no graphical picker. The *selection
-> surface* is the CLI: `--list` prints the **catalog** (every video the tool found, with its label,
-> duration, which layers have data, and whether it has audio); you then render one by `--video-id`
-> (or `--video <file>`). The *"viewer"* in which the signals "populate" is the **rendered annotated
-> `.mp4`** — once you pick a video, every signal the tool discovered for it is burned in and plays
-> back in any media player. See § 1.2 for the discovery mechanism and § 4 for the commands.
+> **What "selecting a video" means (D4 + D6).** You never type a manifest path, and normally you don't
+> type a `video_id` either. Run the tool with no video given and it opens the **findings-aware Tkinter
+> table window** (D6): a sortable, filterable table of clips with a summary panel; click a column to
+> sort, type to filter, click a row to read its summary, **double-click (or press Render)** to render
+> it. (`--video-id`, `--video <file>`, and the non-interactive `--list` remain available for
+> scripting/CI.) The *"viewer"* in which the signals "populate" is the **rendered annotated `.mp4`** —
+> once you pick a clip, every signal the tool discovered for it is burned in and plays back, with
+> sound, in any media player. See § 1.2 for discovery + the findings model, and § 4 for the commands.
 
 ---
 
@@ -138,14 +141,69 @@ sources }`. For each `video_id`:
      operator *can* audit "03d came from the June 13 run" if they want — transparency without
      requiring a choice).
 
-**3. Present (`--list`).** Print the catalog as a table: `video_id`, `task_label` (first task),
-`duration_sec`, a layer-coverage badge (e.g. `03a 03c 03d 03f`, dim for missing), `audio?`, and
-whether the video file was found. This *is* the "select a video and see what's available" surface,
-realized as a CLI listing (consistent with D1's no-GUI rule). `--list --json` emits it machine-
-readable for tooling.
+**3. Compute the per-clip findings summary (D6).** For each indexed clip, derive a compact summary
+that drives both the picker and the on-frame readout: for every layer that has a result, a boolean
+**"finding"** — did the layer actually detect a social signal, as opposed to running but reporting
+nothing — plus a `num_layers_with_findings` count. The per-layer predicate (tunable; defaults below)
+keys off the **same fields the renderer draws**, so the picker's `★` count can never disagree with the
+burned overlays:
 
-**4. Resolve + guard.** When the operator names a `video_id`, the Catalog returns its entry and the
-Hydrator builds the bundle from it. Guards (all **loud**, never silent):
+| Layer | "Finding" = true when … | "ran, no finding" looks like |
+|---|---|---|
+| **03a** attention | `aggregate.any_person_engaged == true` (a bystander actually engaged the camera) | ran, but `is_engaged` false for everyone |
+| **03b** emotion | any slice `classified_direction != "neutral"` (a real approving/skeptical shift) | all transitions neutral |
+| **03c** prosody | any task `audio_present == true` **and** (`classified_acoustic_tone != "Neutral"` or `dominant_emotion != "neutral"`) | silent clip, or audio but neutral |
+| **03d** proxemic | any person `classified_action != "Neutral"` (`Approach_Intervention` / `Avoidance`) | all `Neutral` |
+| **03e** gesture | any person `gesture_detected != "none"` (a nod/shake) | all `none`, or `skipped_reason` |
+| **03f** motor | any person `motor_resonance_detected == true` **or** `mirroring_detected == true` | neither fired |
+
+Each clip carries `findings = { "03a": "finding" | "ran" | "absent", … }` and
+`num_layers_with_findings`. **Three states matter** — *finding* (predicate true), *ran* (result
+present, predicate false), *absent* (no result) — because a layer that **ran but found nothing** must
+read differently from one that **never ran**. This distinction *is* the anti-silent-degradation
+mechanism, surfaced at selection time.
+
+**4. Present & pick (D6).** With no `--video-id`, open the **Tkinter table window** — a single small
+window built from the Python stdlib (`tkinter` / `ttk`), **no pip dependency**. Layout:
+
+```
+┌─ Select a clip to visualize ─────────────────────────────────────────────┐
+│ filter: [ 03e________________ ]   sort:  ▼★   (click a header to re-sort) │
+│ ┌───┬──────────────────────────┬──────────────┬───────┬───────┬────────┐ │
+│ │ ★ │ task                     │ layers       │ audio │ video │ id     │ │   ← ttk.Treeview
+│ ├───┼──────────────────────────┼──────────────┼───────┼───────┼────────┤ │     (sortable cols,
+│ │ 3 │ reaction surprised       │ 03c 03e 03f  │  🔊   │   ✓   │630bd4ba│ │      click row to
+│ │ 1 │ construction/renovation  │ 03d          │  ··   │   ✓   │0c163d16│ │      preview, double-
+│ │ 0 │ cooking eggs (ran, none) │ —            │  🔊   │   ✓   │43bd06f3│ │      click to render)
+│ └───┴──────────────────────────┴──────────────┴───────┴───────┴────────┘ │
+│ ┌─ summary (selected clip) ──────────────────────────────────────────┐   │
+│ │ 630bd4ba-3053-…  ego4d · 62.4s · audio:yes                          │   │
+│ │ TASK reaction shot   climax 31.2s   reaction [32.2–34.2]            │   │
+│ │ 03e affirming_nod P1 @0.79Hz · 03c surprised · 03f flinch P1        │   │
+│ │ 03a ran — no engagement · 03b absent · 03d absent                  │   │
+│ └────────────────────────────────────────────────────────────────────┘   │
+│                                        [ Cancel ]     [ Render selected ] │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+   - **Table** (`ttk.Treeview`, one row per clip; **default sort = `★ num_layers_with_findings` desc**
+     so interesting clips float up). Columns: `★`, `task` (first task summary), `layers` (the
+     finding layers, `—` if none), `audio?`, `video?` (file found), `video_id`. **Click any header to
+     re-sort** (toggles asc/desc; `★` and duration sort numerically).
+   - **Filter box**: typing narrows the table live (matches across all columns; `03e` → only clips
+     where the gesture layer fired; a task keyword → group by activity; `noaudio`). This is the
+     **categorization** you asked for, as live text-filtering.
+   - **Summary panel**: clicking a row fills it with that clip's full summary (`entry.summary_text`) —
+     `video_id`, `source_dataset`, `duration_sec`, every `task_label` + `climax_sec` + reaction
+     window(s), and the **per-layer findings breakdown**. This is the "summary of the task/video we
+     are loading," shown *before* you commit to a multi-minute render.
+   - **Render**: **double-click a row** or select it and click **Render selected**; **Cancel** (or
+     closing the window) selects nothing and the tool exits without rendering.
+   - The non-interactive **`--list`** (optionally `--json` / `--verbose`) prints the same columns to
+     stdout without opening a window — for scripting/CI and headless hosts.
+
+**5. Resolve + guard.** When a `video_id` is chosen (via the picker, `--video-id`, or `--video`), the
+Catalog returns its entry and the Hydrator builds the bundle from it. Guards (all **loud**, never
+silent):
    - **Unknown video** → error `video_id X not found under any --scan-root (Y manifests, Z result
      files scanned)`. Never emit a blank bundle.
    - **No layers found** for a known clip → render is allowed (manifest boxes + tasks still overlay)
@@ -325,30 +383,56 @@ Design rules baked into the schema:
 - **Pre-sorted.** Every per-time array (`boxes`, `attention.trace`, `hands`, `audio_envelope`) is
   emitted **sorted by `t`** so the Renderer can binary-search, never sort.
 
-### 1.7 Catalog + Hydrator API (proposed)
+### 1.7 Catalog + Picker + Hydrator API (proposed)
 
-The **Catalog** (D4) does discovery; the **Hydrator** turns a discovered entry into a bundle. The
-operator-facing entry point takes a `video_id` and scan roots — never a manifest path.
+The **Catalog** (D4) does discovery + the findings summary; the **Picker** (D6) is the interactive
+selection front-end; the **Hydrator** turns a chosen entry into a bundle. The operator-facing entry
+point takes a `video_id` (or nothing → picker) and scan roots — never a manifest path.
 
 ```python
-# src/layer_05_visualizer/catalog.py  (auto-discovery, D4)
+# src/layer_05_visualizer/catalog.py  (auto-discovery + findings, D4 + D6)
 @dataclass
 class CatalogEntry:
     video_id: str
     manifest_entry: dict                       # the Node-02 record for this clip
     results_by_layer: dict[str, dict]          # {"03a": <record>, "03d": <record>, ...} latest per layer
     video_path: Path | None
+    findings: dict[str, str]                    # {"03a": "finding"|"ran"|"absent", ...}  (D6, § 1.2 step 3)
+    num_layers_with_findings: int              # ★ count used as the picker's default sort key
+    summary_text: str                          # preformatted preview-pane summary (task + per-layer breakdown)
     sources: dict                              # provenance: which file each piece came from
 
 def build_catalog(scan_roots: list[str | Path]) -> dict[str, CatalogEntry]: ...
     # walk scan_roots; index manifests + 03*_result.json + <uuid>.mp4 by video_id;
-    # per layer keep the most-recent (mtime) result that contains the video_id.
+    # per layer keep the most-recent (mtime) result; then compute findings + summary_text.
 
-def list_catalog(catalog, *, as_json: bool = False, verbose: bool = False) -> str: ...
-    # render the --list table (video_id, label, duration, layer-coverage, audio?, video-found?)
+LAYER_FINDING_PREDICATES: dict[str, Callable[[dict], bool]]  # the § 1.2 step-3 table, one fn per layer (tunable)
+
+def list_catalog(catalog, *, as_json=False, verbose=False) -> str: ...
+    # the non-interactive --list table (★, task, layers-with-findings, audio?, video?, video_id)
 
 def resolve_video(video_id: str, scan_roots: list[str | Path]) -> CatalogEntry: ...
     # build_catalog + look up one id; raises a LOUD error if not found (see § 1.2 guards)
+```
+
+```python
+# src/layer_05_visualizer/picker.py  (clickable Tkinter table window, D6 — stdlib only)
+def build_picker_rows(catalog: dict[str, CatalogEntry]) -> list[PickerRow]: ...
+    # pure/headless: one row per clip (star=num_layers_with_findings, task, layers_str, audio,
+    # video_found, video_id), default-sorted by star desc. NO tkinter import -> unit-testable.
+
+def filter_rows(rows: list[PickerRow], query: str) -> list[PickerRow]: ...      # case-insensitive, all columns
+def sort_rows(rows: list[PickerRow], column: str, descending: bool) -> list[PickerRow]: ...  # numeric-aware
+
+def pick_video(catalog: dict[str, CatalogEntry]) -> CatalogEntry | None:
+    # Open a Tk window: ttk.Treeview(columns=...) populated from build_picker_rows();
+    #   - Entry bound to <KeyRelease> -> filter_rows -> repopulate tree
+    #   - heading command -> sort_rows -> repopulate tree
+    #   - <<TreeviewSelect>> -> show entry.summary_text in the detail panel
+    #   - <Double-1> on a row / "Render selected" button -> set result=entry, root.destroy()
+    #   - WM_DELETE_WINDOW / "Cancel" -> result=None, root.destroy()
+    # Returns the chosen CatalogEntry or None. Raises TclError if Tk is unavailable
+    # (the CLI catches it and falls back to --list; see § 4 and Verification P10).
 ```
 
 ```python
@@ -592,14 +676,15 @@ Each layer has a deliberate `cv2` encoding. `color` is the person's BGR (hex→B
 
 ### 2.6 Selection & render-time configuration (replaces the live toggles)
 
-Under D1 there is no GUI, so both **video selection (D4)** and **what gets burned in** happen via CLI
-flags. The first group selects the *clip*; the rest select the *overlays*:
+**Video selection (D4 + D6)** and **what gets burned in** both happen via the CLI. The first group
+selects the *clip*; the rest select the *overlays*:
 
 | Flag | Effect | Default |
 |---|---|---|
-| `--list` (+ `--json` / `--verbose`) | print the **catalog** of discoverable videos (D4) and exit | — |
-| `--video-id <uuid>` | **select the video** to render (the only required selection input) | — |
+| *(no video flag)* | **opens the findings-aware Tkinter table window (D6)** — sort/filter/click, double-click or Render to render | this is the normal path |
+| `--video-id <uuid>` | skip the picker; render this clip directly (scripting) | — |
 | `--video <path>` | select by file instead of id (its `<uuid>` stem is the `video_id`) | — |
+| `--list` (+ `--json` / `--verbose`) | print the **catalog** table and exit (no picker, no render) | — |
 | `--scan-root <dir>` (repeatable) | where the Catalog looks for manifests/results/videos | `e2e_reports/` + configured Ego4D video dirs |
 | `--layers 03a,03d` / `--layers all` | which discovered layers' overlays to draw | `all` found |
 | `--people 0,3` | restrict to specific `person_id`s | all genuine |
@@ -634,7 +719,9 @@ traceability, e.g. `<video_id>__L-all__s50.mp4`.
 ```
 src/layer_05_visualizer/
 ├── __init__.py
-├── catalog.py            # D4 auto-discovery: build_catalog(), list_catalog(), resolve_video()
+├── catalog.py            # D4/D6 discovery + findings: build_catalog(), LAYER_FINDING_PREDICATES,
+│                         #   list_catalog(), resolve_video()
+├── picker.py             # D6 Tkinter table window: build_picker_rows/filter_rows/sort_rows + pick_video()
 ├── hydrate.py            # build_overlay_bundle(), build_bundle_for_video(), write_bundles_for_catalog()
 ├── bundle_schema.py      # schema constants + validate_bundle() guard (no silent shape drift)
 ├── colors.py             # stable person_id -> color palette hashing; hex -> BGR
@@ -651,38 +738,44 @@ src/layer_05_visualizer/
     └── panels.py         # readout panel, legend, fonts/scale helpers
 
 tools/
-└── run_visualizer.py     # CLI: --list the catalog, or --video-id -> discover + hydrate + render
+└── run_visualizer.py     # CLI: no video flag -> Tkinter picker; else --video-id/--video/--list/--all
 ```
 
 This mirrors the existing per-node layout (`src/layer_04_dehydrated_export/` has `aggregator.py`,
 `per_layer.py`, `rehydrate_dataset.py`, `huggingface_upload.py`). Tests go in
-`tests/test_layer_05.py` (Catalog discovery + Hydrator + bundle + single-frame draw asserts). `cv2`
-and `ffmpeg` are already project dependencies (used across Layer 02/03 and the docs).
+`tests/test_layer_05.py` (Catalog discovery + findings predicates + picker logic/GUI + Hydrator +
+bundle + single-frame draw asserts). **Dependencies**: `cv2` and `ffmpeg` are already in the project;
+the D6 picker adds **no pip dependency** — `tkinter`/`ttk` are in the Python **stdlib**. The one
+caveat is that the interpreter must have been **built with Tcl/Tk**: python.org macOS builds include
+it; some Homebrew setups need `brew install python-tk`. If Tk is unavailable (or no display, e.g.
+CI), `pick_video` raises `TclError` and the CLI **falls back to `--list`** with a message telling the
+operator to pass `--video-id` (Verification P10).
 
 ---
 
 ## 🚀 Part 4 — Running It
 
-You name a **video** (D4); the tool discovers its manifest + every layer's latest result, hydrates,
-and renders. There is **no manifest path to type**.
+You **pick a video** by clicking it in the findings-aware Tkinter window (D6) — or name one directly —
+and the tool discovers its manifest + every layer's latest result, hydrates, and renders. There is
+**no manifest path to type**, and normally **no `video_id` to remember** either.
 
 ```bash
-# 1. SELECT: see which videos are available and what signals each has (the "picker", D4).
+# 1. PICK + RENDER (the normal path, D6): no video flag -> the Tkinter table window opens.
 #    Scans e2e_reports/ + the configured Ego4D video dirs by default; add --scan-root to widen.
-./venv/bin/python tools/run_visualizer.py --list
-#  VIDEO_ID                              TASK                       DUR    LAYERS            AUDIO  VIDEO
-#  0c163d16-8c47-4773-a25f-2ee57ce9ab87  construction/renovation    94.5s  03a 03c 03d 03f  no     ✓
-#  630bd4ba-3053-459e-9284-3259aee16aa5  ...                        ...    03a 03c 03d 03e   yes    ✓
+./venv/bin/python tools/run_visualizer.py --out-dir e2e_reports/viz --layers all
+#  A window opens: a sortable table (★ | task | layers | audio | video | id) + filter box +
+#  summary panel. Type in the filter, click headers to sort, click a row to read its summary,
+#  then DOUBLE-CLICK it (or press "Render selected"). Cancel/close = no render.
+#  -> e2e_reports/viz/630bd4ba-..._L-all.mp4   (original audio muxed in per D5)
 
-# 2. RENDER: pick one video by id; the tool finds everything related to it and burns it in.
+# 1b. Non-interactive catalog dump (scripting/CI/headless; same data, no window):
+./venv/bin/python tools/run_visualizer.py --list            # add --json / --verbose
+
+# 2. DIRECT (skip the picker when you already know the id, e.g. in a script):
 ./venv/bin/python tools/run_visualizer.py \
     --video-id 0c163d16-8c47-4773-a25f-2ee57ce9ab87 \
-    --out-dir  e2e_reports/viz \
-    --layers all --panels timeline,readout
-# -> e2e_reports/viz/0c163d16-..._L-all.mp4   (original audio muxed in per D5)
-
-# 2b. Iterate fast on just the climax moment, downscaled:
-#     --clip-range 47:53 --scale 0.5
+    --out-dir  e2e_reports/viz --layers all --panels timeline,readout
+#    Iterate fast on just the climax moment, downscaled:  --clip-range 47:53 --scale 0.5
 
 # 3. BATCH: render every video the Catalog found (skips already-rendered unless --force).
 ./venv/bin/python tools/run_visualizer.py --all --out-dir e2e_reports/viz --layers all
@@ -724,6 +817,81 @@ A misaligned or mistimed overlay is itself a silent lie, so the tool's own corre
    03a; assert the entry stitches both layers and picks the **newer** 03a. Assert `resolve_video` on
    an unknown id raises the loud "not found" error (never returns a blank entry), and that a clip
    present in a result but in **no** manifest is warned-and-skipped.
+8. **Findings predicates (D6).** Feed each `LAYER_FINDING_PREDICATES[layer]` a hand-built result with
+   a known positive (e.g. 03e `gesture_detected: "affirming_nod"`, 03d `Approach_Intervention`) and a
+   known neutral/absent one; assert `finding` vs `ran` vs `absent` are classified correctly and that
+   `num_layers_with_findings` + the picker row's `★N`/`[layers]` match. This pins the picker's "where
+   something happened" promise to the same fields the renderer draws, so the two can't drift.
+
+### Picker (D6) verification — the Tkinter table window
+
+A GUI is the hardest part to test, so the picker is built **logic-first**: `build_picker_rows`,
+`filter_rows`, and `sort_rows` are **pure functions with no `tkinter` import**, so the bulk of the
+behavior is asserted headlessly; only a thin layer of widget wiring needs a display. Tests live in
+`tests/test_layer_05_picker.py`.
+
+**A. Headless logic tests (no display — always run, even in CI):**
+
+- **P1 — Row model.** `build_picker_rows(catalog)` returns one row per clip with the right column
+  values (`★ = num_layers_with_findings`, task summary = first `task_label`, `layers` = the finding
+  layers joined / `—` when none, `audio?`, `video?`, full + short `video_id`), and is **default-sorted
+  by `★` descending**. Assert exact row count and that the top row is the clip with the most findings.
+- **P2 — Filtering.** `filter_rows(rows, q)`: `q="03e"` returns only rows whose `layers` contains 03e;
+  a task keyword matches the task column; `"noaudio"` matches only no-audio clips; `""` returns all;
+  matching is **case-insensitive and spans all columns**. Assert the exact surviving `video_id` set
+  for each query, plus that a no-match query returns `[]` (and the window will show an empty table,
+  not crash).
+- **P3 — Sorting.** `sort_rows(rows, col, descending)`: `★` and `duration` sort **numerically** (not
+  lexically — guards "10" vs "9"), text columns sort case-insensitively, and the sort is **stable**.
+  Assert toggling `descending` reverses order and that re-sorting by the same column flips direction.
+- **P4 — Selection → entry & summary parity.** A row maps back to the exact `CatalogEntry` (via its
+  `video_id`), and the row's detail text **equals `entry.summary_text`** — i.e. what the window shows
+  is byte-identical to what `--list --verbose` prints, so GUI and CLI can never disagree.
+
+**B. GUI wiring tests (drive real Tk widgets; need a display or a virtual one):**
+
+These construct the window but **never enter `mainloop()`** — they call `root.update_idletasks()` /
+`root.update()` to process events, introspect/poke widgets, then `root.destroy()`. Mark them
+`@pytest.mark.gui` and skip when `tkinter.Tk()` can't initialize; in CI run them under a virtual
+framebuffer (`xvfb-run -a pytest -m gui` on Linux).
+
+- **P5 — Window builds & populates.** `pick_video(catalog)` (driven non-blocking) builds a window whose
+  `ttk.Treeview` has **`len(catalog)` rows** and the expected named children exist (filter `Entry`,
+  the `Treeview`, the summary widget, the **Render** and **Cancel** buttons). No exception; destroy
+  cleanly.
+- **P6 — Filter box updates the table.** Set the filter `Entry`'s text and fire its `<KeyRelease>` (or
+  invoke the bound trace callback); assert the `Treeview`'s visible `get_children()` shrinks to the
+  P2-expected subset, and that clearing the box restores all rows.
+- **P7 — Header click sorts.** Invoke a column heading's `command` callback (what a header click runs);
+  assert the `Treeview` row order matches `sort_rows` for that column, and that invoking it again
+  reverses the order.
+- **P8 — Row click fills the summary panel.** `tree.selection_set(<iid>)` + fire `<<TreeviewSelect>>`;
+  assert the summary widget now contains that entry's `summary_text`.
+- **P9 — Render returns the entry & closes; Cancel/close returns None.** Select a row and (a) invoke
+  the **Render** button's `command`, then (b) separately fire `<Double-1>` on a row; both must set the
+  result to the **correct `CatalogEntry`** and `destroy()` the window. Firing the **Cancel** command
+  or the `WM_DELETE_WINDOW` protocol must return **`None`** so the CLI exits **without rendering**
+  (and prints "no clip selected").
+
+**C. Environment / fallback:**
+
+- **P10 — No-Tk / headless fallback.** Monkeypatch `tkinter.Tk` to raise `TclError` (simulating a
+  Tk-less interpreter or no display); assert the CLI **does not crash** — it catches it, prints a
+  clear message ("GUI unavailable; run `--list` then pass `--video-id`"), and exits non-zero (or
+  drops to `--list`). This is the path referenced from § 3 and guarantees scripting/CI never hangs on
+  a window that can't open.
+- **P11 — TTY/`--list` equivalence.** Assert the columns/values printed by `--list` are derived from
+  the **same `build_picker_rows`** the window uses (one source of truth), so the headless table and
+  the GUI table always show identical data.
+
+**D. Manual acceptance checklist (human QA — a GUI needs eyes once):**
+
+Run `tools/run_visualizer.py` with no video flag against a real run dir and confirm: the window opens
+and is readable; columns are aligned and the `★`/`layers` match the clips you expect; **clicking a
+header re-sorts**; **typing in the filter narrows live**; **clicking a row shows its summary**;
+**double-click / Render produces the expected `.mp4`** (correct clip, audio present, overlays aligned
+— cross-check against tests 1–6); **Cancel/closing renders nothing**. Record the run in
+`e2e_reports/` like other manual QA passes.
 
 ---
 
@@ -748,10 +916,17 @@ issues:_
 5. **Audio in the output? → D5 (keep the original audio + optional loudness bar).** Chosen over a
    silent picture-only render; clips Ego4D ships without audio render silent with a clear "no audio"
    badge.
+6. **How do you choose a clip without memorizing a UUID? → D6 (findings-aware clickable Tkinter table
+   window).** Running with no `--video-id` opens a stdlib `tkinter`/`ttk.Treeview` window: a sortable,
+   filterable table of clips (columns ★ · task · layers · audio · video · id) with a summary panel and
+   a Render button; click a header to sort, type to filter, click a row to read its summary, double-
+   click (or press Render) to render. Chosen over a literal single-line dropdown (can't show columns +
+   a summary at once) and a terminal filter-picker (the operator preferred *clicking*); no pip
+   dependency. Compatible with D1 because it is a *selection* helper, not a playback UI.
 
 _Once the tool is implemented and verified, any post-build fixes will be added here as numbered
 Problem/Solution entries per the Bug Documentation Style Guide._
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No open issues at this time. (The original Issues 1–4 are all resolved into D1–D5 above.)_
+_No open issues at this time. (The original review Issues 1–4 are all resolved into D1–D6 above.)_
