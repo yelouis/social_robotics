@@ -13,6 +13,8 @@ All resulting export files **must be completely dehydrated**. This means:
 - No inclusion of isolated audio tracks.
 - Focus strictly on the extracted parameters: kinematics, layer decisions, VLM contexts, timestamps, and confidence scores.
 
+> **Inverse tool:** Node 05 ([`05_signal_visualizer.md`](05_signal_visualizer.md)) *re*hydrates the same layer outputs **locally** — overlaying them back onto the source pixels for QA — and is deliberately the only place pixels are touched. It is local-only and **never** writes into this export surface; the dehydration rule above is unaffected by it.
+
 ---
 
 ## Layer-Result Aggregation

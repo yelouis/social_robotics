@@ -32,4 +32,5 @@ debug_smoke_test.jpg
 .env
 .gemini/
 .claude/
+.agents/
 scratch/

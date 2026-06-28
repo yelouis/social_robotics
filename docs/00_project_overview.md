@@ -40,6 +40,9 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 4. **Dehydrated Export** (`04_dehydrated_export.md`)
    - Merges the extraction schemas, removes any underlying raw data (pixels/audio), and prepares the output `.parquet` and dataset cards for Hugging Face or other platforms.
 
+5. **Signal Visualizer** (`05_signal_visualizer.md`)
+   - A **local, interactive QA/debug tool** (not a pipeline-output stage). It *hydrates* a clip — joining `filtered_manifest.json` with every `03*_result.json` layer output — and plays the **local** source video with all extracted signals overlaid in real time, synced to playback. It is the inverse of Node 04 (which *de*hydrates for distribution): Node 05 *re*hydrates locally so an operator can *see* what the layers saw and catch silent degradation. It exports no pixels and is explicitly excluded from the Hugging Face surface.
+
 ## 🐍 Virtual Environments System
 
 To prevent dependency conflicts and support hardware-specific accelerators, the project organizes its Python execution environments into three distinct virtual environments:

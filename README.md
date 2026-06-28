@@ -60,6 +60,16 @@ The processed datasets are published and hosted on Hugging Face:
 -   📊 [louisye/social-robotics-affirmation-gesture](https://huggingface.co/datasets/louisye/social-robotics-affirmation-gesture) (Layer 03e)
 -   📊 [louisye/social-robotics-motor-resonance](https://huggingface.co/datasets/louisye/social-robotics-motor-resonance) (Layer 03f)
 
+### 5. Signal Visualizer (Local Hydration & QA)
+A **local, interactive visualizer** that does the inverse of the dehydrated export: it
+**hydrates** a clip — joining `filtered_manifest.json` with every `03*_result.json` layer output —
+and **plays the source video with all extracted signals overlaid in real time** (bounding boxes,
+gaze vectors, emotion transitions, proxemic approach, nods, flinches), synced to playback with
+per-layer toggles and a multi-lane signal timeline. It exists to make **silent degradation
+visible** — a misjoined `video_id`, a phantom track, a re-anchored window — by putting the JSON
+back onto the pixels. It runs **purely local** (reads the Extreme SSD videos, exports no pixels)
+and is **excluded** from the Hugging Face surface. See [05: Signal Visualizer](docs/05_signal_visualizer.md).
+
 ---
 
 ## 🚀 Getting Started
@@ -81,6 +91,8 @@ The processed datasets are published and hosted on Hugging Face:
     -   [03d: Proxemic Kinematics Layer](docs/03d_proxemic_kinematics_layer.md)
     -   [03e: Affirmation Gesture Layer](docs/03e_affirmation_gesture_layer.md)
     -   [03f: Motor Resonance Layer](docs/03f_motor_resonance_layer.md)
+-   [Dehydrated Export](docs/04_dehydrated_export.md)
+-   [Signal Visualizer (Local Hydration & QA)](docs/05_signal_visualizer.md)
 -   [ML Dependencies & Models](docs/ml_dependencies.md)
 
 ---
