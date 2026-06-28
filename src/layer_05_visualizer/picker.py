@@ -73,29 +73,48 @@ def sort_rows(rows: list[PickerRow], column: str, descending: bool) -> list[Pick
 
 def pick_video(catalog: dict[str, CatalogEntry]) -> Optional[CatalogEntry]:
     import tkinter as tk
-    from tkinter import ttk
+    from tkinter import ttk, messagebox
     
+    # If catalog is empty, we can just show a message and exit
+    if not catalog:
+        # We need a root to show messagebox
+        tmp = tk.Tk()
+        tmp.withdraw()
+        messagebox.showerror("No Clips Found", "The catalog is empty. No clips were found in the provided scan roots.")
+        tmp.destroy()
+        return None
+        
     root = tk.Tk()
     root.title("Select a clip to visualize")
     root.geometry("800x600")
+    
+    # Basic dark mode friendly colors
+    BG = "#2e2e2e"
+    FG = "#ffffff"
+    root.configure(bg=BG)
+    
+    style = ttk.Style(root)
+    # Revert to default theme handling, just set Treeview colors
+    style.configure("Treeview", background="#3e3e3e", fieldbackground="#3e3e3e", foreground="white")
+    style.configure("Treeview.Heading", background="#4e4e4e", foreground="black")
     
     result = None
     all_rows = build_picker_rows(catalog)
     current_rows = all_rows[:]
     sort_states = {}
     
-    top_frame = tk.Frame(root)
+    top_frame = tk.Frame(root, bg=BG)
     top_frame.pack(fill=tk.X, padx=10, pady=5)
     
-    tk.Label(top_frame, text="filter:").pack(side=tk.LEFT)
+    tk.Label(top_frame, text="filter:", bg=BG, fg=FG).pack(side=tk.LEFT)
     filter_var = tk.StringVar()
-    filter_entry = tk.Entry(top_frame, textvariable=filter_var, name="filter_entry")
+    filter_entry = tk.Entry(top_frame, textvariable=filter_var)
     filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
     
-    tk.Label(top_frame, text="sort: ▼★ (click a header to re-sort)").pack(side=tk.RIGHT)
+    tk.Label(top_frame, text="sort: ▼★ (click a header to re-sort)", bg=BG, fg=FG).pack(side=tk.RIGHT)
     
     columns = ("★", "task", "layers", "audio", "video", "id")
-    tree = ttk.Treeview(root, columns=columns, show="headings", name="treeview")
+    tree = ttk.Treeview(root, columns=columns, show="headings")
     tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
     
     def populate_tree(rows):
@@ -125,7 +144,7 @@ def pick_video(catalog: dict[str, CatalogEntry]) -> Optional[CatalogEntry]:
     populate_tree(current_rows)
     
     # Detail panel
-    detail_text = tk.Text(root, height=8, wrap=tk.WORD, name="summary_text")
+    detail_text = tk.Text(root, height=8, wrap=tk.WORD, bg="#1e1e1e", fg="white", insertbackground="white")
     detail_text.pack(fill=tk.X, padx=10, pady=5)
     detail_text.insert(tk.END, "Select a row to see summary...")
     detail_text.config(state=tk.DISABLED)
@@ -150,7 +169,7 @@ def pick_video(catalog: dict[str, CatalogEntry]) -> Optional[CatalogEntry]:
         
     filter_var.trace_add("write", on_filter)
     
-    btn_frame = tk.Frame(root)
+    btn_frame = tk.Frame(root, bg=BG)
     btn_frame.pack(fill=tk.X, padx=10, pady=10)
     
     def do_render(event=None):
@@ -167,12 +186,11 @@ def pick_video(catalog: dict[str, CatalogEntry]) -> Optional[CatalogEntry]:
         
     tree.bind("<Double-1>", do_render)
     
-    tk.Button(btn_frame, text="Cancel", command=do_cancel, name="cancel_btn").pack(side=tk.RIGHT, padx=5)
-    tk.Button(btn_frame, text="Render selected", command=do_render, name="render_btn").pack(side=tk.RIGHT, padx=5)
+    tk.Button(btn_frame, text="Cancel", command=do_cancel).pack(side=tk.RIGHT, padx=5)
+    tk.Button(btn_frame, text="Render selected", command=do_render).pack(side=tk.RIGHT, padx=5)
     
     root.protocol("WM_DELETE_WINDOW", do_cancel)
     
-    # Start app
     root.mainloop()
     
     return result
