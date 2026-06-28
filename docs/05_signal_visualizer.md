@@ -559,7 +559,7 @@ played in any media player.
   - *Cons*: Sluggish, not frame-accurate, poor at continuous playback/audio; weak as a shareable
     "player"; widget state is fragile across kernels.
 
-Your selection: _____
+Your selection: Lets do Option B because it is the most straight forward to implement and is the easiest to share with the team.
 
 ---
 
@@ -587,7 +587,7 @@ to `gap_tolerance_sec`, fade it as it ages (`stale`), then drop to "unknown."
   - *Cons*: Heavy for a viewer; introduces a *new* estimator whose errors are now attributed to the
     layers; blurs "what the layer saw" vs "what the viewer guessed" — the opposite of a QA tool's job.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
@@ -610,7 +610,7 @@ manifest path + hash in its `processing_meta`, and have the Hydrator verify it.
   - *Cons*: Touches every layer runner (cross-cutting change outside 05's scope); retroactive only
     for new runs.
 
-Your selection: _____
+Your selection: Is this still a problem if we don't use Charades short IDs? Lets only use Ego4d, in that case, is this still a problem and if so, update this problem and simplier terms for me to rereview.
 
 ---
 
@@ -634,4 +634,4 @@ are resolution-independent, so the proxy doesn't move them.
   - *Cons*: Scrub latency on the SSD; WebAudio on a large range-served remote file is fragile;
     silent clips need special-casing anyway.
 
-Your selection: _____
+Your selection: Can you simplify the selections in more laymen terms? I don't understand the options.
