@@ -35,12 +35,21 @@ requirements, not suggestions.
 |---|---|---|---|
 | **D1** | **Offline renderer, not a live web app** | A Python script decodes the video frame-by-frame, draws overlays with **OpenCV (`cv2`)**, and writes a new annotated `.mp4`. There is **no web server, no browser, no JavaScript, no live scrubbing UI.** | Most straightforward to implement (one batch script, no front-end/back-end split) and easiest to share (the output is just a video file). |
 | **D2** | **Bystander boxes use "hold-last, then hide"** | Between the sparse (~3–6 s) bystander detections, the renderer keeps drawing the **last known box** for up to `gap_tolerance_sec`, fading it as it ages, then **hides it** rather than guessing where the person moved. **No interpolation, no tracker fill.** | Never fabricates motion the detector never saw; the fade makes "this is stale" legible — the honesty a QA tool requires. |
-| **D3** | **Ego4D only** | 05 targets **Ego4D** clips exclusively. Every manifest and every layer result it consumes uses Ego4D UUID `video_id`s (e.g. `0c163d16-8c47-…`). Charades/EPIC/EgoProceL clips are out of scope for the visualizer. | Removes the mixed-ID-namespace join hazard (see Issue 3) and keeps the tool focused on the corpus the real E2E runs actually used. |
+| **D3** | **Ego4D only** | 05 targets **Ego4D** clips exclusively. Every manifest and every layer result it consumes uses Ego4D UUID `video_id`s (e.g. `0c163d16-8c47-…`). Charades/EPIC/EgoProceL clips are out of scope for the visualizer. | Removes the mixed-ID-namespace join hazard and keeps the tool focused on the corpus the real E2E runs actually used. |
+| **D4** | **Video-first selection — you pick a video, not a manifest** | The operator's only selection input is **a video** (a `video_id`, or a pick from a printed catalog of available clips). The tool then **auto-discovers** every manifest entry and every `03*_result.json` related to that video and assembles them itself. The operator **never** types a manifest path. | The operator should not have to know which run folder holds which layer's result; "show me everything you know about *this clip*" is the natural mental model and eliminates the wrong-manifest mistake at the source. (Supersedes the original Issue 3 options.) |
+| **D5** | **Keep the original audio (+ optional loudness bar)** | The annotated `.mp4` carries the **original audio track** (copied in with one `ffmpeg` step) so you *hear* the reaction while *seeing* it, plus an optional on-frame loudness bar. Clips Ego4D ships with no audio come out silent with a clear **"no audio"** badge. | Sound is half of a social reaction; muxing it back is trivial and far more informative than picture-only. (Was Issue 4 → Option A.) |
 
 > **"Interactivity" under D1.** Because there is no live UI, anything that would have been a UI
 > toggle (which layers to show, which people, whether to show phantoms) becomes a **render-time
 > command-line flag** that selects what gets burned into the output (see § 2.6). To compare "with
 > 03d vs without," you render two files. This is the deliberate trade for D1's simplicity.
+>
+> **What "selecting a video" means under D1 (D4).** There is no graphical picker. The *selection
+> surface* is the CLI: `--list` prints the **catalog** (every video the tool found, with its label,
+> duration, which layers have data, and whether it has audio); you then render one by `--video-id`
+> (or `--video <file>`). The *"viewer"* in which the signals "populate" is the **rendered annotated
+> `.mp4`** — once you pick a video, every signal the tool discovered for it is burned in and plays
+> back in any media player. See § 1.2 for the discovery mechanism and § 4 for the commands.
 
 ---
 
@@ -48,19 +57,20 @@ requirements, not suggestions.
 
 ```mermaid
 graph LR
-    M["filtered_manifest.json<br/>(Node 02, Ego4D)"] --> H["05 Hydrator<br/>(join by video_id)"]
-    A["03a_attention_result.json"] --> H
-    B["03b_..._result.json"] --> H
-    C["03c_..._result.json"] --> H
-    D["03d_..._result.json"] --> H
-    E["03e_..._result.json"] --> H
-    F["03f_..._result.json"] --> H
+    SCAN["scan-root(s)<br/>e2e_reports/** + video dirs"] --> CAT["05 Catalog<br/>(auto-discovery,<br/>index by video_id)"]
+    SEL["operator picks a VIDEO<br/>(--video-id / --list)"] --> CAT
+    CAT -->|"manifest entry +<br/>latest per-layer results"| H["05 Hydrator<br/>(join by video_id)"]
     H --> OB["Overlay Bundle JSON<br/>(self-contained, normalized)"]
     V["local source .mp4<br/>(Extreme SSD)"] --> R["05 Renderer<br/>(cv2 frame-by-frame burn-in)"]
     OB --> R
-    R --> OUT["annotated .mp4<br/>(local, internal-only)"]
+    R --> OUT["annotated .mp4<br/>(local, internal-only,<br/>original audio muxed)"]
     OUT --> PLAY["play in QuickTime / VLC / browser<br/>or share with the team"]
 ```
+
+The **Catalog** is the answer to D4: it scans the configured location(s), indexes every `video_id`
+it can find across all manifests and `03*_result.json` files, and — when the operator names a video —
+hands the Hydrator the manifest entry plus the latest result from each layer. The operator never
+points at a manifest or a result file; they point at a **video**.
 
 The tool has **two cleanly separated parts**:
 
@@ -80,32 +90,73 @@ the Renderer is a thin, dumb draw routine driven entirely by the bundle.
 
 ## 📥 Part 1 — The Hydration Step (Data Join)
 
-### 1.1 Inputs
+### 1.1 What the operator provides vs. what the tool discovers (D4)
 
-| Input | Source | Notes |
-|---|---|---|
-| **Manifest** | the per-run `manifest_sub.json` (or equivalent input) the layer run actually consumed | Carries `bystander_detections`, `identified_tasks`, `fps`, `duration_sec`, and the **local** `video_path`. Per **D3**, this is an Ego4D manifest (UUID `video_id`s). |
-| **Layer results** | `03a..03f` `*_result.json` files (one record per `video_id`) | Each is an outer list keyed by `video_id`. Missing layers degrade gracefully (the bundle just omits that overlay). |
-| **Source video** | local file at `manifest.video_path` (e.g. `/Volumes/Extreme SSD/social_robotics/raw_videos/ego4d/...`) | Decoded by the **Renderer**, not the Hydrator (except a one-shot header probe for dimensions). |
-| *(optional)* layer-04 parquet | `social_metadata.parquet` | Only the per-layer `*_raw` JSON-string columns carry the per-frame trace; the scalar summary columns lose it. **Prefer the raw `03*_result.json`.** |
+Under **D4** the operator provides only **a video selection** + **where to look**. Everything else —
+which manifest holds that clip, which run dir holds each layer's result, where the `.mp4` lives — is
+**discovered automatically** by the Catalog (§ 1.2).
 
-### 1.2 The Join Key (and why D3 de-risks it)
+| The operator provides | The tool discovers (Catalog) |
+|---|---|
+| a **video** — `--video-id <uuid>`, or `--video <path>`, or a pick from `--list` | the **manifest entry** for that `video_id` (`bystander_detections`, `identified_tasks`, `fps`, `duration_sec`, `video_path`) |
+| one or more **scan roots** — `--scan-root` (defaults to `e2e_reports/` + the configured Ego4D video dirs) | the **latest `03*_result.json`** record for each layer (`03a..03f`) that contains that `video_id` |
+| render flags (§ 2.6) | the **local source `.mp4`** (from the manifest's `video_path`, else `<ego4d_video_dir>/<video_id>.mp4`) |
 
-The join key is `video_id`. Historically this was a trap: the toy `filtered_manifest.json` at the
-repo root used Charades-style short IDs (`OHLJPEGO`) while the real E2E runs used Ego4D UUIDs
-(`0c163d16-8c47-…`), so a result keyed by a UUID would silently fail to join against a short-ID
-manifest and produce an empty overlay that *looked* like "the layer found nothing."
+*(Optional, discouraged input: a layer-04 `social_metadata.parquet`. Only its per-layer `*_raw`
+JSON-string columns carry the per-frame trace; the scalar summary columns lose it. **Prefer the raw
+`03*_result.json`** the Catalog already finds.)*
 
-**Under D3 (Ego4D only) that specific mismatch cannot happen** — everything is a UUID. The only
-residual risk is pointing the Hydrator at the *wrong Ego4D manifest* (a different run/slice that
-doesn't contain this clip). So the Hydrator still enforces one simple guard:
+### 1.2 The Catalog: Video-First Auto-Discovery (D4)
 
-- **Fail loudly** if a requested `video_id` is **not found** in the manifest (never emit a blank
-  bundle).
-- **Warn** (don't silently drop) when a layer result references a `video_id` the manifest lacks, or
-  vice-versa.
+The Catalog is the component that makes "pick a video, not a manifest" real. It is a **headless index
+build** that runs before hydration:
 
-This is now a cheap sanity check rather than a subtle namespace problem (see simplified Issue 3).
+**1. Scan.** Walk each `--scan-root` (default: the repo's `e2e_reports/` tree plus the configured
+Ego4D video directories from `src/config.py` — `DATASET_PATHS["ego4d"]` / `OUTPUT_DIR/ego4d`).
+Collect:
+   - every **manifest** file (`manifest_sub.json`, `filtered_manifest.json`, or any JSON that is a
+     list of records each having `video_id` + `bystander_detections`);
+   - every **layer result** file matching `03*_result.json` (an outer list of records carrying
+     `layer` + `video_id`);
+   - every **video file** `<uuid>.mp4` (for resolving/validating the source path and for the `--list`
+     catalog even when only pixels exist).
+
+**2. Index by `video_id`.** Build `catalog[video_id] = { manifest_entry, results_by_layer, video_path,
+sources }`. For each `video_id`:
+   - **manifest_entry**: the record from the *most recent* manifest that contains it (mtime-ranked).
+     Ego4D `video_id`s are globally unique, so the *content* (tasks, bystanders) is the same across
+     runs; recency just picks the freshest copy.
+   - **results_by_layer**: for each layer `03a..03f`, the record from the *most recent*
+     `03*_result.json` that contains this `video_id`. **This is the key behavior** — a clip's layers
+     are routinely spread across different dated run dirs (03a in one, 03d in another, exactly as
+     `e2e_reports/` is laid out today), and the Catalog stitches the **best available result per
+     layer** into one view. The operator does not need to know where any of them live.
+   - **video_path**: prefer `manifest_entry.video_path` if the file exists; else
+     `<ego4d_video_dir>/<video_id>.mp4`; else `null` (catalog still lists it, render refuses — see
+     guards).
+   - **sources**: record which file each piece came from (for `--list --verbose` provenance, so an
+     operator *can* audit "03d came from the June 13 run" if they want — transparency without
+     requiring a choice).
+
+**3. Present (`--list`).** Print the catalog as a table: `video_id`, `task_label` (first task),
+`duration_sec`, a layer-coverage badge (e.g. `03a 03c 03d 03f`, dim for missing), `audio?`, and
+whether the video file was found. This *is* the "select a video and see what's available" surface,
+realized as a CLI listing (consistent with D1's no-GUI rule). `--list --json` emits it machine-
+readable for tooling.
+
+**4. Resolve + guard.** When the operator names a `video_id`, the Catalog returns its entry and the
+Hydrator builds the bundle from it. Guards (all **loud**, never silent):
+   - **Unknown video** → error `video_id X not found under any --scan-root (Y manifests, Z result
+     files scanned)`. Never emit a blank bundle.
+   - **No layers found** for a known clip → render is allowed (manifest boxes + tasks still overlay)
+     but a prominent warning lists which layers are missing, so an all-`None` clip can't masquerade
+     as "nothing happened."
+   - **Missing video file** → error naming the paths tried; rendering needs pixels.
+   - **`video_id` only in a result, not in any manifest** (orphaned result) → warn and skip that
+     result (no geometry to anchor it to).
+
+The join key remains `video_id`; under **D3 (Ego4D only)** every id is a UUID, so the old short-ID-vs-
+UUID namespace collision is impossible and discovery is unambiguous.
 
 ### 1.3 Coordinate Normalization (the alignment-critical part)
 
@@ -150,7 +201,7 @@ the current time of frame `i` as `t = i / fps` and looks signals up at `t`:
 | Bystander boxes | **sparse, ~3–6 s** (Node 02 samples 1 frame / 3 s; per-track gaps are larger) | **D2: hold-last within `gap_tolerance_sec`, fade with age, else hide** | A box is a discrete observation; interpolating across a 6 s gap invents motion. |
 | `attention_trace` (03a) | **dense, ~8 fps** (`sampling_fps_effective: 8.0`, burst 32) | **nearest-sample** (linear on `pitch_rad`/`yaw_rad` allowed for a smooth arrow) | Dense enough to feel continuous; nearest is honest. |
 | Emotion slices (03b) | **windowed** (`window_sec` per slice) | **draw while `t ∈ window`** | Defined over an interval, not an instant. |
-| Prosody (03c) | **windowed** (`task_reaction_window_sec`) | **draw badge while `t ∈ window`**; loudness bar continuous (Issue 4) | Tone/emotion is per-window. |
+| Prosody (03c) | **windowed** (`task_reaction_window_sec`) | **draw badge while `t ∈ window`**; loudness bar continuous (D5) | Tone/emotion is per-window. |
 | Proxemic (03d) | **windowed** (`measurement_window_sec`) | **draw while `t ∈ window`** | A delta over a window has no per-frame value. |
 | Gesture (03e) | **windowed** (`measurement_window_sec`) | **draw + pulse while `t ∈ window`** | Oscillation Hz is a window property; pulse conveys the nod rhythm. |
 | Motor resonance (03f) | **windowed** (`reaction_window_sec`) + per-task `ego_kinetic_chaos_score` | **draw while `t ∈ window`**; ego meter during reaction windows | Per-task scalar + per-person verdict. |
@@ -189,7 +240,7 @@ is the contract between Hydrator and Renderer:
     "native_height": 1080,
     "fps": 30.0,
     "duration_sec": 94.53,
-    "has_audio": true                 // probed; drives audio mux + "no audio" badge (Issue 4)
+    "has_audio": true                 // probed; drives audio mux + "no audio" badge (D5)
   },
   "layers_present": ["02_manifest", "03a", "03c", "03d", "03f"],  // honest list; missing = overlay omitted
   "people": {
@@ -254,7 +305,7 @@ is the contract between Hydrator and Renderer:
       "audio_events": [] }
   ],
 
-  // ---- optional, only if Issue 4 picks the loudness bar: precomputed envelope -
+  // ---- D5 optional loudness bar: precomputed amplitude envelope (null = bar off) -
   "audio_envelope": null,            // or { "hz": 20, "rms_dbfs": [-60, -58, ...] } sampled across duration
 
   // ---- optional: hand boxes (manifest hand_detections) -----------------------
@@ -274,26 +325,54 @@ Design rules baked into the schema:
 - **Pre-sorted.** Every per-time array (`boxes`, `attention.trace`, `hands`, `audio_envelope`) is
   emitted **sorted by `t`** so the Renderer can binary-search, never sort.
 
-### 1.7 Hydrator API (proposed)
+### 1.7 Catalog + Hydrator API (proposed)
+
+The **Catalog** (D4) does discovery; the **Hydrator** turns a discovered entry into a bundle. The
+operator-facing entry point takes a `video_id` and scan roots — never a manifest path.
+
+```python
+# src/layer_05_visualizer/catalog.py  (auto-discovery, D4)
+@dataclass
+class CatalogEntry:
+    video_id: str
+    manifest_entry: dict                       # the Node-02 record for this clip
+    results_by_layer: dict[str, dict]          # {"03a": <record>, "03d": <record>, ...} latest per layer
+    video_path: Path | None
+    sources: dict                              # provenance: which file each piece came from
+
+def build_catalog(scan_roots: list[str | Path]) -> dict[str, CatalogEntry]: ...
+    # walk scan_roots; index manifests + 03*_result.json + <uuid>.mp4 by video_id;
+    # per layer keep the most-recent (mtime) result that contains the video_id.
+
+def list_catalog(catalog, *, as_json: bool = False, verbose: bool = False) -> str: ...
+    # render the --list table (video_id, label, duration, layer-coverage, audio?, video-found?)
+
+def resolve_video(video_id: str, scan_roots: list[str | Path]) -> CatalogEntry: ...
+    # build_catalog + look up one id; raises a LOUD error if not found (see § 1.2 guards)
+```
 
 ```python
 # src/layer_05_visualizer/hydrate.py
 def build_overlay_bundle(
-    video_id: str,
-    manifest_path: str | Path,
-    results_dir: str | Path,           # dir containing 03*_result.json
+    entry: CatalogEntry,               # from resolve_video(); NOT a manifest path
     *,
     probe_video: bool = True,          # read native W/H/fps/has_audio from the file header
     include_phantoms: bool = True,     # keep negative-id tracks (tagged phantom; Renderer hides by default)
 ) -> dict: ...
 
-def write_bundles_for_run(
-    manifest_path, results_dir, out_dir, *, video_ids: list[str] | None = None
-) -> list[Path]: ...   # one <video_id>.bundle.json per clip, plus an index.json
+def build_bundle_for_video(         # convenience: discovery + hydration in one call
+    video_id: str, scan_roots: list[str | Path], **kw
+) -> dict:
+    return build_overlay_bundle(resolve_video(video_id, scan_roots), **kw)
+
+def write_bundles_for_catalog(      # batch: a bundle per video the Catalog found
+    scan_roots, out_dir, *, video_ids: list[str] | None = None
+) -> list[Path]: ...                 # one <video_id>.bundle.json per clip, plus an index.json
 ```
 
-The Hydrator is **pure + headless** (except the optional one-shot header probe) and therefore fully
-unit-testable: feed it fixture JSON, assert the bundle. See § Verification.
+The Catalog and Hydrator are **pure + headless** (except the optional one-shot header probe) and
+therefore fully unit-testable: point `build_catalog` at a fixture tree, assert the index; feed an
+entry to `build_overlay_bundle`, assert the bundle. See § Verification.
 
 ---
 
@@ -342,16 +421,16 @@ def render_clip(bundle, video_path, out_path, *, scale=1.0, layers="all",
     writer.release(); cap.release()
 
     if with_audio and bundle["clip"]["has_audio"]:
-        mux_audio(tmp_silent, video_path, out_path)  # ffmpeg; copies original audio (Issue 4 Option A)
+        mux_audio(tmp_silent, video_path, out_path)  # ffmpeg; copies original audio (D5)
         tmp_silent.unlink()
     else:
-        tmp_silent.rename(out_path)
+        tmp_silent.rename(out_path)                  # no audio stream -> silent file + "no audio" badge
 ```
 
 - **Sequential decode is the key performance win of D1.** Reading start-to-finish never random-seeks
-  the external SSD, so the laggy-scrub concern that haunted the rejected web approach disappears
-  entirely (see simplified Issue 4).
-- **Audio mux** (when `has_audio` and `--with-audio`, the default — pending Issue 4):
+  the external SSD, so the laggy-scrub concern that haunted the rejected live-player approach
+  disappears entirely.
+- **Audio mux** (D5 — when `has_audio` and `--with-audio`, the default):
   ```
   ffmpeg -y -i <tmp_silent.mp4> -i <original.mp4> \
          -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest <out.mp4>
@@ -359,6 +438,8 @@ def render_clip(bundle, video_path, out_path, *, scale=1.0, layers="all",
   This copies the **original** audio track onto the annotated video so you *hear* the bystander
   while *seeing* the flinch. `-shortest` guards against tiny duration drift. If the source has no
   audio stream, skip muxing and emit a silent file (the on-frame "no audio" badge already says so).
+  The optional **loudness bar** (§ 2.5, 03c) is driven by `bundle.audio_envelope` when present; the
+  Hydrator can precompute that envelope so the bar needs no live audio decode at render time.
 - **Resumability** (project convention): if `out_path` already exists and `--force` is not set, skip
   the clip. Long batch renders should run under `caffeinate`/`tools/run_supervised.sh` like every
   other multi-hour job (docs/03 § Running Long Layer Batches).
@@ -480,7 +561,9 @@ Each layer has a deliberate `cv2` encoding. `color` is the person's BGR (hex→B
   `classified_acoustic_tone` + `dominant_emotion` (+ confidence). When `audio_present == false`
   (common — many clips are silent; 03c emits `-100 dBFS`, all-zero emotions), show an explicit **"no
   audio"** chip instead of a misleading flat-zero bar. The optional **loudness bar** (a vertical bar
-  rising/falling with `audio_envelope.rms_dbfs` at `t`) is gated on Issue 4.
+  rising/falling with `audio_envelope.rms_dbfs` at `t`) is a **D5** feature, drawn when
+  `bundle.audio_envelope` is present. The clip's **original audio is muxed into the output** (D5), so
+  the operator also *hears* the reaction.
 
 - **03d Proxemic Kinematics.** While `t ∈ measurement_window_sec`, draw an **approach/avoidance
   arrow** on the box — pointing toward the camera/viewer (Approach_Intervention) or away (Avoidance) —
@@ -507,24 +590,30 @@ Each layer has a deliberate `cv2` encoding. `color` is the person's BGR (hex→B
   flash for ±`climax_flash_sec`), a shaded **reaction-window band** per multi-window segment, label =
   `task_label` + `task_velocity`.
 
-### 2.6 Render-time configuration (replaces the live toggles)
+### 2.6 Selection & render-time configuration (replaces the live toggles)
 
-Under D1 there is no UI, so selection happens via flags that decide **what gets burned in**:
+Under D1 there is no GUI, so both **video selection (D4)** and **what gets burned in** happen via CLI
+flags. The first group selects the *clip*; the rest select the *overlays*:
 
 | Flag | Effect | Default |
 |---|---|---|
-| `--layers 03a,03d` / `--layers all` | which layers' overlays to draw | `all` present |
+| `--list` (+ `--json` / `--verbose`) | print the **catalog** of discoverable videos (D4) and exit | — |
+| `--video-id <uuid>` | **select the video** to render (the only required selection input) | — |
+| `--video <path>` | select by file instead of id (its `<uuid>` stem is the `video_id`) | — |
+| `--scan-root <dir>` (repeatable) | where the Catalog looks for manifests/results/videos | `e2e_reports/` + configured Ego4D video dirs |
+| `--layers 03a,03d` / `--layers all` | which discovered layers' overlays to draw | `all` found |
 | `--people 0,3` | restrict to specific `person_id`s | all genuine |
 | `--show-phantoms` | also draw negative-id phantom tracks (de-emphasized) | off |
 | `--panels timeline,readout` / `--panels none` | which burned panels to include | both |
 | `--scale 0.5` | downscale output (smaller, faster, easy to share) | `1.0` (native) |
-| `--with-audio` / `--no-audio` | mux original audio into the output (Issue 4) | on if `has_audio` |
+| `--with-audio` / `--no-audio` | mux original audio into the output (D5) | on if `has_audio` |
 | `--clip-range 40:60` | render only `t ∈ [40s, 60s]` (fast iteration on one moment) | full clip |
 | `--force` | re-render even if the output exists | off (skip existing) |
 
-To compare "with vs without a layer," render two files (e.g. `…__all.mp4` and `…__no03d.mp4`). The
-output filename should encode the salient flags for traceability, e.g.
-`<video_id>__L-all__s50.mp4`.
+Note there is **no `--manifest` / `--results-dir` flag** — D4 forbids it; the operator names a video
+and the Catalog finds the rest. To compare "with vs without a layer," render two files (e.g.
+`…__all.mp4` and `…__no03d.mp4`). The output filename should encode the salient flags for
+traceability, e.g. `<video_id>__L-all__s50.mp4`.
 
 ### 2.7 Performance & output expectations
 
@@ -545,7 +634,8 @@ output filename should encode the salient flags for traceability, e.g.
 ```
 src/layer_05_visualizer/
 ├── __init__.py
-├── hydrate.py            # build_overlay_bundle(), write_bundles_for_run()  — pure/headless
+├── catalog.py            # D4 auto-discovery: build_catalog(), list_catalog(), resolve_video()
+├── hydrate.py            # build_overlay_bundle(), build_bundle_for_video(), write_bundles_for_catalog()
 ├── bundle_schema.py      # schema constants + validate_bundle() guard (no silent shape drift)
 ├── colors.py             # stable person_id -> color palette hashing; hex -> BGR
 ├── render.py             # render_clip(), compose_frame(), build_render_index(), mux_audio()
@@ -561,48 +651,50 @@ src/layer_05_visualizer/
     └── panels.py         # readout panel, legend, fonts/scale helpers
 
 tools/
-└── run_visualizer.py     # CLI: hydrate (if needed) -> render one clip or batch a whole run dir
+└── run_visualizer.py     # CLI: --list the catalog, or --video-id -> discover + hydrate + render
 ```
 
 This mirrors the existing per-node layout (`src/layer_04_dehydrated_export/` has `aggregator.py`,
 `per_layer.py`, `rehydrate_dataset.py`, `huggingface_upload.py`). Tests go in
-`tests/test_layer_05.py` (Hydrator + bundle + single-frame draw asserts). `cv2` and `ffmpeg` are
-already project dependencies (used across Layer 02/03 and the docs).
+`tests/test_layer_05.py` (Catalog discovery + Hydrator + bundle + single-frame draw asserts). `cv2`
+and `ffmpeg` are already project dependencies (used across Layer 02/03 and the docs).
 
 ---
 
 ## 🚀 Part 4 — Running It
 
-```bash
-# 1. Hydrate a finished Ego4D run into Overlay Bundles (headless; safe anywhere)
-./venv/bin/python -m src.layer_05_visualizer.hydrate \
-    --manifest   e2e_reports/2026_06_14_layer03e_headpose/manifest_sub.json \
-    --results-dir e2e_reports/2026_06_14_layer03e_headpose \
-    --out-dir    e2e_reports/2026_06_14_layer03e_headpose/bundles
+You name a **video** (D4); the tool discovers its manifest + every layer's latest result, hydrates,
+and renders. There is **no manifest path to type**.
 
-# 2. Render an annotated .mp4 for one clip
-./venv/bin/python -m src.layer_05_visualizer.render \
-    --bundle     e2e_reports/2026_06_14_layer03e_headpose/bundles/0c163d16-....bundle.json \
-    --out        e2e_reports/2026_06_14_layer03e_headpose/viz/0c163d16-....__L-all.mp4 \
+```bash
+# 1. SELECT: see which videos are available and what signals each has (the "picker", D4).
+#    Scans e2e_reports/ + the configured Ego4D video dirs by default; add --scan-root to widen.
+./venv/bin/python tools/run_visualizer.py --list
+#  VIDEO_ID                              TASK                       DUR    LAYERS            AUDIO  VIDEO
+#  0c163d16-8c47-4773-a25f-2ee57ce9ab87  construction/renovation    94.5s  03a 03c 03d 03f  no     ✓
+#  630bd4ba-3053-459e-9284-3259aee16aa5  ...                        ...    03a 03c 03d 03e   yes    ✓
+
+# 2. RENDER: pick one video by id; the tool finds everything related to it and burns it in.
+./venv/bin/python tools/run_visualizer.py \
+    --video-id 0c163d16-8c47-4773-a25f-2ee57ce9ab87 \
+    --out-dir  e2e_reports/viz \
     --layers all --panels timeline,readout
+# -> e2e_reports/viz/0c163d16-..._L-all.mp4   (original audio muxed in per D5)
 
 # 2b. Iterate fast on just the climax moment, downscaled:
 #     --clip-range 47:53 --scale 0.5
 
-# 3. Batch a whole run in one shot (hydrate + render every clip)
-./venv/bin/python tools/run_visualizer.py \
-    --manifest    e2e_reports/<run>/manifest_sub.json \
-    --results-dir e2e_reports/<run> \
-    --out-dir     e2e_reports/<run>/viz \
-    --layers all
-# wrap long batches: tools/run_supervised.sh e2e_reports/<run>/viz/_done.json <the command above>
+# 3. BATCH: render every video the Catalog found (skips already-rendered unless --force).
+./venv/bin/python tools/run_visualizer.py --all --out-dir e2e_reports/viz --layers all
+# wrap long batches: tools/run_supervised.sh e2e_reports/viz/_done.json <the command above>
 
-# 4. Open the .mp4 in QuickTime / VLC / a browser — signals play in real time. Share the file.
+# 4. Open the .mp4 in QuickTime / VLC / a browser — signals play in real time, with sound. Share it.
 ```
 
 Runs in the main `venv` (it already has `cv2`; `ffmpeg` is on PATH for the audio mux). Everything is
-local; **the annotated `.mp4` is internal-only and must never be uploaded** (see Objective + Issue
-on export exclusion).
+local; **the annotated `.mp4` is internal-only and must never be uploaded** (see Objective + the
+export-exclusion note). The intermediate Overlay Bundles are written under `--out-dir` (e.g.
+`e2e_reports/viz/bundles/`) and can be archived for later re-render.
 
 ---
 
@@ -627,65 +719,39 @@ A misaligned or mistimed overlay is itself a silent lie, so the tool's own corre
 6. **No-pixel-export guard.** A test asserts the Renderer writes only into the configured local
    `viz/` output path and **never** into the dehydrated-export directory — 05 must not leak source
    pixels into 04's published surface.
+7. **Catalog discovery (D4).** Point `build_catalog` at a fixture tree where one `video_id`'s layers
+   are deliberately **split across two run dirs** (03a in dir A, 03d in dir B) plus an older duplicate
+   03a; assert the entry stitches both layers and picks the **newer** 03a. Assert `resolve_video` on
+   an unknown id raises the loud "not found" error (never returns a blank entry), and that a clip
+   present in a result but in **no** manifest is warned-and-skipped.
 
 ---
 
 ## 🧪 Resolved Issues & Implementation Refinements
 
-_None yet — Layer 05 is at the design stage. The locked decisions (D1 offline renderer, D2 hold-last,
-D3 Ego4D-only) are recorded in § Locked Design Decisions; once implemented and verified, refinements
-will be migrated here per the Bug Documentation Style Guide._
+_Layer 05 is at the design stage — no implementation bugs yet. All design questions raised during
+review have been **decided** and folded into § Locked Design Decisions, so they no longer sit as open
+issues:_
+
+1. **Which delivery mechanism? → D1 (offline `cv2` renderer to an annotated `.mp4`).** Chosen over a
+   live web app and a Jupyter widget for implementation simplicity (one batch script) and
+   shareability (the output is just a video file).
+2. **How to draw boxes between sparse detections? → D2 (hold-last, fade, then hide).** Chosen over
+   linear interpolation and tracker-fill so the overlay never fabricates motion the detector didn't
+   observe.
+3. **Corpus scope? → D3 (Ego4D only).** Removes the mixed-ID-namespace join hazard at the source.
+4. **How does the operator select what to render? → D4 (video-first auto-discovery).** The operator
+   names a **video**, never a manifest; the Catalog (§ 1.2) discovers and stitches the manifest entry
+   + latest per-layer results for that `video_id`. This supersedes the earlier "point at the right
+   manifest" framing (the old Charades-vs-Ego4D mismatch is impossible under D3, and the residual
+   wrong-folder risk is handled by the Catalog's loud "video_id not found" guard).
+5. **Audio in the output? → D5 (keep the original audio + optional loudness bar).** Chosen over a
+   silent picture-only render; clips Ego4D ships without audio render silent with a clear "no audio"
+   badge.
+
+_Once the tool is implemented and verified, any post-build fixes will be added here as numbered
+Problem/Solution entries per the Bug Documentation Style Guide._
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 3: Make sure you point at the right manifest (simplified for re-review)
-**Status**: ⚠️ Open for your re-review — **mostly de-risked by D3 (Ego4D only).** In plain terms: the
-old danger was that two ID styles existed (Charades's short codes like `OHLJPEGO` vs Ego4D's long IDs
-like `0c163d16-…`). If you accidentally paired layer results from one style with a manifest in the
-other, the clip wouldn't be found and you'd get a **blank video that looks like "the layers found
-nothing"** — a silent failure. **Now that 05 only handles Ego4D, both sides always use the same ID
-style, so that specific mix-up can't happen.** The only thing left: you could still point the tool at
-the *wrong Ego4D manifest* — one from a different batch that simply doesn't include this clip. The fix
-for that is small and not really a "hard problem" anymore.
-
-**Option A (recommended)**: **Just add a loud sanity check.** When the Hydrator can't find a clip's ID
-in the manifest, it stops and prints a clear error ("video_id X not in manifest Y — wrong manifest?")
-instead of producing a blank video.
-  - *Pros*: One cheap check; impossible to get a silent blank; no changes anywhere else.
-  - *Cons*: Still relies on you pointing at the right run folder (but the error tells you immediately
-    when you didn't).
-
-**Option B**: **Also stamp the manifest into each result file.** Have the layer runners record which
-manifest they used, so the Hydrator can double-check the pairing automatically.
-  - *Pros*: The tool can self-verify the match; useful beyond the visualizer.
-  - *Cons*: Requires editing every Layer 03 runner (work outside 05); only helps for *future* runs.
-
-Your selection: _____
-
----
-
-### Issue 4: Sound in the annotated video (simplified for re-review)
-**Status**: ⚠️ Open for your re-review — **simpler than before, because D1 removed the scrubbing
-problem.** Plain terms: with the offline approach we read the video straight through once and save a
-small finished clip, so the old "laggy when you drag the scrubber on the external drive" worry is
-gone — the saved clip plays smoothly anywhere. The only remaining question is just: **do you want to
-hear the original audio in the annotated video?**
-
-**Option A (recommended)**: **Keep the original sound (and optionally a little loudness bar).** After
-drawing the overlays, copy the original audio track into the saved clip (one `ffmpeg` command). You'd
-*hear* the bystander's "wow!" while *seeing* the flinch. Optionally also draw a small bar that rises
-and falls with how loud the audio is.
-  - *Pros*: Most informative — sound is half the social signal; trivial to add (one ffmpeg step);
-    clips with no audio just come out silent with a "no audio" label.
-  - *Cons*: Slightly larger output file; one extra dependency on `ffmpeg` (already installed).
-
-**Option B**: **No sound — picture only.** Save a silent annotated clip and rely on the on-screen text
-labels (e.g. "tone: surprised") to convey what the audio layer found.
-  - *Pros*: Simplest possible; no audio handling at all.
-  - *Cons*: You lose the actual audio, which is often the most visceral part of a reaction.
-
-> Note: many Ego4D clips have **no audio at all** (the prosody layer reports `audio_present: false`).
-> In that case both options produce a silent video with a clear **"no audio"** badge — no flat/fake
-> meter.
-
-Your selection: _____
+_No open issues at this time. (The original Issues 1–4 are all resolved into D1–D5 above.)_
