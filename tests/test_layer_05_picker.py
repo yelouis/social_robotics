@@ -16,7 +16,8 @@ def test_headless_picker_logic():
             findings={"03a": "finding"},
             num_layers_with_findings=1,
             summary_text="vid1 summary",
-            sources={}
+            sources={},
+            has_audio=None
         ),
         "vid2": CatalogEntry(
             video_id="vid2",
@@ -26,7 +27,8 @@ def test_headless_picker_logic():
             findings={"03a": "finding", "03e": "finding"},
             num_layers_with_findings=2,
             summary_text="vid2 summary",
-            sources={}
+            sources={},
+            has_audio=False
         )
     }
     
@@ -46,7 +48,7 @@ def test_headless_picker_logic():
     assert filtered[0].video_id == "vid2"
     
     # P3 - Sorting
-    sorted_rows = sort_rows(rows, "★", descending=False)
+    sorted_rows = sort_rows(rows, "star", descending=False)
     assert sorted_rows[0].video_id == "vid1"
     
     sorted_rows = sort_rows(rows, "task", descending=False)

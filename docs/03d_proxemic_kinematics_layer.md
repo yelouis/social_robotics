@@ -105,6 +105,21 @@ The 03d Proxemic Kinematics layer has been fully implemented with the following 
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No actionable issues open — the June 13 smell-test findings (Resolved #4–#5) and the June 27 track-explosion infeasibility (Resolved #6) are resolved above._
+### Issue 1: Sparse Boxes Suppress Scorability — Window-Dense Boxes Recover Skipped Clips (cross-ref docs/02 Issue 1)
+**Status**: ⚠️ Confirmed Unresolved — root cause is upstream (**docs/02 Issue 1**). 03d's proxemic delta needs **≥ 2 endpoints** in the measurement window; at Node-02's 1/3-fps sampling, sparse clips frequently skip as `mixed_skip` / `all_bystanders_single_detection`. A 25-clip A/B (`tools/ab_density.py`) feeding window-dense boxes (`src/shared/dense_detect.py`) moved 03d from **22 → 25** clips with data (recovering `28539222`, `51cb7800`, `599037f1`), **48 → 72** per-person rows, `proxemic_confidence > 0` rows **7 → 11**, and **0 → 2** genuine non-Neutral actions (`66fa8650` Approach_Intervention, `66d4121f` Avoidance). The benefit is **moderate, not strong**: most verdicts stay `Neutral` because a 2 s proxemic delta is physically often neutral and 03d's ≥2-endpoint anchoring already coped in many cases — so unlike 03f (0 → 7 flinches), dense boxes here mainly **recover scorability** rather than unlocking a large hidden signal.
+
+**Option A (recommended)**: **Adopt window-dense boxes when docs/02 Issue 1 lands, and additionally compute a per-frame proxemic *trajectory* instead of a single two-endpoint delta.** With dense boxes the bbox-scale / depth signal is now a continuous series across the window, so 03d can report the *shape* of the approach (monotonic vs oscillatory) rather than one endpoint-to-endpoint number.
+  - *Pros*: Recovers the skipped clips for free; a trajectory is strictly more informative than a scalar and is robust to a single bad endpoint; reuses the same dense detector as 03f (one pre-pass serves both).
+  - *Cons*: Requires re-running + re-publishing 03d and the dehydrated export; the trajectory needs a new summary reduction in Layer 04; moderate payoff, so it should ride along with the 03f change (docs/02 Option A) rather than justify a corpus pass on its own.
+
+**Option B**: **Keep 03d on sparse boxes** and accept the skipped clips.
+  - *Pros*: No change, no re-publish.
+  - *Cons*: Leaves ~3/25 clips unscored for a fixable sampling reason and misses the genuine approach/avoidance the A/B surfaced.
+
+Your selection: _____
+
+---
+
+_No other actionable issues — the June 13 smell-test findings (Resolved #4–#5) and the June 27 track-explosion infeasibility (Resolved #6) are resolved above._
 
 _Observation (not yet a formal issue): bystander-anchoring (Resolved #1) measures some genuine vectors **40–70 s from the wearer's task climax** (e.g. the `343f4d2d` Approach at 67.6 s), which raises a fidelity question — is a proxemic delta that far from the climax really a task reaction? Recorded here for visibility; open it as a formal issue if tightening task-reaction locality becomes a priority._

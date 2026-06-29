@@ -12,8 +12,8 @@ def test_findings_predicates():
     assert not LAYER_FINDING_PREDICATES["03a"]({"aggregate": {"any_person_engaged": False}})
     
     # 03e
-    assert LAYER_FINDING_PREDICATES["03e"]({"people": [{"gesture_detected": "affirming_nod"}]})
-    assert not LAYER_FINDING_PREDICATES["03e"]({"people": [{"gesture_detected": "none"}]})
+    assert LAYER_FINDING_PREDICATES["03e"]({"tasks_analyzed": [{"per_person": [{"gesture_detected": "affirming_nod"}]}]})
+    assert not LAYER_FINDING_PREDICATES["03e"]({"tasks_analyzed": [{"per_person": [{"gesture_detected": "none"}]}]})
 
 def test_bisect_helpers():
     samples = [{"t": 1.0, "val": "A"}, {"t": 3.0, "val": "B"}, {"t": 5.0, "val": "C"}]
@@ -40,7 +40,12 @@ def test_hydrate():
     entry = CatalogEntry(
         video_id="test-vid",
         manifest_entry={"video_width": 1920, "video_height": 1080, "fps": 30.0, "bystander_detections": [
-            {"timestamp_sec": 1.0, "tracked_boxes": [{"person_id": 0, "box_2d": [0,0,192,108]}]}
+            {
+                "person_id": 0,
+                "timestamps_sec": [1.0],
+                "bounding_boxes": [[0, 0, 192, 108]],
+                "detection_confidence": [1.0]
+            }
         ]},
         results_by_layer={},
         video_path=None,

@@ -117,5 +117,16 @@ Videos that legitimately produce no output (missing file, no bystanders/tasks, n
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No open issues. The camera-motion-through-bbox FP class is **Resolved #10** (dense-track gate); the track-explosion infeasibility is **Resolved #11** (per-clip cap). If a sparse-but-multi-detection drift class later surfaces, **Option B** (ego-motion-compensate the keypoint velocity via the existing Farneback flow) is the documented next step._
+### Issue 1: Box Sparsity Caps Trusted Velocity — Dense Boxes Flip the `MIN_GENUINE_DETECTIONS` Gate
+**Status**: ⚠️ Confirmed Unresolved — root cause is upstream (**docs/02 Issue 1**: Node-02 samples bystander boxes at 1/3 fps). 03f already samples *pose* densely (`TARGET_POSE_FPS = 10`), but it crops to a **linearly-interpolated** bbox (`_interp_bbox`) from those sparse detections, and the camera-motion guard (`MIN_GENUINE_DETECTIONS = 2`, Resolved #10) **forces velocity to 0** unless ≥ 2 genuine detections land in the measurement window — which, at 1/3-fps sampling a median ~10 s from the climax, usually fails. An A/B (`tools/ab_density.py`) feeding window-dense boxes (`src/shared/dense_detect.py`, IoU-matched to the manifest `person_id`s) — confirmed at **N=25** — moved this layer from **0 → 7 `motor_resonance_detected`**, recovered **+3 clips** from `no_pose_data`, and took trusted-velocity rows **40 → 66** — while *deflating* several camera-motion-inflated sparse peaks (e.g. `06532156` 5.12 → 1.44, `0b13211b` 6.87 → 1.19, `66fa8650` 7.35 → 1.19). So dense input is both more sensitive and more specific here. **But the gates were tuned for sparse input and must change before this lands**: with window-dense boxes the `≥ 2 genuine detections` gate is **trivially satisfied**, so it no longer protects against the camera-motion-through-bbox FP class it was built for (Resolved #10) — that protection has to move elsewhere.
+
+**Option A (recommended)**: **Replace the now-mooted detection-count gate with the documented ego-motion compensation.** Once boxes are window-dense, drop `MIN_GENUINE_DETECTIONS` as the camera-motion guard and instead **subtract the wearer's global Farneback flow** (already computed for `ego_kinetic_chaos_score`) from the bystander keypoint velocity, so only *residual* (bystander-relative) motion is scored.
+  - *Pros*: This is exactly the "Option B" next step parked under Resolved #10, now justified by data; it is the *correct* camera-motion control for dense tracking (a dense box that tracks the subject still moves with a panning camera — count-gating no longer catches that, flow-subtraction does); reuses flow 03f already extracts.
+  - *Cons*: Needs new tuning of the residual-velocity threshold + the `RESONANCE_IMPULSE_RATIO`; re-run + re-publish 03f and the dehydrated export; depends on docs/02 Issue 1 landing window-dense boxes first.
+
+**Option B**: **Keep 03f on sparse boxes** (status quo) and accept the recall floor.
+  - *Pros*: No change, no re-publish, no re-tuning; the existing gate's specificity is preserved.
+  - *Cons*: Leaves the measured recall on the table (0 flinches across 12 clips that have 4 genuine ones); the layer stays sampling-limited exactly where it matters (the reaction window).
+
+Your selection: _____
 

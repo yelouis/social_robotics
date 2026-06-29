@@ -38,7 +38,7 @@ requirements, not suggestions.
 | **D3** | **Ego4D only** | 05 targets **Ego4D** clips exclusively. Every manifest and every layer result it consumes uses Ego4D UUID `video_id`s (e.g. `0c163d16-8c47-…`). Charades/EPIC/EgoProceL clips are out of scope for the visualizer. | Removes the mixed-ID-namespace join hazard and keeps the tool focused on the corpus the real E2E runs actually used. |
 | **D4** | **Video-first selection — you pick a video, not a manifest** | The operator's only selection input is **a video** (a `video_id`, or a pick from a printed catalog of available clips). The tool then **auto-discovers** every manifest entry and every `03*_result.json` related to that video and assembles them itself. The operator **never** types a manifest path. | The operator should not have to know which run folder holds which layer's result; "show me everything you know about *this clip*" is the natural mental model and eliminates the wrong-manifest mistake at the source. (Supersedes the original Issue 3 options.) |
 | **D5** | **Keep the original audio (+ optional loudness bar)** | The annotated `.mp4` carries the **original audio track** (copied in with one `ffmpeg` step) so you *hear* the reaction while *seeing* it, plus an optional on-frame loudness bar. Clips Ego4D ships with no audio come out silent with a clear **"no audio"** badge. | Sound is half of a social reaction; muxing it back is trivial and far more informative than picture-only. (Was Issue 4 → Option A.) |
-| **D6** | **Findings-aware clickable Tkinter table window for selection** | You don't type a `video_id` from memory. Running with no `--video-id` opens a small **Tkinter window** with a **sortable, multi-column table** (`ttk.Treeview`) of discovered clips, a **filter box**, a **detail/summary panel**, and a **Render** button. Each row is a column set: `★` (how many layers had findings), task summary, `layers` (which fired), `audio?`, `video?`, and `video_id`; click a column header to sort, type in the filter box to narrow, click a row to see its full summary, then **double-click the row or press Render**. Implemented with **Tkinter from the Python stdlib** — **no pip dependency**, no web server, no browser. | "I can't remember a UUID, and I want to *click* the clip where something actually happened." A real table window shows columns + a live summary at once (a single-line dropdown can't), and clicking is the natural gesture. Compatible with D1 (a *selection* helper, not a playback UI). |
+| **D6** | **Findings-aware terminal selector (default); Tkinter window is opt-in** | You don't type a `video_id` from memory. Running with **no video flag** prints a **findings-sorted, numbered table** of discovered clips (`★` count · task · which layers fired · audio · `video_id`) and prompts: type a **number** to render, **`/text`** to filter (e.g. `/03e`), **`/clear`**, or **`q`**. Pure stdin/stdout — **no GUI, no dependency, works over SSH/anywhere**. A Tkinter table window (`--gui`) is kept as an *option*, but it is **not the default** because the macOS *system* Tk (8.5.9) cannot render `ttk.Treeview` rows — the window comes up blank even with the `clam` theme (confirmed on this host). | "I can't remember a UUID, and I want to pick the clip where something actually happened." The terminal table shows the same columns + findings ranking with zero rendering risk; it cannot come up blank. Compatible with D1 (a *selection* helper, not a playback UI). |
 
 > **"Interactivity" under D1.** Because there is no live *playback* UI, anything that would have been a
 > UI toggle (which layers to show, which people, whether to show phantoms) becomes a **render-time
@@ -46,13 +46,14 @@ requirements, not suggestions.
 > vs without," you render two files. This is the deliberate trade for D1's simplicity.
 >
 > **What "selecting a video" means (D4 + D6).** You never type a manifest path, and normally you don't
-> type a `video_id` either. Run the tool with no video given and it opens the **findings-aware Tkinter
-> table window** (D6): a sortable, filterable table of clips with a summary panel; click a column to
-> sort, type to filter, click a row to read its summary, **double-click (or press Render)** to render
-> it. (`--video-id`, `--video <file>`, and the non-interactive `--list` remain available for
-> scripting/CI.) The *"viewer"* in which the signals "populate" is the **rendered annotated `.mp4`** —
-> once you pick a clip, every signal the tool discovered for it is burned in and plays back, with
-> sound, in any media player. See § 1.2 for discovery + the findings model, and § 4 for the commands.
+> type a `video_id` either. Run the tool with no video given and it shows the **findings-aware terminal
+> selector** (D6): a numbered, findings-sorted table; type a **number** to render, **`/text`** to
+> filter, **`q`** to quit. (`--gui` opts into the Tkinter window; `--video-id`, `--video <file>`, and
+> the non-interactive `--list` remain available for scripting/CI.) The *"viewer"* in which the signals
+> "populate" is the **rendered annotated `.mp4`** — once you pick a clip, every signal the tool
+> discovered for it is burned in and plays back, with sound, in any media player. **`--verify`** runs
+> the whole pipeline on one clip and prints PASS/FAIL as a self-test. See § 1.2 for discovery + the
+> findings model, and § 4 for the commands.
 
 ---
 
@@ -163,8 +164,26 @@ present, predicate false), *absent* (no result) — because a layer that **ran b
 read differently from one that **never ran**. This distinction *is* the anti-silent-degradation
 mechanism, surfaced at selection time.
 
-**4. Present & pick (D6).** With no `--video-id`, open the **Tkinter table window** — a single small
-window built from the Python stdlib (`tkinter` / `ttk`), **no pip dependency**. Layout:
+**4. Present & pick (D6).** With no video flag, show the **terminal selector** (default) — a
+findings-sorted, numbered table on stdout; type a **number** to render, **`/text`** to filter, **`q`**
+to quit:
+
+```
+  #   ★  task                     layers w/ findings   aud  video_id
+  0   3  Cooking                  03a 03c 03e          yes  143f43b6
+  1   3  Cleaning / laundry       03a 03b 03c          yes  43bd06f3
+  2   2  Cooking                  03a 03e              yes  0780244d
+  …
+Filter='' · showing 59/59
+Enter a # to visualize · /<text> to filter · /clear · q to quit:
+```
+
+The same catalog data is also available non-interactively via **`--list`** (`--json` / `--verbose`),
+and — on a host with a **modern** Tcl/Tk — as an opt-in **Tkinter table window** via **`--gui`**
+(below). The macOS *system* Tk 8.5.9 renders that window's table blank (see the gotcha in § 3), which
+is exactly why the terminal selector is the default rather than the GUI.
+
+*Optional `--gui` window layout (same columns + a live summary panel):*
 
 ```
 ┌─ Select a clip to visualize ─────────────────────────────────────────────┐
@@ -458,6 +477,37 @@ The Catalog and Hydrator are **pure + headless** (except the optional one-shot h
 therefore fully unit-testable: point `build_catalog` at a fixture tree, assert the index; feed an
 entry to `build_overlay_bundle`, assert the bundle. See § Verification.
 
+### 1.8 `--dense-boxes`: making boxes follow the subject
+
+D2 (hold-last, then hide) is honest about Node-02's sparse boxes, but with detections **~1 every
+3–12 s** a moving bystander's box freezes between samples and drifts off the person — hard to read,
+and on a short clip with a single detection it never moves at all. `--dense-boxes` (default **on**)
+fixes this at the point of use, *without* touching Node-02 or the manifest contract.
+
+**Mechanism** (`src/shared/dense_detect.py`):
+1. For the clip's **task reaction windows** (padded ±4 s), run **plain YOLO + ByteTrack** on the
+   actual frames at `fps_target` (~10 fps). No VLM, no keep/drop — the clip already passed 02, so the
+   verified bystanders are known.
+2. **IoU-match** each dense track back to a manifest `person_id`, voting at that person's manifest
+   detection timestamps (`_match_tracks_to_person`). A dense track that overlaps person *P*'s sparse
+   boxes *is* person *P* — so the attention/gesture/proxemic signals (keyed by `person_id`) stay
+   attached, and non-bystander tracks (the wearer's chin, passers-by) match nothing and are dropped —
+   inheriting 02's VLM rejections for free.
+3. **Splice** the dense samples into that person's track *inside* the windows, keeping the original
+   sparse samples *outside* them. A person with no manifest anchor in a window is left sparse (honest
+   — we never invent a track 02 didn't have).
+
+The Hydrator densifies the entry before parsing (`build_overlay_bundle(..., dense_boxes=True)`), so
+the bundle's `boxes` arrays simply arrive dense and D2's hold-last rarely needs to engage. Because it
+re-detects only a few seconds of video per clip and reuses the YOLO weights already in the repo
+(`yolov8n-pose.pt`), it adds only seconds to a render. `--no-dense-boxes` reverts to 02's raw sparse
+boxes (useful for *seeing* the sparsity, and for the A/B below).
+
+> **This is also a measurement instrument.** The same `dense_detect` primitive feeds
+> `tools/ab_density.py`, which A/B-tests whether window-dense boxes improve the **dataset** layers
+> (03d/03f), not just the picture — see docs/02 Issue 1 and docs/03f Issue 1. The visualizer was the
+> tool that made that question answerable: render dense vs sparse and *look*.
+
 ---
 
 ## 🎬 Part 2 — The Renderer (Offline `cv2` Burn-In)
@@ -681,7 +731,9 @@ selects the *clip*; the rest select the *overlays*:
 
 | Flag | Effect | Default |
 |---|---|---|
-| *(no video flag)* | **opens the findings-aware Tkinter table window (D6)** — sort/filter/click, double-click or Render to render | this is the normal path |
+| *(no video flag)* | **opens the findings-aware terminal selector (D6)** — numbered table, type a # / `/filter` / `q` | this is the normal path |
+| `--verify` | **self-test**: discover → hydrate → render a 2 s clip → assert overlays drew; print PASS/FAIL | — |
+| `--gui` | use the Tkinter window instead of the terminal (may be blank on macOS system Tk 8.5) | off |
 | `--video-id <uuid>` | skip the picker; render this clip directly (scripting) | — |
 | `--video <path>` | select by file instead of id (its `<uuid>` stem is the `video_id`) | — |
 | `--list` (+ `--json` / `--verbose`) | print the **catalog** table and exit (no picker, no render) | — |
@@ -693,6 +745,7 @@ selects the *clip*; the rest select the *overlays*:
 | `--scale 0.5` | downscale output (smaller, faster, easy to share) | `1.0` (native) |
 | `--with-audio` / `--no-audio` | mux original audio into the output (D5) | on if `has_audio` |
 | `--clip-range 40:60` | render only `t ∈ [40s, 60s]` (fast iteration on one moment) | full clip |
+| `--dense-boxes` / `--no-dense-boxes` | re-detect bystanders densely in the reaction windows so boxes follow the subject (§ 1.8) | **on** |
 | `--force` | re-render even if the output exists | off (skip existing) |
 
 Note there is **no `--manifest` / `--results-dir` flag** — D4 forbids it; the operator names a video
@@ -721,7 +774,8 @@ src/layer_05_visualizer/
 ├── __init__.py
 ├── catalog.py            # D4/D6 discovery + findings: build_catalog(), LAYER_FINDING_PREDICATES,
 │                         #   list_catalog(), resolve_video()
-├── picker.py             # D6 Tkinter table window: build_picker_rows/filter_rows/sort_rows + pick_video()
+├── picker.py             # D6 selectors: pick_video_terminal() [default] + pick_video() [Tk, --gui];
+│                         #   plus pure build_picker_rows/filter_rows/sort_rows
 ├── hydrate.py            # build_overlay_bundle(), build_bundle_for_video(), write_bundles_for_catalog()
 ├── bundle_schema.py      # schema constants + validate_bundle() guard (no silent shape drift)
 ├── colors.py             # stable person_id -> color palette hashing; hex -> BGR
@@ -738,38 +792,58 @@ src/layer_05_visualizer/
     └── panels.py         # readout panel, legend, fonts/scale helpers
 
 tools/
-└── run_visualizer.py     # CLI: no video flag -> Tkinter picker; else --video-id/--video/--list/--all
+└── run_visualizer.py     # CLI: no video flag -> terminal selector; --gui/--verify/--video-id/--list/--all
 ```
 
 This mirrors the existing per-node layout (`src/layer_04_dehydrated_export/` has `aggregator.py`,
 `per_layer.py`, `rehydrate_dataset.py`, `huggingface_upload.py`). Tests go in
-`tests/test_layer_05.py` (Catalog discovery + findings predicates + picker logic/GUI + Hydrator +
-bundle + single-frame draw asserts). **Dependencies**: `cv2` and `ffmpeg` are already in the project;
-the D6 picker adds **no pip dependency** — `tkinter`/`ttk` are in the Python **stdlib**. The one
-caveat is that the interpreter must have been **built with Tcl/Tk**: python.org macOS builds include
-it; some Homebrew setups need `brew install python-tk`. If Tk is unavailable (or no display, e.g.
-CI), `pick_video` raises `TclError` and the CLI **falls back to `--list`** with a message telling the
-operator to pass `--video-id` (Verification P10).
+`tests/test_layer_05.py` (Catalog discovery + findings predicates + picker logic + Hydrator + bundle +
+single-frame draw asserts) plus a `--verify` end-to-end smoke. **Dependencies**: `cv2` and `ffmpeg`
+are already in the project; the **default terminal selector needs nothing** (pure stdin/stdout). The
+optional `--gui` Tkinter path uses stdlib `tkinter`/`ttk` and is only useful on an interpreter built
+with a **modern** Tcl/Tk (the macOS system Tk 8.5 renders the table blank — see the gotcha above); the
+CLI auto-falls back from `--gui` to the terminal selector if Tk errors.
+
+> **⚠️ macOS system-Tk gotcha (why the terminal selector is the default).** The macOS *system* Tk is
+> **8.5.9**, whose default `ttk` theme is `aqua`. Its `ttk.Treeview` **does not render rows** — the
+> window opens with a title bar and scrollbar but a **blank table**. Switching to the `clam` theme
+> (the usual remedy) was **not enough on 8.5.9** — the table stayed blank on this host. Rather than
+> depend on a working GUI Tk, **D6 makes the pure-terminal selector the default**; the Tkinter window
+> is opt-in via `--gui` and only usable on a newer Tk (e.g. a python.org 3.11+ build, or
+> `brew install python-tk`). If you do touch the Tk path: use the `clam` theme, **BMP-safe glyphs
+> only** (no astral emoji like `🔊` U+1F50A on Tk 8.5; `★` U+2605 is BMP-OK), and **ASCII column
+> identifiers**. Bottom line: **don't gate the visualizer on Tk** — the terminal selector and
+> `--verify` always work.
 
 ---
 
 ## 🚀 Part 4 — Running It
 
-You **pick a video** by clicking it in the findings-aware Tkinter window (D6) — or name one directly —
-and the tool discovers its manifest + every layer's latest result, hydrates, and renders. There is
-**no manifest path to type**, and normally **no `video_id` to remember** either.
+You **pick a video** from the findings-aware terminal selector (D6) — or name one directly — and the
+tool discovers its manifest + every layer's latest result, hydrates, and renders. There is **no
+manifest path to type**, and normally **no `video_id` to remember** either.
 
 ```bash
-# 1. PICK + RENDER (the normal path, D6): no video flag -> the Tkinter table window opens.
+# 0. VERIFY the visualizer works on any video (self-test: discover -> hydrate -> render 2s -> check).
+#    Auto-picks the best-findings clip that has a local video, or pass --video-id <uuid>.
+./venv/bin/python tools/run_visualizer.py --verify --out-dir e2e_reports/viz
+#  ... [5/5] Output OK: 61 frames, 960x540, overlay pixels changed vs source: 411852
+#  PASS ✓  The visualizer works. Open: e2e_reports/viz/_verify_43bd06f3.mp4
+
+# 1. PICK + RENDER (the normal path, D6): no video flag -> findings-sorted numbered table in the terminal.
 #    Scans e2e_reports/ + the configured Ego4D video dirs by default; add --scan-root to widen.
 ./venv/bin/python tools/run_visualizer.py --out-dir e2e_reports/viz --layers all
-#  A window opens: a sortable table (★ | task | layers | audio | video | id) + filter box +
-#  summary panel. Type in the filter, click headers to sort, click a row to read its summary,
-#  then DOUBLE-CLICK it (or press "Render selected"). Cancel/close = no render.
-#  -> e2e_reports/viz/630bd4ba-..._L-all.mp4   (original audio muxed in per D5)
+#    #   ★  task                  layers w/ findings   aud  video_id
+#    0   3  Cooking               03a 03c 03e          yes  143f43b6
+#    1   3  Cleaning / laundry    03a 03b 03c          yes  43bd06f3 ...
+#  Type a number to render · /03e to filter · /clear · q to quit.
+#  -> e2e_reports/viz/143f43b6-..._L-all.mp4   (original audio muxed in per D5)
 
-# 1b. Non-interactive catalog dump (scripting/CI/headless; same data, no window):
+# 1b. Non-interactive catalog dump (scripting/CI; same data, no prompt):
 ./venv/bin/python tools/run_visualizer.py --list            # add --json / --verbose
+
+# 1c. (optional) Tkinter window instead of the terminal — may be blank on macOS system Tk 8.5:
+./venv/bin/python tools/run_visualizer.py --gui --out-dir e2e_reports/viz
 
 # 2. DIRECT (skip the picker when you already know the id, e.g. in a script):
 ./venv/bin/python tools/run_visualizer.py \
@@ -916,16 +990,33 @@ issues:_
 5. **Audio in the output? → D5 (keep the original audio + optional loudness bar).** Chosen over a
    silent picture-only render; clips Ego4D ships without audio render silent with a clear "no audio"
    badge.
-6. **How do you choose a clip without memorizing a UUID? → D6 (findings-aware clickable Tkinter table
-   window).** Running with no `--video-id` opens a stdlib `tkinter`/`ttk.Treeview` window: a sortable,
-   filterable table of clips (columns ★ · task · layers · audio · video · id) with a summary panel and
-   a Render button; click a header to sort, type to filter, click a row to read its summary, double-
-   click (or press Render) to render. Chosen over a literal single-line dropdown (can't show columns +
-   a summary at once) and a terminal filter-picker (the operator preferred *clicking*); no pip
-   dependency. Compatible with D1 because it is a *selection* helper, not a playback UI.
+6. **How do you choose a clip without memorizing a UUID? → D6 (findings-aware terminal selector;
+   Tkinter window opt-in).** Running with no video flag prints a findings-sorted numbered table
+   (★ · task · layers-with-findings · audio · `video_id`); type a number to render, `/text` to filter,
+   `q` to quit — pure stdin/stdout, no dependency, works over SSH. A Tkinter table window (`--gui`) was
+   built first but **the macOS system Tk 8.5.9 renders its `Treeview` blank even with the `clam` theme**
+   (confirmed on this host), so it cannot be the default; the terminal selector is. Compatible with D1
+   (a *selection* helper, not a playback UI). The `--verify` self-test makes "is it working?"
+   answerable in one command.
 
-_Once the tool is implemented and verified, any post-build fixes will be added here as numbered
-Problem/Solution entries per the Bug Documentation Style Guide._
+**Post-build refinements** (Problem/Solution per the Bug Documentation Style Guide):
+
+1. **Sparse Bystander Boxes Don't Follow the Subject — Render-Time Dense Re-Detection (Resolved - June 29)**:
+   - **Problem**: D2 (hold-last, then hide) faithfully reflects Node-02's ~1-detection-per-3–12 s
+     boxes, but the consequence on screen is that a moving bystander's box freezes between detections
+     and floats off the person; on the 2 s `--verify` clip (a single detection in range) the box was
+     fully static. The boxes — the anchor every other overlay hangs off — were the hardest thing to
+     read, defeating the comprehension goal.
+   - **Solution**: Added `src/shared/dense_detect.py`: for each task reaction window (padded ±4 s) it
+     runs plain YOLO + ByteTrack (~10 fps, no VLM) on the real frames and IoU-matches each dense track
+     back to the manifest `person_id` (voting at that person's sparse-detection timestamps), splicing
+     the dense samples into the track *inside* the window only. `build_overlay_bundle(dense_boxes=True)`
+     densifies the entry before parsing, so the bundle arrives with per-frame boxes and D2's hold-last
+     rarely engages; wired as `--dense-boxes` (default on) / `--no-dense-boxes` in `tools/run_visualizer.py`
+     (§ 1.8). Non-bystander tracks (wearer chin, passers-by) match nothing and are dropped, inheriting
+     02's rejections. Spot-checked on `044a7a23`: the dense box tracks a moving bystander across the
+     reaction window where the sparse box sat frozen. The same primitive doubles as the measurement
+     engine for the dataset-side A/B (docs/02 Issue 1, docs/03f Issue 1).
 
 ## ⚠️ Unresolved Issues & Suggestions
 

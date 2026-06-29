@@ -20,29 +20,50 @@ class CatalogEntry:
     num_layers_with_findings: int
     summary_text: str
     sources: dict
+    has_audio: Optional[bool] = None   # True/False from 03c prosody, None = unknown (03c absent)
 
-# Finding Predicates
+# Finding Predicates.
+#
+# Every layer-03 result nests its data under `tasks_analyzed[]`; per-bystander
+# verdicts live in `tasks_analyzed[].per_person[]` (03c is the exception — its
+# signal is on the task itself under `prosody_metrics`). A "finding" means the
+# layer actually detected a social signal, as opposed to running but reporting
+# nothing. The paths below mirror the schemas the renderer draws, so the
+# picker's star count can never disagree with the burned overlays.
+def _tasks(res: dict) -> list:
+    return res.get("tasks_analyzed", []) or []
+
+def _all_people(res: dict):
+    for t in _tasks(res):
+        for p in t.get("per_person", []) or []:
+            yield p
+
 def _finding_03a(res: dict) -> bool:
-    return res.get("aggregate", {}).get("any_person_engaged", False)
+    return bool(res.get("aggregate", {}).get("any_person_engaged", False))
 
 def _finding_03b(res: dict) -> bool:
-    return any(s.get("classified_direction", "neutral") != "neutral" for s in res.get("emotion_slices", []))
+    for p in _all_people(res):
+        for s in p.get("temporal_slices", []) or []:
+            if s.get("classified_direction", "neutral") != "neutral":
+                return True
+    return False
 
 def _finding_03c(res: dict) -> bool:
-    for t in res.get("tasks", []):
-        if t.get("audio_present", False):
-            if t.get("classified_acoustic_tone", "Neutral") != "Neutral" or t.get("dominant_emotion", "neutral") != "neutral":
+    for t in _tasks(res):
+        pm = t.get("prosody_metrics", {}) or {}
+        if pm.get("audio_present", False):
+            if t.get("classified_acoustic_tone", "Neutral") != "Neutral" or pm.get("dominant_emotion", "neutral") != "neutral":
                 return True
     return False
 
 def _finding_03d(res: dict) -> bool:
-    return any(p.get("classified_action", "Neutral") != "Neutral" for p in res.get("people", []))
+    return any(p.get("classified_action", "Neutral") != "Neutral" for p in _all_people(res))
 
 def _finding_03e(res: dict) -> bool:
-    return any(p.get("gesture_detected", "none") != "none" for p in res.get("people", []))
+    return any(p.get("gesture_detected", "none") != "none" for p in _all_people(res))
 
 def _finding_03f(res: dict) -> bool:
-    return any(p.get("motor_resonance_detected", False) or p.get("mirroring_detected", False) for p in res.get("people", []))
+    return any(p.get("motor_resonance_detected", False) or p.get("mirroring_detected", False) for p in _all_people(res))
 
 LAYER_FINDING_PREDICATES: dict[str, Callable[[dict], bool]] = {
     "03a": _finding_03a,
@@ -57,20 +78,39 @@ def _parse_tasks(manifest_entry: dict) -> list[dict]:
     # Try different manifest formats for task windows
     return manifest_entry.get("identified_tasks", [])
 
-def _build_summary_text(video_id: str, manifest_entry: dict, duration_sec: float, has_audio: bool, findings: dict[str, str], layers_found: list[str]) -> str:
+def _audio_from_03c(results: dict) -> Optional[bool]:
+    # The manifest has no audio flag; the only honest source is 03c's prosody.
+    # None = 03c didn't run, so we genuinely don't know.
+    res = results.get("03c")
+    if not res:
+        return None
+    for t in res.get("tasks_analyzed", []) or []:
+        if (t.get("prosody_metrics", {}) or {}).get("audio_present", False):
+            return True
+    return False
+
+def _coerce_float(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+def _build_summary_text(video_id: str, manifest_entry: dict, duration_sec: float, has_audio: Optional[bool], findings: dict[str, str], layers_found: list[str]) -> str:
     lines = []
-    audio_str = "yes" if has_audio else "no"
+    audio_str = {True: "yes", False: "no", None: "unknown"}[has_audio]
     dataset = manifest_entry.get("source_dataset", "ego4d")
     lines.append(f"{video_id}  {dataset} · {duration_sec:.1f}s · audio:{audio_str}")
-    
+
     tasks = _parse_tasks(manifest_entry)
-    for i, t in enumerate(tasks):
-        climax = t.get("climax_sec", 0)
-        label = t.get("task_label", "unknown")
-        windows = t.get("reaction_windows_sec", [])
-        window_str = f" reaction {windows}" if windows else ""
+    for t in tasks:
+        # The manifest nests timing under task_temporal_metadata.
+        tm = t.get("task_temporal_metadata", {}) or {}
+        climax = _coerce_float(tm.get("task_climax_sec", 0))
+        window = tm.get("task_reaction_window_sec")
+        label = " ".join(str(t.get("task_label", "unknown")).split())  # collapse newlines
+        window_str = f" · reaction {window}" if window else ""
         lines.append(f"TASK {label}   climax {climax:.1f}s{window_str}")
-    
+
     if not tasks:
         lines.append("TASK no tasks found")
 
@@ -190,11 +230,11 @@ def build_catalog(scan_roots: list[Union[str, Path]]) -> dict[str, CatalogEntry]
             if cand.exists():
                 vpath = cand
                 
-        dur = manifest_entry.get("duration_sec", 0.0)
-        has_audio = manifest_entry.get("has_audio", True) # Optimistic fallback
-        
+        dur = float(manifest_entry.get("duration_sec", 0.0) or 0.0)
+        has_audio = _audio_from_03c(results)   # True / False / None(unknown)
+
         summary = _build_summary_text(vid, manifest_entry, dur, has_audio, findings, list(results.keys()))
-        
+
         catalog[vid] = CatalogEntry(
             video_id=vid,
             manifest_entry=manifest_entry,
@@ -203,7 +243,8 @@ def build_catalog(scan_roots: list[Union[str, Path]]) -> dict[str, CatalogEntry]
             findings=findings,
             num_layers_with_findings=num_findings,
             summary_text=summary,
-            sources=sources
+            sources=sources,
+            has_audio=has_audio,
         )
         
     return catalog
@@ -224,18 +265,17 @@ def list_catalog(catalog: dict[str, CatalogEntry], *, as_json=False, verbose=Fal
     for c in sorted_vids:
         star = str(c.num_layers_with_findings)
         tasks = _parse_tasks(c.manifest_entry)
-        task_label = tasks[0].get("task_label", "unknown") if tasks else "none"
+        task_label = " ".join(str(tasks[0].get("task_label", "unknown")).split()) if tasks else "none"
         if len(task_label) > 25:
             task_label = task_label[:22] + "..."
-            
-        finding_layers = [l for l, st in c.findings.items() if st == "finding"]
-        layers_str = " ".join(finding_layers) if finding_layers else "—"
+
+        finding_layers = sorted(l for l, st in c.findings.items() if st == "finding")
+        layers_str = " ".join(finding_layers) if finding_layers else "-"
         if len(layers_str) > 15:
             layers_str = layers_str[:12] + "..."
-            
-        has_audio = c.manifest_entry.get("has_audio", True)
-        audio_str = "🔊" if has_audio else "··"
-        vid_str = "✓" if c.video_path else "x"
+
+        audio_str = {True: "yes", False: "no", None: "?"}[c.has_audio]
+        vid_str = "y" if c.video_path else "n"
         short_id = c.video_id[:8]
         
         row = f"{star:<2} | {task_label:<25} | {layers_str:<15} | {audio_str:<5} | {vid_str:<5} | {short_id:<8}"
