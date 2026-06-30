@@ -34,6 +34,17 @@ class ProxemicKinematicsPipeline:
     DEPTH_WEIGHT = 0.6                    # weight of depth heuristic in the fused proxemic vector
     MICROMOVEMENT_THRESHOLD = 0.05        # |vector| below this is treated as no movement (jitter rejection)
     APPROACH_THRESHOLD = 0.3              # vector > this -> Approach_Intervention; < -this -> Avoidance
+    # Proxemic trajectory (docs/03d Issue 1 -> Option A): with window-dense boxes
+    # (docs/02 Issue 1) the bbox-scale signal is a SERIES across the window, not
+    # just two endpoints, so we additionally emit its shape + a downsampled
+    # scale-vs-first series. Strictly additive — the 2-endpoint delta and
+    # classified_action are unchanged.
+    TRAJECTORY_FLAT_CV = 0.08             # coeff-of-variation below which the scale series is "flat"
+    TRAJECTORY_MAX_SAMPLES = 8            # cap on the downsampled series length (keeps the JSON lean)
+    # Pinned vocabulary for `proxemic_trajectory_shape` — the single source of
+    # truth the Layer-04 registry (any_eq:* columns) + test_layer_04 enum-sync
+    # check against. Keep in sync with `_compute_proxemic_trajectory`.
+    TRAJECTORY_SHAPES = ("insufficient", "flat", "monotonic_approach", "monotonic_retreat", "oscillatory")
     # Issue 1 (June 10): detections on each side of the climax-nearest detection
     # used when the strict reaction window holds <2 detections. Node-02 emits
     # bystander detections at a median ~6s cadence vs 2s reaction windows, so a
@@ -338,6 +349,11 @@ class ProxemicKinematicsPipeline:
                 if bbox_delta is None:
                     continue
 
+                # Additive proxemic trajectory (docs/03d Issue 1 -> Option A):
+                # the shape of the scale series across the (now-dense) window.
+                traj = self._compute_proxemic_trajectory(
+                    timestamps_sec, bounding_boxes, win_start, win_end)
+
                 # Issue 1 Option C (June 13): identity-continuity provenance.
                 # min_consecutive_iou is recorded on every vector below; an
                 # actual identity break is REJECTED after the chaos gate (not
@@ -363,7 +379,8 @@ class ProxemicKinematicsPipeline:
                         "optical_flow_noise": round(chaos_score, 2),
                         "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
                         "window_source": window_source,
-                        "min_consecutive_iou": round(min_iou, 3)
+                        "min_consecutive_iou": round(min_iou, 3),
+                        **traj
                     })
                     continue
 
@@ -383,7 +400,8 @@ class ProxemicKinematicsPipeline:
                         "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
                         "window_source": window_source,
                         "identity_discontinuity": True,
-                        "min_consecutive_iou": round(min_iou, 3)
+                        "min_consecutive_iou": round(min_iou, 3),
+                        **traj
                     })
                     continue
 
@@ -415,7 +433,8 @@ class ProxemicKinematicsPipeline:
                     "optical_flow_noise": round(chaos_score, 2),
                     "measurement_window_sec": [round(win_start, 2), round(win_end, 2)],
                     "window_source": window_source,
-                    "min_consecutive_iou": round(min_iou, 3)
+                    "min_consecutive_iou": round(min_iou, 3),
+                    **traj
                 })
 
             if per_person:
@@ -552,6 +571,47 @@ class ProxemicKinematicsPipeline:
             
         delta_pct = ((last_area - first_area) / first_area) * 100.0
         return delta_pct
+
+    def _compute_proxemic_trajectory(self, timestamps, bboxes, start_sec, end_sec):
+        """Additive (docs/03d Issue 1 -> Option A). With window-dense boxes the
+        bystander's bbox-scale is a series across the window, so characterize its
+        SHAPE and return a downsampled scale-vs-first series, alongside how many
+        dense samples backed it. Leaves the existing 2-endpoint delta untouched;
+        degrades to "insufficient" when < 3 samples (the sparse case)."""
+        areas = []
+        for t, bbox in zip(timestamps, bboxes):
+            if start_sec <= t <= end_sec:
+                x1, y1, x2, y2 = bbox
+                a = (x2 - x1) * (y2 - y1)
+                if a > 0:
+                    areas.append((t, a))
+        areas.sort(key=lambda p: p[0])
+        n = len(areas)
+        out = {"proxemic_trajectory_shape": "insufficient",
+               "proxemic_trajectory_pct": [],
+               "proxemic_trajectory_n": n}
+        if n < 3:
+            return out
+        a0 = areas[0][1]
+        ratios = [a / a0 for _, a in areas]
+        mean_r = sum(ratios) / n
+        var = sum((r - mean_r) ** 2 for r in ratios) / n
+        cv = (var ** 0.5) / mean_r if mean_r else 0.0
+        net = ratios[-1] - ratios[0]
+        reversals = sum(1 for i in range(1, n - 1)
+                        if (ratios[i + 1] - ratios[i]) * (ratios[i] - ratios[i - 1]) < 0)
+        if cv < self.TRAJECTORY_FLAT_CV:
+            shape = "flat"
+        elif reversals >= 2:
+            shape = "oscillatory"
+        elif net > 0:
+            shape = "monotonic_approach"
+        else:
+            shape = "monotonic_retreat"
+        step = max(1, n // self.TRAJECTORY_MAX_SAMPLES)
+        series = [round((ratios[i] - 1.0) * 100.0, 1) for i in range(0, n, step)]
+        out.update(proxemic_trajectory_shape=shape, proxemic_trajectory_pct=series)
+        return out
 
     def _extract_ego_motion_noise(self, video_path, start_sec, end_sec):
         cap = cv2.VideoCapture(str(video_path))

@@ -263,7 +263,7 @@ configs:
 
 One layer of the **Social-Affective Filter (SAF)** — dehydrated social-signal metadata extracted from egocentric (first-person) video so robots can learn to read human reactions. **No raw pixels and no audio.** Each row is one source video, keyed by `video_id`; rehydrate against your own legally-obtained Ego4D copies (below).
 
-- **Rows:** {len(df)} — videos in the 50-clip evaluation slice for which **this layer produced a measured signal** (videos it could not measure are excluded from this per-layer dataset; the layers still join 1:1 on `video_id`).
+- **Rows:** {len(df)} — videos in the evaluation slice for which **this layer produced a measured signal** (videos it could not measure are excluded from this per-layer dataset; the layers still join 1:1 on `video_id`).
 - **Signal:** {spec['signal']}
 - **Method:** {spec['method']}
 
