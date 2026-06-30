@@ -495,6 +495,9 @@ class TestRegistryEnumSync(unittest.TestCase):
         "03d_proxemic_kinematics.per_person.classified_action": {
             "Approach_Intervention", "Avoidance", "Neutral",
         },
+        "03d_proxemic_kinematics.per_person.proxemic_trajectory_shape": {
+            "insufficient", "flat", "monotonic_approach", "monotonic_retreat", "oscillatory",
+        },
         "03e_affirmation_gesture.per_person.gesture_detected": {
             "affirming_nod", "negating_shake", "ambiguous_wobble", "none",
         },

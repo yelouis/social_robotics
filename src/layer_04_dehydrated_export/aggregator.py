@@ -41,6 +41,13 @@ LAYER_SUMMARY_REGISTRY = {
         # test_layer_04 enum-sync test enforces this against the layer vocab.
         ("per_person.classified_action", "any_eq:Approach_Intervention", "any_approach_detected"),
         ("per_person.classified_action", "any_eq:Avoidance", "any_avoidance_detected"),
+        # Window-dense trajectory SHAPE (docs/03d Issue 1 Option A). Literals MUST
+        # match 03d's TRAJECTORY_SHAPES vocabulary (enforced by test_layer_04
+        # enum-sync). Surfaces the dense-box-only signal as queryable columns
+        # instead of leaving it buried in the *_raw blob.
+        ("per_person.proxemic_trajectory_shape", "any_eq:monotonic_approach", "any_approach_trajectory"),
+        ("per_person.proxemic_trajectory_shape", "any_eq:monotonic_retreat", "any_retreat_trajectory"),
+        ("per_person.proxemic_trajectory_shape", "any_eq:oscillatory", "any_oscillatory_trajectory"),
     ],
     "03e_affirmation_gesture": [
         ("per_person.confidence", "max", "max_gesture_confidence"),
