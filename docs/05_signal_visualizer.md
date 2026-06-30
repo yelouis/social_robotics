@@ -505,7 +505,7 @@ boxes (useful for *seeing* the sparsity, and for the A/B below).
 
 > **This is also a measurement instrument.** The same `dense_detect` primitive feeds
 > `tools/ab_density.py`, which A/B-tests whether window-dense boxes improve the **dataset** layers
-> (03d/03f), not just the picture — see docs/02 Issue 1 and docs/03f Issue 1. The visualizer was the
+> (03d/03f), not just the picture — see docs/02 Issue 1 and docs/03f Resolved #12. The visualizer was the
 > tool that made that question answerable: render dense vs sparse and *look*.
 
 ---
@@ -1016,7 +1016,7 @@ issues:_
      (§ 1.8). Non-bystander tracks (wearer chin, passers-by) match nothing and are dropped, inheriting
      02's rejections. Spot-checked on `044a7a23`: the dense box tracks a moving bystander across the
      reaction window where the sparse box sat frozen. The same primitive doubles as the measurement
-     engine for the dataset-side A/B (docs/02 Issue 1, docs/03f Issue 1).
+     engine for the dataset-side A/B (docs/02 Issue 1, docs/03f Resolved #12).
 
 ## ⚠️ Unresolved Issues & Suggestions
 
