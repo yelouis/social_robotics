@@ -14,30 +14,13 @@ import config
 
 
 class FilteringPipeline:
-    def __init__(self, input_manifest_path, output_manifest_path, force=False, skip_vlm=False,
-                 run_synthetic_qa=None):
+    def __init__(self, input_manifest_path, output_manifest_path, force=False, skip_vlm=False):
         self.input_manifest_path = Path(input_manifest_path)
         self.output_manifest_path = Path(output_manifest_path)
         self.error_log_path = self.output_manifest_path.parent / "02_filter_errors.json"
         self.force = force
         self.skip_vlm = skip_vlm
 
-        # Layer 1a synthetic QA toggle. The synthetic true-positive fixtures are
-        # generated ONCE in isolation (`python -m dataset_acquisition.synthetic.
-        # generator`) and persisted on the Extreme SSD; the E2E run *references*
-        # those saved clips via the registry rather than regenerating per run
-        # (docs/01a §4). This flag controls whether the saved fixtures are
-        # exercised through the filter as a known-positive QA check.
-        # DEFAULT OFF (June 12 decision): Layer 1a is parked — no Wan2.1 render
-        # has ever completed on this host (docs/01a Unresolved Issue 1), so the
-        # synthetic-QA path has no validated fixtures and is not used by default.
-        # Opt back in with SAF_RUN_SYNTHETIC_QA=1 (or run_synthetic_qa=True) once
-        # that issue is resolved.
-        self.run_synthetic_qa = (
-            run_synthetic_qa if run_synthetic_qa is not None
-            else os.getenv("SAF_RUN_SYNTHETIC_QA", "0").lower() in ("1", "true", "yes")
-        )
-        
         # Shared components. Default to YOLO-pose + VLM-gated verification
         # (Resolved Issue #22) so the filtering stage rejects the wearer's own
         # limbs / equipment that the bbox-only yolov8n previously kept.
@@ -92,7 +75,7 @@ class FilteringPipeline:
     # annotation parsers are written; in the interim we skip them at intake
     # so they don't burn YOLO time and then silently disappear at the
     # metadata stage with no entry in filtered_manifest.json.
-    _SUPPORTED_DATASETS = ("ego4d", "synthetic_validation")
+    _SUPPORTED_DATASETS = ("ego4d",)
 
     # Ego4D `scenarios` strings that are overwhelmingly solo activities.
     # Resolved Issue #12: skipping these at intake removes the easy negatives
@@ -125,13 +108,6 @@ class FilteringPipeline:
 
     def _is_supported_dataset(self, entry, video_id) -> bool:
         dataset = (entry.get('dataset') or '').strip().lower()
-        # Layer 1a QA toggle: when synthetic QA is disabled, the pre-generated
-        # synthetic_validation fixtures are excluded from the run so it reflects
-        # the raw corpus only (docs/01a §4). Generation is unaffected — it is a
-        # separate one-time isolated step that writes the clips to the SSD.
-        if dataset == "synthetic_validation" and not self.run_synthetic_qa:
-            print(f"Skipping {video_id}: Layer 1a synthetic QA disabled (SAF_RUN_SYNTHETIC_QA=0).")
-            return False
         if dataset in self._SUPPORTED_DATASETS:
             return True
         print(
@@ -219,9 +195,7 @@ class FilteringPipeline:
             if not self._is_supported_dataset(entry, video_id):
                 continue
 
-            if entry.get("synthetic") is True:
-                pass
-            elif self._is_likely_solo_by_metadata(video_id):
+            if self._is_likely_solo_by_metadata(video_id):
                 print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
                 continue
 
@@ -271,9 +245,7 @@ class FilteringPipeline:
             if not self._is_supported_dataset(entry, video_id):
                 continue
 
-            if entry.get("synthetic") is True:
-                pass
-            elif self._is_likely_solo_by_metadata(video_id):
+            if self._is_likely_solo_by_metadata(video_id):
                 print(f"Skipping {video_id}: Ego4D scenarios flagged as solo (Resolved Issue #12).")
                 continue
 
@@ -351,12 +323,6 @@ class FilteringPipeline:
             "bystander_detections": entry['bystander_detections'],
             "hand_detections": entry.get('hand_detections', [])
         }
-        if entry.get("synthetic") is True:
-            res.update({
-                "synthetic": True,
-                "scenario_tag": entry.get("scenario_tag"),
-                "expected_pass": entry.get("expected_pass", True)
-            })
         return res
 
     def log_error(self, video_id, error):
@@ -411,20 +377,6 @@ class FilteringPipeline:
 
     def contextual_task_labeling(self, video_id, duration_sec):
         """ Use Ego4D metadata to identify tasks and map velocities """
-        # Check if video is synthetic
-        entry = next((e for e in self.initial_registry if e.get("id") == video_id or e.get("video_id") == video_id), None)
-        if entry and entry.get("synthetic") is True:
-            scenario_tag = entry.get("scenario_tag", "general")
-            return [{
-                "task_id": "t_01",
-                "task_label": f"Synthetic validation task: {scenario_tag}",
-                "task_confidence": 1.0,
-                "task_velocity": "medium",
-                "task_start_sec": 0.0,
-                "task_end_sec": round(duration_sec, 2),
-                "task_temporal_metadata": {}
-            }]
-
         if video_id not in self.metadata:
             # Try removing extension if present in video_id
             clean_id = video_id.split('.')[0]

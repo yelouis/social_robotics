@@ -20,13 +20,9 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **Depth Anything V1-Large** (`vitl`, `LiheYoung/depth-anything-large-hf`) | Proxemic Kinematics (Relative Depth Delta Mapping) — `medium`/`large`-tier (production 64 GB host) default | ~1.3 GB | "Extreme SSD" | Apache-2.0 |
 | **Depth Anything V2-Small** (`vits`) | Proxemic Kinematics — `small`-tier default (24 GB fallback host) | ~100 MB | Internal SSD | Apache-2.0 |
 | **Metric3D v2** | Absolute Metric Depth (Alternative to Depth Anything) | ~1.5 GB | "Extreme SSD" | Apache-2.0 |
-| **Wan2.1-T2V-14B** (`Wan-AI/Wan2.1-T2V-14B-Diffusers`) | Layer 1a synthetic true-positive video generation (filter-QA fixtures, **not** training data) | ~28 GB DiT (bf16) + ~11 GB UMT5-XXL text enc | "Extreme SSD" (`HF_HOME`) | Apache-2.0 |
 
 > [!NOTE]
-> **All models in this table are license-clean** (MIT, Apache-2.0, or AGPL-3.0). No CC-BY-NC or non-commercial restrictions remain. The exported `social_metadata.parquet` can be distributed freely. Wan2.1's Apache-2.0 license is why it is selected over the comparable-quality HunyuanVideo (restrictive Tencent Community License) and CogVideoX-5B (non-OSI custom license) for Layer 1a — see `docs/01a_synthetic_positive_generation.md` § 3.
-
-> [!NOTE]
-> **Wan2.1-T2V is a transient pre-step, not part of the steady-state resident set.** Layer 1a (`docs/01a_synthetic_positive_generation.md`) loads the generator **once in a standalone pre-step**, renders 1-3 fixture clips via the `diffusers` `WanPipeline` on MPS, and releases it *before* any filtering/Layer-03 models load — subsequent E2E runs reference the saved clips on the SSD and never load the generator. Its ~30-45 GB peak never co-resides with the rest of the pipeline, and its `models_config.py` entry contributes `None` to the startup-banner resident-set sum. Tier-per-host: `medium`/`large` (Mac Studio, 64 GB) use `Wan2.1-T2V-14B`; `small` (24 GB Mac mini fallback) uses `Wan2.1-T2V-1.3B` (~3 GB DiT). **Wan2.2-T2V-A14B** is the documented quality upgrade behind a code-review checkpoint. Weights download once into `HF_HOME` on the Extreme SSD; no API key.
+> **All models in this table are license-clean** (MIT, Apache-2.0, or AGPL-3.0). No CC-BY-NC or non-commercial restrictions remain. The exported `social_metadata.parquet` can be distributed freely.
 
 > [!IMPORTANT]
 > **Tier-per-host selection**: The specific model id loaded for each row is resolved at runtime by `src/models_config.py`. The active tier auto-detects from `psutil.virtual_memory().total` (≥48 GB → `medium`; otherwise → `small`) and can be pinned via `SR_MODEL_TIER=small|medium|large`. The rows above describe the **`medium`-tier defaults** that the Mac Studio (M4 Max, 64 GB) actually loads in production; the `small` tier substitutes `gemma4:e4b`, `yolov8n-pose`, Depth Anything V2-Small, SAM ViT-Base, `qwen2.5vl:3b`, and `emotion2vec_plus_base` for the 24 GB Mac mini fallback. The startup banner prints the active tier + estimated resident set on the first import of `models_config`.
@@ -49,13 +45,9 @@ This document outlines the machine learning dependencies, models, and libraries 
 | **HSEmotion (ONNX preferred)** | SOTA Emotion inference on bystander faces (Layer 03b) | ~50-100 MB (incl. `enet_b2_8` weights) | Python virtual environment | **`pip install hsemotion-onnx onnxruntime`** is the production backend (03b Resolved Issue #4): the torch `hsemotion` build fails to load under torch≥2.6 (`weights_only`) + CUDA-pickled checkpoint + timm mismatch. 03b prefers ONNX, falls back to torch, then to a loud mock. Replaced Py-Feat (CPU-only on macOS). |
 | **MediaPipe** | Egocentric Hand Detection tracker | ~100 MB | Python virtual environment | |
 | **Pandas** | Dehydrated CSV/Dataframe handling | ~100 MB | Python virtual environment | |
-| **transformers** | Loading Hugging Face models like Depth Anything V2 and the Wan2.1 UMT5-XXL text encoder | ~150 MB | Python virtual environment (`venv` / `gen_env`) | |
-| **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment (`venv` / `gen_env`) | |
-| **diffusers** | `WanPipeline` for Layer 1a local text-to-video generation (Wan2.1) | ~50 MB | `gen_env` virtual environment | `pip install "diffusers>=0.33"`. New dependency introduced by Layer 1a. |
-| **imageio-ffmpeg** | Encodes generated frames to MP4 (`diffusers.utils.export_to_video`) | ~30 MB | `gen_env` virtual environment | Bundles an ffmpeg build; the system `ffmpeg` (§ 3) also satisfies this. |
-| **ftfy** | Prompt text normalization for the Wan2.1 UMT5-XXL encoder | ~1 MB | `gen_env` virtual environment | Recommended by the Wan2.1 model card. |
-| **accelerate** | Device placement + optional `enable_model_cpu_offload()` for the Wan2.1 pipeline | ~5 MB | `gen_env` virtual environment | Required only if CPU-offload is used as an OOM fallback (`docs/01a_synthetic_positive_generation.md` § 9.4). |
-| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, HSEmotion-PyTorch, etc. | ~2-3 GB | Python virtual environment (`venv` / `gen_env`) | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
+| **transformers** | Loading Hugging Face models like Depth Anything V2 | ~150 MB | Python virtual environment (`venv`) | |
+| **huggingface_hub** | Interacting with Hugging Face exports and model caching | ~20 MB | Python virtual environment (`venv`) | |
+| **PyTorch** (`torch`, `torchvision`) | Required for YOLO, L2CS-Net, Depth Anything, HSEmotion-PyTorch, etc. | ~2-3 GB | Python virtual environment (`venv`) | MPS backend works on Apple Silicon (validated on M4 Max / Mac Studio) |
 | **OpenCV** (`opencv-python`) | Frame extraction, Optical Flow (Task Climax Detection), and UI video playback | ~150 MB | Python virtual environment | |
 | **Librosa** | Audio feature extraction (Acoustic Prosody) | ~50 MB | Python virtual environment | |
 | **SciPy** | Signal processing (Affirmation Gestures) | ~150 MB | Python virtual environment | |

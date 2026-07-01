@@ -27,9 +27,6 @@ The SAF pipeline is built for scale and extensibility, processing Terabytes of v
 ### 1. Dataset Acquisition
 Automated ingestion of raw egocentric video sources. Due to licensing, we maintain a "Download-Filter-Discard" strategy, only persisting what is necessary for metadata extraction.
 
-### 1a. Synthetic True-Positive Generation
-A small, controlled corpus of synthetic egocentric videos with a guaranteed bystander reaction, generated locally via **Wan2.1-T2V** (or small-tier fallback) running on the host's GPU/MPS backend. The clips are designed to be rendered **once in a standalone step** and saved to the Extreme SSD, with each E2E run **referencing the saved clips** (via the registry) rather than regenerating them. This QA path is currently **parked and disabled by default** (`SAF_RUN_SYNTHETIC_QA=0`) — no Wan2.1 render has yet completed on the Mac Studio target host (MPS OOM; see [01a](docs/01a_synthetic_positive_generation.md) Unresolved Issue 1) — so normal runs reflect the raw corpus only and opt in via `SAF_RUN_SYNTHETIC_QA=1`. We maintain 1 to 3 synthetic videos in total (regardless of the Ego4D slice size). These videos are filter-QA fixtures only — they are tagged `dataset: "synthetic_validation"`, exercised through Layer 02 to verify the social-presence gates are still detecting true positives, and explicitly gated out of every Layer 03 module and the dehydrated export.
-
 ### 2. Filtering & Task Labeling
 We strictly filter for "Socially Relevant" moments:
 -   **Social Presence**: Videos must contain at least one bystander (excluding the POV actor).
@@ -84,7 +81,6 @@ pixels), excluded from the Hugging Face surface. See [05: Social-Signal Video Re
 ### Documentation
 -   [Project Overview](docs/00_project_overview.md)
 -   [Dataset Acquisition Guide](docs/01_dataset_acquisition.md)
--   [Synthetic True-Positive Generation (Layer 1a)](docs/01a_synthetic_positive_generation.md)
 -   [Filtering & Task Labeling](docs/02_filtering_and_labeling.md)
 -   [Social Layer Registry](docs/03_social_layer_architecture.md)
     -   [03a: Attention Layer](docs/03a_attention_layer.md)

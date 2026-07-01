@@ -362,8 +362,6 @@ class AttentionLayerPipeline:
         todo = []
         skipped_face_quality = 0
         for entry in registry:
-            if entry.get("synthetic") is True:
-                continue
             # Skip clips flagged as invalid social positives (e.g. a non-human
             # bystander track) during spot-check — Node 02 Issue 2 remediation.
             if entry.get("flagged_invalid") is True:

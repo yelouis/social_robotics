@@ -106,16 +106,6 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
         "medium": ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
         "large":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
     },
-    # Synthetic video generator (Wan2.1 T2V, local via diffusers/MPS). Loaded
-    # transiently in the standalone Layer 1a generation pre-step, then released
-    # before the filtering/Layer-03 models load — so its footprint is NOT part
-    # of the steady-state resident set and is excluded from the banner sum (None,
-    # the same convention as social_presence_pose). See docs/01a §3.
-    "synthetic_generator": {
-        "small":  ("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", "~17 GB on-disk / ~14 GB peak", None),
-        "medium": ("Wan-AI/Wan2.1-T2V-14B-Diffusers",  "~40 GB on-disk / ~45 GB peak", None),
-        "large":  ("Wan-AI/Wan2.1-T2V-14B-Diffusers",  "~40 GB on-disk / ~45 GB peak", None),
-    },
 }
 
 
@@ -223,16 +213,6 @@ def get_model(layer_key: str, tier: Optional[str] = None) -> str:
         )
     tier = tier or get_active_tier()
     model_id = _MODEL_TIERS[layer_key][tier][0]
-    if layer_key == "synthetic_generator" and tier in ("medium", "large"):
-        is_mps = False
-        try:
-            import torch
-            is_mps = torch.backends.mps.is_available()
-        except ImportError:
-            import platform
-            is_mps = platform.system() == "Darwin" and platform.machine() == "arm64"
-        if is_mps:
-            model_id = _MODEL_TIERS[layer_key]["small"][0]
     return _resolve_ollama_tag(model_id)
 
 
