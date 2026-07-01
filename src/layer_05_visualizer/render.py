@@ -19,7 +19,12 @@ class RenderIndex:
             self.layers = set(bundle.get("layers_present", []))
         else:
             self.layers = set(layers.split(",")) if isinstance(layers, str) else set(layers)
-            
+
+        # Which layers actually RAN for this clip (independent of the --layers
+        # draw filter) + the 03c audio blocks — both consumed by the per-layer
+        # readout panel so a layer that found nothing is still shown as such.
+        self.layers_present = set(bundle.get("layers_present", []))
+        self.audio = bundle.get("audio", [])
         self.show_phantoms = show_phantoms
         
         self.tracks = []
