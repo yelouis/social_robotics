@@ -1,4 +1,4 @@
-"""Analyze a v4 E2E filter run: pass rates, gate attribution, best/worst, synthetics.
+"""Analyze a v4 E2E filter run: pass rates, gate attribution, best/worst.
 
 Usage: python analyze_e2e.py --results RESULTS.json --log DETECTOR.log
 Gate attribution is recovered from the detector's stdout rejection lines:
@@ -31,12 +31,10 @@ def main():
     processed = [r for r in recs if "passed_filter" in r]
     passed = [r for r in processed if r["passed_filter"]]
     failed = [r for r in processed if not r["passed_filter"]]
-    synth = [r for r in recs if r.get("synthetic")]
-
     def uid8(r):
         return (r["video_id"] or "")[:8]
 
-    # gate attribution for failed (non-synthetic) videos
+    # gate attribution for failed videos
     stereo_fail = [r for r in failed if r["video_id"] in stereo_uids]
     vlm_fail = [r for r in failed if r["video_id"] in vlm_rej and r["video_id"] not in stereo_uids]
     nopose_fail = [r for r in failed if r["video_id"] not in stereo_uids and r["video_id"] not in vlm_rej]
@@ -53,7 +51,7 @@ def main():
     print(f"      multi-person VLM gate: {len(vlm_fail)}")
     print(f"      no YOLO-pose positive / all-filtered: {len(nopose_fail)}")
 
-    ego_proc = [r for r in processed if not r.get("synthetic")]
+    ego_proc = processed
     ego_pass = [r for r in ego_proc if r["passed_filter"]]
     print(f"\nEgo4D pass rate: {len(ego_pass)}/{len(ego_proc)} "
           f"({100*len(ego_pass)/max(1,len(ego_proc)):.1f}%)")
@@ -79,25 +77,6 @@ def main():
     print("\nclosest VLM-gate FAILS (1/2 confirmed — possible false negatives to spot-check):")
     for r in near_miss[:8]:
         print(f"  {r['video_id']} [{vlm_rej[r['video_id']]}] t={r['elapsed_sec']}s")
-
-    # synthetic breakdown
-    print(f"\n=== SYNTHETIC (Layer 1a) ===  {len(synth)} clips")
-    by_tag = {}
-    for r in synth:
-        tag = r.get("scenario_tag", "?")
-        by_tag.setdefault(tag, []).append(r)
-    for tag, rs in sorted(by_tag.items()):
-        p = sum(1 for r in rs if r["passed_filter"])
-        for r in rs:
-            reason = "PASS" if r["passed_filter"] else (
-                "stereo" if r["video_id"] in stereo_uids else
-                vlm_rej.get(r["video_id"], "no-pose/all-filtered"))
-            print(f"  [{tag}] {r['video_id']}: pass={r['passed_filter']} "
-                  f"score={r.get('social_presence_score')} ({reason}) t={r.get('elapsed_sec')}s")
-        print(f"    -> {tag}: {p}/{len(rs)} passed")
-    if synth:
-        sp = sum(1 for r in synth if r["passed_filter"])
-        print(f"  ALL SYNTHETICS: {sp}/{len(synth)} passed ({100*sp/len(synth):.0f}%)")
 
 
 if __name__ == "__main__":

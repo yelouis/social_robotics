@@ -1,4 +1,4 @@
-"""Node 01+02 reservoir acquisition (Ego4D; Layer 1a disabled).
+"""Node 01+02 reservoir acquisition (Ego4D).
 
 Download Ego4D in batches, run the FULL Node 02 social-presence filter to
 *score* each video (`social_presence_score`), and retain only the top-K
@@ -28,10 +28,6 @@ import os
 import sys
 import time
 from pathlib import Path
-
-# Layer 1a is disabled for corpus acquisition (Ego4D only). Set before imports
-# that read it. Keep the model-tier banner so the active VLM is visible.
-os.environ.setdefault("SAF_RUN_SYNTHETIC_QA", "0")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))

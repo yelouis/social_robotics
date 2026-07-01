@@ -24,10 +24,6 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 1. **Dataset Acquisition** (`01_dataset_acquisition.md`)
    - Initial ingestion point to pull raw video sources (e.g., from Ego4d, EPIC-KITCHENS, Charades-Ego, or EgoProceL) to the local disk.
 
-1a. **Synthetic True-Positive Generation** (`01a_synthetic_positive_generation.md`)
-   - A validation stream of synthetic egocentric videos with guaranteed bystander reactions, generated locally with **Wan2.1-T2V**, used to catch Layer 02 filtering regressions on known true positives (the canonical "more than one person in frame" case).
-   - **Generate once, reference thereafter**: the clips are rendered a single time in a standalone step and saved to the Extreme SSD; each E2E run *references* the saved clips via the registry rather than regenerating them. A toggle (`SAF_RUN_SYNTHETIC_QA`) selects whether the Layer 1a QA check runs. **Parked as of June 12 (default off)** — no Wan2.1 render has completed on this host, so Layer 1a is not used for now (see `docs/01a` Unresolved Issue 1); re-enable with `SAF_RUN_SYNTHETIC_QA=1`.
-
 2. **Filtering & Task Labeling** (`02_filtering_and_labeling.md`)
    - *Social Presence Filter*: We strictly filter the dataset for videos containing *more than one person* (excluding the POV cameraperson). 
    - *Task Labeling*: Analyzes what task the POV person is currently undertaking. The video is discarded if there is no clear task being performed.
@@ -45,14 +41,12 @@ The pipeline follows a multi-stage approach. Steps 2, 3, and 4 are modular by de
 
 ## 🐍 Virtual Environments System
 
-To prevent dependency conflicts and support hardware-specific accelerators, the project organizes its Python execution environments into three distinct virtual environments:
+To prevent dependency conflicts and support hardware-specific accelerators, the project organizes its Python execution environments into two distinct virtual environments:
 
 1. **`venv`** (Python 3.9.6):
    - *Purpose*: The main project environment. It runs all general feature extraction layers (gaze, prosody, depth, SAM, pose), orchestrates pipeline execution, and runs the test suite.
 2. **`vlm_env`** (Python 3.9.6):
    - *Purpose*: A dedicated environment for visual-language model (VLM) downloading and ingestion steps, isolating the complex dependencies of the Ego4D CLI tool from the main pipeline.
-3. **`gen_env`** (Python 3.14.3):
-   - *Purpose*: A dedicated modern environment for Layer 1a synthetic true-positive video generation using **Wan2.1-T2V**. It requires Python >= 3.10 to support the latest `diffusers` stack and optimize Apple Silicon MPS memory offloading for local video rendering.
 
 ---
 
