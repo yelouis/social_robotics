@@ -74,6 +74,8 @@ The two paired windows A "won" both exposed the kernel's orientation blindness (
 
 ## ⚠️ Unresolved Issues & Suggestions
 
+> **Cross-reference (July 2)**: two further 02b changes are tracked in the VLA curation roadmap, `docs/06_vla_curation_roadmap.md` — **per-segment action captions** (its Issue 1, selected, implement first) and **control segments** (its Issue 3, selected, implement third). Both should land **before** the full-991 re-annotation so a single 02b pass produces captioned, control-balanced segments.
+
 ### Issue 1: Downstream layers do not yet consume `segment_face_px`
 **Status**: ⚠️ Confirmed Unresolved — Layer 02b records the verified best face height per segment, but 03a–03f still decode/sample every segment regardless. In the June 30 eval, 5 of 8 clips produced **zero** head-pose samples in *any* window of either arm (faces too distant/masked for FaceLandmarker) — window placement was not the bottleneck there; face resolvability was. Those segments' cost is currently paid for nothing by every face-based layer.
 

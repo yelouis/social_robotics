@@ -93,6 +93,7 @@ pixels), excluded from the Hugging Face surface. See [05: Social-Signal Video Re
     -   [03f: Motor Resonance Layer](docs/03f_motor_resonance_layer.md)
 -   [Dehydrated Export](docs/04_dehydrated_export.md)
 -   [Social-Signal Video Renderer (Local Hydration & QA)](docs/05_signal_visualizer.md)
+-   [VLA Fine-Tuning & Benchmark Curation Roadmap](docs/06_vla_curation_roadmap.md)
 -   [ML Dependencies & Models](docs/ml_dependencies.md)
 
 ---

@@ -87,4 +87,4 @@ To guarantee the export structure adheres to safety standards and schema require
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-_No open issues at this time._
+> **Cross-reference (July 2)**: the **unified per-segment export + QA-pair emitter** for VLA curation is tracked as Issue 2 (selected, implement second) of `docs/06_vla_curation_roadmap.md` — a new `build_segment_dataset` export mode joining 03a–03f per `(clip, task, segment, person)` alongside the existing per-layer datasets. Related roadmap items touching this layer: human-verified eval flags (its Issue 4) and split/richness metadata (its Issue 6), both pending review.
