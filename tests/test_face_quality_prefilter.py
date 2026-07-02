@@ -81,12 +81,14 @@ def test_climax_entry_filter_skips_rejected(tmp_path, monkeypatch):
     seen = []
 
     def fake_worker(args):
-        entry, _vlm, _skip = args
+        # Layer 02b worker signature (June 30): (entry, face_verify).
+        entry, _face_verify = args
         seen.append(entry["video_id"])
         entry["identified_tasks"][0]["task_temporal_metadata"] = {"task_climax_sec": 0.5}
         return entry, True
 
-    monkeypatch.setattr(ce, "_populate_one_entry", fake_worker)
+    import layer_02b_task_climax.pipeline as l02b
+    monkeypatch.setattr(l02b, "_annotate_one_entry", fake_worker)
 
     n = ce.populate_climax_for_manifest(
         manifest, entry_filter=lambda e: e["video_id"] == "keep")
@@ -113,11 +115,13 @@ def test_climax_no_filter_processes_all(tmp_path, monkeypatch):
     seen = []
 
     def fake_worker(args):
-        entry, _vlm, _skip = args
+        # Layer 02b worker signature (June 30): (entry, face_verify).
+        entry, _face_verify = args
         seen.append(entry["video_id"])
         return entry, True
 
-    monkeypatch.setattr(ce, "_populate_one_entry", fake_worker)
+    import layer_02b_task_climax.pipeline as l02b
+    monkeypatch.setattr(l02b, "_annotate_one_entry", fake_worker)
     n = ce.populate_climax_for_manifest(manifest)
     assert sorted(seen) == ["a", "b"]
     assert n == 2

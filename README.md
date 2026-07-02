@@ -30,7 +30,8 @@ Automated ingestion of raw egocentric video sources. Due to licensing, we mainta
 ### 2. Filtering & Task Labeling
 We strictly filter for "Socially Relevant" moments:
 -   **Social Presence**: Videos must contain at least one bystander (excluding the POV actor).
--   **Task Context**: Videos are labeled by the task being performed (using VLMs like Qwen2.5-VL and Moondream) and centered around a "Task Climax"—the moment of highest kinetic or cognitive intensity.
+-   **Task Context**: Videos are labeled by the task being performed (using VLMs like Qwen2.5-VL and Moondream).
+-   **Reaction Segments (Layer 02b)**: Each task is annotated with bystander-anchored reaction segments — the "Task Climax" moments where a close, persistently-present (and face-verified) bystander can actually be measured — which every social feature layer samples.
 
 ### 3. Social Feature Layers
 The heart of the project. Independent modules analyze the filtered video chunks to extract specific social signals:
@@ -82,6 +83,7 @@ pixels), excluded from the Hugging Face surface. See [05: Social-Signal Video Re
 -   [Project Overview](docs/00_project_overview.md)
 -   [Dataset Acquisition Guide](docs/01_dataset_acquisition.md)
 -   [Filtering & Task Labeling](docs/02_filtering_and_labeling.md)
+    -   [02b: Task Climax / Reaction Segments](docs/02b_task_climax_layer.md)
 -   [Social Layer Registry](docs/03_social_layer_architecture.md)
     -   [03a: Attention Layer](docs/03a_attention_layer.md)
     -   [03b: Reasonable Emotion Layer](docs/03b_reasonable_emotion_layer.md)

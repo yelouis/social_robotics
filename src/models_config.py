@@ -77,7 +77,8 @@ _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
         "medium": ("yolov8x-pose.pt", "~100 MB", 100_000_000),
         "large":  ("yolov8x-pose.pt", "~100 MB", 100_000_000),
     },
-    # Stage-2 filtering VLM (climax refinement)
+    # Stage-2 filtering VLM. (Formerly also the slow-task climax-refinement
+    # model; the Layer 02b bbox-kernel detector retired that path June 30.)
     "filtering_vlm": {
         "small":  ("qwen2.5vl:3b", "~3 GB", 3_000_000_000),
         "medium": ("qwen2.5vl:7b", "~7 GB", 7_000_000_000),

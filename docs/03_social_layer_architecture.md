@@ -24,8 +24,11 @@ As the repository is updated, we will continuously brainstorm and add independen
 ## 📚 Active Layers Registry
 As layers are implemented, they should be tracked here. Each layer follows the naming convention `03x_<layer_name>` where `x` is a lowercase letter assigned in order of creation.
 
+> **Pre-layer stage — Layer 02b (Task Climax / Reaction Segments).** Before any 03x layer runs, `python -m layer_02b_task_climax.pipeline <filtered_manifest.json>` annotates every task with its bystander-anchored `reaction_segments` (docs/02b_task_climax_layer.md, June 30). It annotates the manifest in place rather than emitting a result file, which is why it is 02b and not a 03x layer: it *defines the windows* the 03x layers measure, so it cannot be a sibling. Un-annotated manifests still work via the lazy back-compat wrapper in `shared.climax_extraction`.
+
 | Layer ID | Name | Document | Output File | Status |
 |---|---|---|---|---|
+| 02b | Task Climax / Reaction Segments | `02b_task_climax_layer.md` | *(annotates `filtered_manifest.json` in place)* | Implemented |
 | 03a | Attention / Engagement | `03a_attention_layer.md` | `03a_attention_result.json` | Implemented |
 | 03b | Reasonable Emotion | `03b_reasonable_emotion_layer.md` | `03b_reasonable_emotion_result.json` | Implemented |
 | 03c | Acoustic Prosody | `03c_acoustic_prosody_layer.md` | `03c_acoustic_prosody_result.json` | Implemented |
@@ -48,17 +51,18 @@ Layers are designed to be independent, but some layers *may* consume the output 
 ### Dependency Graph
 ```mermaid
 graph LR
-    M["filtered_manifest.json"] --> 03a
-    M --> 03b
-    M --> 03c
-    M --> 03d
-    M --> 03f
+    M["filtered_manifest.json<br/>(Node 02)"] --> L02b["02b climax<br/>(reaction_segments)"]
+    L02b --> 03a
+    L02b --> 03b
+    L02b --> 03c
+    L02b --> 03d
+    L02b --> 03f
     03a -->|required| 03e
     03a -.->|optional| 03b
 ```
 
 ### Shared Helper: Bystander Measurement-Window Anchoring
-Several layers hit the **same geometry problem**: the task's `task_reaction_window_sec` is anchored to the **wearer's** optical-flow climax (±~1 s), but Node-02 bystander detections arrive at a **~6 s cadence** and sit a **median ~7–10 s from that climax** — so the strict window usually holds **0–1 bystander detections**, starving any metric that needs the bystander sampled there. Each affected layer independently re-discovered and fixed this (03b Resolved #2, 03d Resolved #1/#3, 03e Resolved #1, 03f Resolved #8), so the canonical implementation now lives **once** in **`src/shared/bystander_window.py::bystander_measurement_window`**.
+Several layers hit the **same geometry problem**: the task's `task_reaction_window_sec` was anchored to the **wearer's** optical-flow climax (±~1 s), but Node-02 bystander detections arrive at a **~6 s cadence** and sit a **median ~7–10 s from that climax** — so the strict window usually held **0–1 bystander detections**, starving any metric that needs the bystander sampled there. *(June 30 update: the Layer 02b bbox-kernel detector snaps the climax to a bystander detection by construction and straddles the window around it, so new manifests hit the direct-window path far more often — 03e direct-window share 10→13 of ~33 in the A/B eval. The helper remains required: a sparse track's detections can still miss the window, and re-anchoring is what makes multi-segment dedup meaningful.)* Each affected layer independently re-discovered and fixed this (03b Resolved #2, 03d Resolved #1/#3, 03e Resolved #1, 03f Resolved #8), so the canonical implementation now lives **once** in **`src/shared/bystander_window.py::bystander_measurement_window`**.
 
 **The rule it encodes:** keep the strict reaction window when it already holds enough samples; otherwise re-anchor to the bystander detection nearest the climax (widened `± anchor_span_detections` indices, padded `± pad_sec`), bounded by `max_anchor_span_sec` (a measurement spanning minutes is locomotion/drift, not a task reaction). Returns `(start, end, source)` — `source ∈ {"reaction_window", "bystander_anchored"}` — or `(None, None, reason)` on skip.
 

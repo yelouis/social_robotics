@@ -74,7 +74,8 @@ def test_gate_times_out_to_default_and_passes_timeout(monkeypatch):
 
 
 def test_vlm_timeout_constants_are_generous():
+    # (CLIMAX_VLM_REQUEST_TIMEOUT retired June 30: the Layer 02b bbox-kernel
+    # detector replaced the flow+VLM climax refinement, so climax no longer
+    # makes VLM calls at all.)
     import shared.social_presence as sp
-    import shared.climax_extraction as ce
     assert sp.VLM_REQUEST_TIMEOUT >= 60       # generous vs ~6s normal — only true hangs fire
-    assert ce.CLIMAX_VLM_REQUEST_TIMEOUT >= 60
