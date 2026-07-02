@@ -53,17 +53,12 @@ Knowing *what* the task is isn't enough; downstream affective layers need to kno
 **Criteria**:
 Identify the exact timestamp or narrow temporal window where the "climax" or core action of each task occurs (e.g., the exact moment the dropped glass shatters, or the exact moment the basketball leaves the hands).
 
-**Task Requirements**:
-- **Hybrid Optical Flow + VLM Climax Detection**: A two-stage approach that requires zero additional model downloads:
-  - **Stage 1 — Bystander-Anchored Optical-Flow Peaks (multi-window)**: The task's **bystander detections are clustered in time** (a new cluster starts where bystanders are absent > `CLIMAX_CLUSTER_GAP_SEC = 15 s`, or a running cluster would exceed `CLIMAX_MAX_CLUSTER_SPAN_SEC = 90 s`). For each of the densest clusters (capped at `CLIMAX_MAX_SEGMENTS = 10`) a **Two-Pass Hierarchical Detection** runs *only inside that cluster's padded range*: a coarse pass at ~5 FPS (sequential `grab()`-skip) finds the rough peak, then a native-FPS dense pass within ±1 s refines the kinetic `task_climax_sec`. Each cluster yields one **reaction segment**, so a long clip produces multiple social-moment windows. *Why per-cluster, not whole-range:* maximizing flow over the entire (median ~26-min) task range picks a single **wearer**-motion peak anywhere in the task — frequently nowhere near a bystander — which starved every downstream layer of samples (03e scored 0/200 before this rework; see Resolved #22). Anchoring to bystander clusters also bounds the optical-flow cost regardless of clip length.
-  - **Stage 2 — VLM Refinement (slow/cognitive tasks)**: For tasks classified as `"slow"` velocity (e.g., solving a puzzle, reading a sign), sample 3-5 candidate frames around the optical flow peak and use the configured climax-refinement VLM (`qwen2.5vl:7b`, the `filtering_vlm` registry tier) to score each frame's proximity to the action climax, using the `task_label` as context.
-- **Dynamic Action Velocity & Delay Buffers**: Human reactions vary wildly depending on the abruptness of a task. The system maps the metadata-derived `task_label` to a "Velocity" class. We use this to compute a dynamic `task_reaction_window_sec`:
-  - **Fast / Instinctual** (e.g., slipping, dropping an item): Requires a short buffer. Climax + `[0.5s to 2.0s]`.
-  - **Medium** (e.g., throwing a ball, standard interaction): Climax + `[1.0s to 3.0s]`.
-  - **Slow / Cognitive** (e.g., solving a puzzle, reading a sign): Climax + `[2.0s to 6.0s]`.
+**Task Requirements** *(current — Layer 02b bbox-kernel detector, June 30; see `docs/02b_task_climax_layer.md` for the algorithm, A/B validation, and run instructions)*:
+- **Bystander-Anchored Reaction Segments (multi-window)**: The task's **bystander detections are clustered in time** (a new cluster starts where bystanders are absent > `CLIMAX_CLUSTER_GAP_SEC = 15 s`, or a running cluster would exceed `CLIMAX_MAX_CLUSTER_SPAN_SEC = 90 s`); the densest clusters (capped at `CLIMAX_MAX_SEGMENTS = 10`) each yield one **reaction segment**, so a long clip produces multiple social-moment windows. *Why per-cluster, not whole-range:* maximizing a signal over the entire (median ~26-min) task range picks a moment frequently nowhere near a bystander — which starved every downstream layer of samples (03e scored 0/200 before the multi-window rework; see Resolved #22).
+- **Bbox-Kernel Climax + Straddle Window**: within each cluster the climax is the detection timestamp maximizing Gaussian-kernel-weighted bbox height (close, persistently-present bystanders — zero video decode), optionally BlazeFace-verified across the top-3 candidates (`segment_face_px`); the reaction window **straddles** it: `[climax − 1 s, climax + 3 s]`, shifted at clip edges. This replaced the two-stage optical-flow + VLM detector and the velocity-scaled trailing buffers on June 30 — global-frame flow was proven to track wearer ego-motion/passing objects rather than social moments (see `docs/02b_task_climax_layer.md`, Resolved #1 there, for the full A/B evidence). `task_velocity` is still labeled by the VLM and retained in the schema; it no longer parameterizes the window.
 
 > [!IMPORTANT]
-> **Execution Location**: Climax extraction is no longer executed by Layer 02 itself. Per Resolved Issue #8 below, Layer 02 emits `task_temporal_metadata = {}`, and the first Layer 03 pipeline to consume the manifest invokes `shared.climax_extraction.populate_climax_for_manifest()` to fill in the per-cluster optical-flow peaks, dynamic reaction windows, and optional VLM refinement in place. Each task's `task_temporal_metadata` carries a **`reaction_segments`** list (one per bystander cluster — Resolved #22), with the densest segment mirrored at the top level for legacy single-window readers; Layer 03 pipelines iterate it via `iter_reaction_windows(task)` or `expand_task_segments(tasks)`. Subsequent Layer 03 pipelines find the metadata cached and skip the optical-flow pass entirely.
+> **Execution Location**: Climax extraction is no longer executed by Layer 02 itself. Per Resolved Issue #8 below it was deferred to a lazy pass invoked by the first Layer 03 pipeline; since June 30 it is a proper pipeline stage — **Layer 02b** (`python -m layer_02b_task_climax.pipeline <manifest>`, `docs/02b_task_climax_layer.md`) — run explicitly after Node 02. Layer 02 emits `task_temporal_metadata = {}`; Layer 02b fills each task with a **`reaction_segments`** list (one per bystander cluster — Resolved #22), densest segment mirrored at the top level for legacy single-window readers; Layer 03 pipelines iterate it via `iter_reaction_windows(task)` or `expand_task_segments(tasks)` and can still trigger the annotation lazily through the back-compat `shared.climax_extraction.populate_climax_for_manifest()` wrapper.
 
 ---
 
@@ -90,11 +85,22 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_start_sec": 0.0,
       "task_end_sec": 45.0,
       "task_temporal_metadata": {
+        "reaction_segments": [
+          {
+            "task_climax_sec": 5.2,
+            "task_reaction_window_sec": [4.2, 8.2],
+            "climax_extraction_method": "bbox_kernel_peak+face_verified",
+            "bbox_kernel_score": 1834.2,
+            "segment_face_px": 199,
+            "segment_face_conf": 0.94,
+            "bystander_cluster_sec": [2.0, 14.0],
+            "cluster_detection_count": 9
+          }
+        ],
+        "n_reaction_segments": 1,
         "task_climax_sec": 5.2,
-        "task_reaction_window_sec": [6.2, 8.2],
-        "climax_extraction_method": "optical_flow_peak+vlm_refinement",
-        "optical_flow_peak_magnitude": 42.8,
-        "vlm_climax_confidence": 0.85
+        "task_reaction_window_sec": [4.2, 8.2],
+        "climax_extraction_method": "bbox_kernel_peak+face_verified"
       }
     },
     {
@@ -105,10 +111,9 @@ All downstream Social Feature Layers depend on this exact contract. Any addition
       "task_start_sec": 0.0,
       "task_end_sec": 45.0,
       "task_temporal_metadata": {
-        "task_climax_sec": 24.1,
-        "task_reaction_window_sec": [24.6, 26.1],
-        "climax_extraction_method": "optical_flow_peak",
-        "optical_flow_peak_magnitude": 78.3
+        "reaction_segments": [],
+        "n_reaction_segments": 0,
+        "climax_extraction_method": "no_bystander_cluster_in_task"
       }
     }
   ],
@@ -185,7 +190,7 @@ SR_SUPERVISE_LOG="$RUN/supervise_02.log" ./venv/bin/python "$RUN/daemonize.py" "
 ps -Ao pid,ppid,command | grep -v grep | grep run_supervised
 ```
 
-**Monitor (a detached run sends no completion signal).** Poll the output manifest's record count for progress; 02 is **done** when `supervise_02.log` logs `runner exited 0 (clean)`. Resuming after any stop is just the same launch command again — it skips processed clips and continues. Recall that 02 emits `task_temporal_metadata = {}`; climax is populated by the first Layer 03 (Resolved #8).
+**Monitor (a detached run sends no completion signal).** Poll the output manifest's record count for progress; 02 is **done** when `supervise_02.log` logs `runner exited 0 (clean)`. Resuming after any stop is just the same launch command again — it skips processed clips and continues. Recall that 02 emits `task_temporal_metadata = {}`; run **Layer 02b** next to populate the reaction segments (`python -m layer_02b_task_climax.pipeline <manifest>` — docs/02b; a Layer 03 run also triggers it lazily via the Resolved #8 wrapper).
 
 ## Verification & Validation Check
 To ensure the filtering mechanisms are robust and correct:
@@ -200,7 +205,7 @@ The filtering and labeling pipeline is fully operational within the `src/dataset
 - **Social Presence Filter**: YOLOv8-Pose (`yolov8n-pose.pt`) with head+shoulder keypoint validation, the geometric Anti-Wearer Heuristic, and a **`qwen2.5vl:7b`** verification cascade (the stronger gate that replaced the original Moondream one to recover recall — Resolved Issue #14; `moondream` is retained only on the small tier) — screen-aware multi-person prompt (Resolved Issue #5), once-per-video side-by-side stereo gate + aspect-ratio prefilter (Resolved Issues #10, #13), and a per-detection wearer-chin gaze gate for bottom-20% bboxes (Resolved Issue #11) — plus a MediaPipe Tasks API hand-landmarker for occlusion suppression (Resolved Issue #9). Sample rate defaults to 1 frame per 3 seconds (Resolved Issue #11).
 - **Memory-gated execution**: on hosts with ≥ 48 GB unified memory the YOLO and VLM steps run in a **single interleaved pass** (both models co-resident on the Mac Studio); smaller hosts (e.g. the 24 GB Mac mini) fall back to a **two-pass architecture** (YOLO pass → unload → VLM pass) to bound the resident set (Resolved Issue #2).
 - **Contextual Task Labeling**: Ego4D Metadata Extraction from `ego4d.json` is the only labeling path; non-Ego4D entries are skipped at intake until per-dataset labelers are written (Resolved Issue #6). Obvious-solo Ego4D videos (scenarios like `"Reading books"`, `"Watching tv"`, etc.) are skipped before YOLO via the `_SOLO_SCENARIO_SUBSTRINGS` allowlist (Resolved Issue #12).
-- **Temporal Climax Identification**: Implementation lives in `src/shared/climax_extraction.py` and is invoked by the first Layer 03 pipeline to consume the manifest, not by Layer 02 itself (Resolved Issue #8).
+- **Temporal Climax Identification**: Now a proper pipeline stage — **Layer 02b** (`src/layer_02b_task_climax/pipeline.py`, `docs/02b_task_climax_layer.md`, June 30) run explicitly after Node 02; `src/shared/climax_extraction.py` retains the cross-layer consumption helpers plus a back-compat lazy wrapper so a Layer 03 run on an un-annotated manifest still works (Resolved Issue #8 deferred it out of Layer 02 originally).
 
 ## 🧪 Resolved Issues & Implementation Refinements
 

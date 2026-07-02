@@ -88,6 +88,65 @@ FQ_MIN_FRAMES = int(_os.getenv("SR_03A_FQ_MIN_FRAMES", "2"))
 # re-detecting on every 32 FPS burst frame was 8x wasted YOLO. Cached boxes are
 # <=250ms stale vs the <=2s manifest staleness re-detection exists to fix.
 REDETECT_MIN_INTERVAL_SEC = float(_os.getenv("SR_03A_REDETECT_INTERVAL", "0.25"))
+# C' — segment-restricted sampling (Layer 02b, June 30). With reaction segments
+# now annotated UPSTREAM of 03a, only the detections near a segment can ever be
+# read downstream: 03b-03f consume traces inside the (possibly re-anchored)
+# reaction windows, and the re-anchor reach is bounded by 03e's
+# MAX_ANCHOR_SPAN_SEC = 30 s + pads — hence the 35 s default margin, the bound
+# validated in the June 30 A/B eval (max climax->detection distance 2.9 s).
+# Filtering each track to detections within the margin of any reaction segment
+# shrinks the sampled intervals from "everywhere a bystander appears" to "the
+# ~10 social moments per task" (38x fewer detections on the June 30 eval clips).
+# OFF by default: it changes the PUBLISHED 03a trace coverage (per-layer
+# attention dataset shrinks to segment neighborhoods), so enabling it is a
+# per-run decision, not a silent default. Fail-open: an entry with no annotated
+# segments (Layer 02b not run) is processed unrestricted.
+ENABLE_SEGMENT_RESTRICT = _os.getenv("SR_03A_SEGMENT_RESTRICT", "0").lower() in ("1", "true", "yes")
+SEGMENT_MARGIN_SEC = float(_os.getenv("SR_03A_SEGMENT_MARGIN_SEC", "35.0"))
+
+
+def _restrict_to_segments(bystanders, tasks, margin_sec=None):
+    """Return bystander tracks filtered to detections within `margin_sec` of any
+    reaction-segment window (co-indexed lists kept aligned). Tracks left with no
+    detections are dropped. If no task carries reaction segments, returns the
+    input unchanged (fail-open)."""
+    if margin_sec is None:
+        margin_sec = SEGMENT_MARGIN_SEC
+    spans = []
+    for task in (tasks or []):
+        meta = task.get('task_temporal_metadata') or {}
+        segs = meta.get('reaction_segments')
+        if segs is None and meta.get('task_reaction_window_sec'):
+            segs = [meta]  # legacy single-window metadata
+        for s in (segs or []):
+            w = s.get('task_reaction_window_sec')
+            if w and len(w) == 2:
+                spans.append((w[0] - margin_sec, w[1] + margin_sec))
+    if not spans:
+        return bystanders
+    spans.sort()
+
+    def _near(t):
+        for s, e in spans:
+            if s <= t <= e:
+                return True
+            if t < s:
+                return False
+        return False
+
+    out = []
+    for b in bystanders:
+        ts = b.get('timestamps_sec') or []
+        keep = [i for i, t in enumerate(ts) if _near(t)]
+        if not keep:
+            continue
+        nb = dict(b)
+        for key in ('timestamps_sec', 'bounding_boxes', 'detection_confidence'):
+            vals = b.get(key)
+            if isinstance(vals, list) and len(vals) == len(ts):
+                nb[key] = [vals[i] for i in keep]
+        out.append(nb)
+    return out
 class AttentionLayerPipeline:
     def __init__(self, input_manifest_path, output_result_path, force=False):
         self.input_manifest_path = Path(input_manifest_path)
@@ -470,6 +529,18 @@ class AttentionLayerPipeline:
         if not bystanders:
             print(f"No bystanders found for {video_id}.")
             return None
+
+        # C' (segment-restricted sampling): only detections near a Layer-02b
+        # reaction segment can ever be read downstream — drop the rest up front.
+        if ENABLE_SEGMENT_RESTRICT:
+            n_before = sum(len(b.get('timestamps_sec') or []) for b in bystanders)
+            bystanders = _restrict_to_segments(bystanders, entry.get('identified_tasks'))
+            n_after = sum(len(b.get('timestamps_sec') or []) for b in bystanders)
+            if n_after < n_before:
+                print(f"[03a] segment-restrict: {n_before} -> {n_after} detections for {video_id}")
+            if not bystanders:
+                print(f"No bystanders near reaction segments for {video_id}.")
+                return None
             
         hand_detections = entry.get('hand_detections', [])
             

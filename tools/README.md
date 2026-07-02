@@ -34,4 +34,4 @@ pipeline** — they only *drive* or *inspect* the productionized layers in `src/
 ## Validators
 | tool | what it does | usage |
 |---|---|---|
-| `validate_climax.py` | Recompute climax with the sequential-decode path on clips that already have an old `cap.set`-cached climax, compare timestamps, and measure the speedup (regression guard for `src/shared/climax_extraction.py`). Run from repo root. | `./venv/bin/python tools/validate_climax.py` |
+| `validate_climax.py` | Recompute climax on clips with cached metadata and compare timestamps (historical regression guard; note the June 30 Layer 02b bbox-kernel detector intentionally CHANGES climaxes vs flow-era caches — see `docs/02b_task_climax_layer.md`). Run from repo root. | `./venv/bin/python tools/validate_climax.py` |

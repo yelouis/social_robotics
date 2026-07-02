@@ -30,9 +30,10 @@ class FilteringPipeline:
         vlm_verify = os.getenv("SAF_VLM_VERIFY_SOCIAL", "1").lower() in ("1", "true", "yes")
         self.detector = SocialPresenceDetector(get_model("social_presence_pose"), vlm_verify=vlm_verify)
 
-        # Stage-2 climax-refinement VLM is selected from the central tier
-        # registry (`filtering_vlm`): `medium`/`large` -> qwen2.5vl:7b on a
-        # >=48 GB host, `small` -> qwen2.5vl:3b for the 24 GB Mac mini.
+        # Stage-2 filtering VLM is selected from the central tier registry
+        # (`filtering_vlm`): `medium`/`large` -> qwen2.5vl:7b on a >=48 GB
+        # host, `small` -> qwen2.5vl:3b for the 24 GB Mac mini. (Formerly
+        # also the climax-refinement model; Layer 02b retired that use.)
         # SAF_VLM_MODEL_TIER=small is the legacy per-stage override; it still
         # forces the small tier on this layer alone when set.
         if os.getenv("SAF_VLM_MODEL_TIER", "").lower() == "small":
@@ -292,11 +293,12 @@ class FilteringPipeline:
             cap.release()
             return None
 
-        # 3. Temporal Task Climax — deferred to Layer 03 (see Resolved Issue
-        # #8). Layer 02 no longer seeks through every frame for the optical
-        # flow pass; whichever Layer 03 runs first calls
-        # `shared.climax_extraction.populate_climax_for_manifest` and fills
-        # the metadata in place.
+        # 3. Temporal Task Climax — not computed here (Resolved Issue #8
+        # deferred it out of Layer 02). Since June 30 it is its own stage:
+        # Layer 02b (`python -m layer_02b_task_climax.pipeline <manifest>`,
+        # docs/02b_task_climax_layer.md) annotates the emitted manifest with
+        # reaction_segments; a Layer 03 run on an un-annotated manifest still
+        # triggers it lazily via shared.climax_extraction.
 
         cap.release()
 
