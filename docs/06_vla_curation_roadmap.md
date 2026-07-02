@@ -13,20 +13,13 @@ The issues below are the pipeline changes needed to curate the right data for th
 
 ---
 
+## 🧪 Resolved Issues & Implementation Refinements
+
+1. **Per-segment action captions (Resolved - July 2)**:
+   - **Problem**: `task_label` is Ego4D scenario metadata at whole-video granularity, and the June 30 spot-check showed how coarse that is ("Hiking" on a street-market scene, "Eating at a restaurant" on a creek crossing). No field recorded **what the wearer actually did at a given climax**, and every VLA use above (QA pairs, outcome prediction, reward modeling) needs the action grounded per segment, not per video.
+   - **Solution** (Option A, selected July 2): VLM captioning pass in Layer 02b (`_caption_segment`, `src/layer_02b_task_climax/pipeline.py`). Two frames around each climax (`[−1 s, +0.5 s]`, downscaled ≤1024 px) go to the registry `filtering_vlm` (qwen2.5-VL via `shared/vlm_client.ollama_chat` with its enforced timeout) with a constrained prompt (deterministic `temperature 0`, `num_predict 48` — the smoke test saw an uncapped decode spend 25 s explaining its way to "unclear"); result recorded as `segment_action_caption`. Two sentinel escapes prevent hallucination — `conversation` (talking/listening only, the Issue-5 brainstorm case) and `unclear` — with salvage for verbose answers ending on a sentinel. The retired flow-era `vlm_model`/`skip_vlm` kwargs are repurposed: every pre-existing caller passes `skip_vlm=True`, so the lazy back-compat path **never** makes VLM calls; only the explicit pipeline/CLI captions (`--no-captions` / `SR_02B_ACTION_CAPTIONS=0` to disable). Failure is per-segment isolated (field absent, everything else intact). Validated on real clips: "bends down towards another person", "points at the signboard", "shuffles cards", correct `conversation`/`unclear` sentinels. **Measured cost: ~12 s/segment cold** (7B VLM, single GPU, serialized; supersedes the pre-implementation "seconds per clip" estimate) → ~4–5 min/clip dense, ~2–3 GPU-days for the full 991 — resumable, and reducible if needed via the `small` tier (qwen2.5vl:3b), 1-frame sampling, or capping captioned segments per task; that trim decision belongs to the 991 run. Suite 222/222.
+
 ## ⚠️ Unresolved Issues & Suggestions
-
-### Issue 1: Per-segment action captions (PRIORITY 1 — selected July 2)
-**Status**: ⚠️ Confirmed Unresolved — `task_label` is Ego4D scenario metadata at whole-video granularity, and the June 30 spot-check showed how coarse that is ("Hiking" on a street-market scene, "Eating at a restaurant" on a creek crossing). No field records **what the wearer actually did at a given climax**, and every VLA use above (QA pairs, outcome prediction, reward modeling) needs the action grounded per segment, not per video.
-
-**Option A (recommended)**: **VLM captioning pass in Layer 02b** — sample 2–3 frames around each climax (`[climax−1 s, climax+0.5 s]`), prompt the registry `filtering_vlm` (qwen2.5-VL, already local) for a one-line wearer-action caption, emit `segment_action_caption` per segment (with an explicit "unclear" escape so the model can decline instead of hallucinating).
-  - *Pros*: Model already in the registry and resident during pipeline runs; ~10 segments/task × 2–3 frames is seconds per clip (vs. the retired flow pass); landing it **before** the 991 re-annotation means one pass produces captioned segments; the caption is exactly the "action" half of every training item.
-  - *Cons*: VLM hallucination on ambiguous frames (mitigated by the "unclear" escape + short constrained prompt); adds the only nontrivial per-segment VLM cost in 02b; captions are model-generated and inherit that noise for benchmark use (Issue 4 covers human verification of eval items).
-
-**Option B**: **Caption at export time (Layer 04)** from rehydrated frames.
-  - *Pros*: Keeps 02b lean.
-  - *Cons*: Layer 04 is pixel-free **by design** (dehydration contract) — captioning there breaks the architecture; every consumer would pay rehydration; wrong place.
-
-Your selection: **Option A — implement FIRST, before the 991 re-annotation.**
 
 ---
 
@@ -73,7 +66,7 @@ Your selection: **Option A — implement THIRD.**
   - *Pros*: Finer-grained labels; reusable QA tool.
   - *Cons*: Real UI work; overkill if verdicts are mostly keep/drop.
 
-Your selection: _____
+Your selection: Yes, lets build this but I currently do not have the time to review this. Ideally this should be optional for now. However, when we get to this stage, I would like to see the Contact-sheet + CSV workflow. Ideally someone working on this project with me who pulls from github would be able to perform this review easily. So anything required for this should not require the locally downloaded videos. Maybe this will have to force someone else to run the reehyrdater script when reviewing?
 
 ---
 
@@ -90,7 +83,7 @@ Your selection: _____
   - *Pros*: No speculative schema.
   - *Cons*: A future 991-scale re-decode just to add these fields.
 
-Your selection: _____
+Your selection: Proceed with Option A. However, brainstorm the cases where we are unsure what the action in that clip was doing and what the outcome was. Maybe the person was just chatting in that clip.
 
 ---
 
@@ -107,4 +100,4 @@ Your selection: _____
   - *Pros*: Flexible.
   - *Cons*: Every publish re-derives splits; drift between datasets makes cross-dataset comparisons leak-prone.
 
-Your selection: _____
+Your selection: We don't have to implement this now until the 991 videos have completed. Once it completes, maybe we will discover something else. Maybe note that I am leaning towards Option B.

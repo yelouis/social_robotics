@@ -31,30 +31,35 @@ def _entry(vid="v1", n_tasks=1):
     }
 
 
+def _pipe(man, **kw):
+    kw.setdefault("face_verify", False)
+    kw.setdefault("action_captions", False)
+    return TaskClimaxPipeline(man, **kw)
+
+
 def test_pipeline_annotates_and_is_idempotent(tmp_path):
     man = tmp_path / "m.json"
     man.write_text(json.dumps([_entry()]))
-    n = TaskClimaxPipeline(man, face_verify=False).run()
+    n = _pipe(man).run()
     assert n == 1
     data = json.loads(man.read_text())
     meta = data[0]["identified_tasks"][0]["task_temporal_metadata"]
     assert meta["n_reaction_segments"] == 2       # two clusters (10-12 s, 200-201 s)
     # second run: cached, nothing to do
-    assert TaskClimaxPipeline(man, face_verify=False).run() == 0
+    assert _pipe(man).run() == 0
 
 
 def test_pipeline_force_reannotates(tmp_path):
     man = tmp_path / "m.json"
     man.write_text(json.dumps([_entry()]))
-    assert TaskClimaxPipeline(man, face_verify=False).run() == 1
-    assert TaskClimaxPipeline(man, face_verify=False, force=True).run() == 1
+    assert _pipe(man).run() == 1
+    assert _pipe(man, force=True).run() == 1
 
 
 def test_pipeline_entry_filter_skips(tmp_path):
     man = tmp_path / "m.json"
     man.write_text(json.dumps([_entry("keep"), _entry("skip")]))
-    n = TaskClimaxPipeline(man, face_verify=False,
-                           entry_filter=lambda e: e["id"] == "keep").run()
+    n = _pipe(man, entry_filter=lambda e: e["id"] == "keep").run()
     assert n == 1
     data = json.loads(man.read_text())
     by_id = {e["id"]: e for e in data}
@@ -66,9 +71,79 @@ def test_pipeline_survives_missing_video(tmp_path):
     # video_path doesn't exist -> face verify silently degrades to manifest-only.
     man = tmp_path / "m.json"
     man.write_text(json.dumps([_entry()]))
-    assert TaskClimaxPipeline(man, face_verify=True).run() == 1
+    assert _pipe(man, face_verify=True).run() == 1
     meta = json.loads(man.read_text())[0]["identified_tasks"][0]["task_temporal_metadata"]
     assert meta["reaction_segments"][0]["climax_extraction_method"] == "bbox_kernel_peak"
+
+
+# --- per-segment action captions (docs/06 Issue 1) ---
+import numpy as np  # noqa: E402
+
+import layer_02b_task_climax.pipeline as l02b  # noqa: E402
+from layer_02b_task_climax.pipeline import compute_task_climax_for_video  # noqa: E402
+
+
+class _FakeCap:
+    def set(self, *a):
+        return True
+
+    def read(self):
+        return True, np.zeros((48, 64, 3), dtype=np.uint8)
+
+
+def _captionable_task():
+    dets = [{"timestamps_sec": [10.0, 11.0, 12.0],
+             "bounding_boxes": [[0, 0, 50, 200]] * 3}]
+    task = {"task_id": "t1", "task_label": "Playing cards",
+            "task_start_sec": 0.0, "task_end_sec": 60.0,
+            "task_temporal_metadata": {}}
+    return task, dets
+
+
+def test_caption_recorded(monkeypatch):
+    monkeypatch.setattr(l02b, "ollama_chat",
+                        lambda *a, **k: "  hands a card to  the player opposite ")
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(_FakeCap(), 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  vlm_model="qwen-test", skip_vlm=False)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    assert seg["segment_action_caption"] == "hands a card to the player opposite"
+
+
+def test_caption_sentinels_normalized(monkeypatch):
+    monkeypatch.setattr(l02b, "ollama_chat", lambda *a, **k: "Unclear.")
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(_FakeCap(), 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  vlm_model="qwen-test", skip_vlm=False)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    assert seg["segment_action_caption"] == "unclear"
+
+
+def test_caption_failure_is_isolated(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("ollama down")
+    monkeypatch.setattr(l02b, "ollama_chat", boom)
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(_FakeCap(), 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  vlm_model="qwen-test", skip_vlm=False)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    assert "segment_action_caption" not in seg      # field absent, rest intact
+    assert seg["climax_extraction_method"] == "bbox_kernel_peak"
+
+
+def test_caption_off_on_lazy_path(monkeypatch):
+    # skip_vlm=True (every pre-existing caller) must never call the VLM.
+    called = []
+    monkeypatch.setattr(l02b, "ollama_chat", lambda *a, **k: called.append(1) or "x")
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(_FakeCap(), 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  vlm_model="qwen-test", skip_vlm=True)
+    assert called == []
+    assert "segment_action_caption" not in task["task_temporal_metadata"]["reaction_segments"][0]
 
 
 # --- 03a segment-restrict (C') ---

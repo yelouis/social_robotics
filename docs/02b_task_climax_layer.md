@@ -30,6 +30,7 @@ Back-compat: a Layer 03 run on an un-annotated manifest still works — `shared.
 2. **Climax = the detection timestamp maximizing Gaussian-kernel-weighted bbox height** within the cluster (`KERNEL_SIGMA_SEC = 1 s`, support ±2 s). Tall boxes = close bystanders = resolvable faces; the kernel rewards *sustained* proximity over a single-frame spike. Because the climax **is** a detection timestamp, the downstream re-anchoring helper (`shared/bystander_window.py`) is satisfied by construction. Needs **zero video decode**.
 3. **Straddle window**: `task_reaction_window_sec = [climax − 1 s, climax + 3 s]`, **shifted (not clipped)** at clip edges so no degenerate `[d, d]` windows exist. (The flow-era trailing window `[climax+1, climax+3]` assumed "reaction follows wearer action"; that inverted whenever the flow peak was the wearer turning *away*.)
 4. **Face verification** (`SR_02B_FACE_VERIFY`, default on): decode one frame for each of the top-3 kernel candidates, run BlazeFace (the shared `models/mediapipe/blaze_face_short_range.tflite`, same as 03a/03b and the face-quality prefilter) on the tallest nearby bystander crop, and pick the candidate with the largest resolvable face. This closes the kernel's one blind spot — proximity-aware but **orientation-blind** (a close bystander facing away) — for ~3 frame decodes per segment. The winning face height is recorded as `segment_face_px` (`0` when no candidate showed a face), giving downstream layers a free per-segment quality gate.
+5. **Action captions** (`SR_02B_ACTION_CAPTIONS`, default on for the explicit pipeline; docs/06 Resolved #1): two frames around the climax (`[−1 s, +0.5 s]`) go to the registry `filtering_vlm` (qwen2.5-VL via ollama, deterministic decode, 48-token cap) for a one-phrase wearer-action caption → `segment_action_caption` ("hands a card to the player opposite"). Two sentinel escapes prevent hallucination: `conversation` (talking/listening only) and `unclear`. **Cost dominates 02b when enabled**: measured ~12 s/segment cold (7B VLM, single GPU, serialized) → ~4–5 min/clip on dense clips; use `--no-captions` for the fast pass. The **lazy back-compat path never captions** (all Layer-03 callers pass `skip_vlm=True`), so a Layer 03 run cannot block on an absent ollama server.
 
 ### Per-segment schema (additive to docs/02's contract)
 ```json
@@ -40,6 +41,7 @@ Back-compat: a Layer 03 run on an un-annotated manifest still works — `shared.
   "bbox_kernel_score": 1834.2,
   "segment_face_px": 199,
   "segment_face_conf": 0.94,
+  "segment_action_caption": "hands a card to the player opposite",
   "bystander_cluster_sec": [1065.0, 1155.0],
   "cluster_detection_count": 138
 }

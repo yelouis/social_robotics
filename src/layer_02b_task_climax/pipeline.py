@@ -80,6 +80,23 @@ try:
 except ImportError:  # pragma: no cover - exercised only when mediapipe absent
     mp = None
 
+# Action-caption dependencies (docs/06 Issue 1). Both guarded: without them the
+# caption pass degrades to a logged no-op and every other 02b output is intact.
+try:
+    from shared.vlm_client import ollama_chat
+except ImportError:
+    try:
+        from src.shared.vlm_client import ollama_chat
+    except ImportError:  # pragma: no cover
+        ollama_chat = None
+try:
+    from models_config import get_model
+except ImportError:
+    try:
+        from src.models_config import get_model
+    except ImportError:  # pragma: no cover
+        get_model = None
+
 # --- Clustering (unchanged from the flow-era detector; validated by the
 # June 23 multi-window rework, docs/02 Resolved #22) ---
 CLIMAX_CLUSTER_GAP_SEC = 15.0        # split clusters where bystanders are absent > this
@@ -99,6 +116,20 @@ FACE_VERIFY = os.getenv("SR_02B_FACE_VERIFY", "1").lower() in ("1", "true", "yes
 FACE_VERIFY_CANDIDATES = int(os.getenv("SR_02B_FACE_VERIFY_CANDIDATES", "3"))
 FACE_DETECT_CONF = 0.5
 CROP_PAD_PX = 20           # same bbox pad as shared/face_quality_prefilter.py
+
+# --- Per-segment action captions (docs/06 Issue 1; env-overridable) ---
+# Captions run only on the EXPLICIT pipeline path (CLI / TaskClimaxPipeline):
+# the lazy back-compat wrapper's callers all pass skip_vlm=True, so a Layer 03
+# run on an un-annotated manifest never blocks on an absent ollama server.
+ACTION_CAPTIONS = os.getenv("SR_02B_ACTION_CAPTIONS", "1").lower() in ("1", "true", "yes")
+CAPTION_FRAME_OFFSETS_SEC = (-1.0, 0.5)   # frames sampled around the climax
+CAPTION_VLM_TIMEOUT = 180                 # enforced httpx timeout (see shared/vlm_client)
+CAPTION_MAX_EDGE_PX = 1024                # downscale bound for the VLM frames
+# Sentinel captions the prompt allows the model to answer with instead of
+# hallucinating a discrete action (docs/06 Issue 5 brainstorm): 'conversation'
+# = wearer is only talking/listening, no discrete physical action;
+# 'unclear' = action cannot be determined from the frames.
+CAPTION_SENTINELS = ("conversation", "unclear")
 
 
 def _cluster_timestamps(timestamps: List[float], gap_sec: float,
@@ -250,6 +281,69 @@ def _verify_candidates(cap, fps: float, candidates: List[Tuple[float, float]],
     return best
 
 
+def _caption_segment(cap, climax_sec: float, task_label: str,
+                     vlm_model: str) -> Optional[str]:
+    """One-line wearer-action caption for a segment (docs/06 Issue 1).
+
+    Decodes CAPTION_FRAME_OFFSETS_SEC frames around the climax and asks the
+    caption VLM what the WEARER is doing. The prompt provides two sentinel
+    escapes so the model can decline instead of hallucinating: 'conversation'
+    (talking/listening only — the common Ego4D case flagged in the Issue 5
+    brainstorm) and 'unclear'. Best-effort: any failure logs and returns None
+    (field simply absent; every other segment output is unaffected)."""
+    import cv2
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            img_paths = []
+            for i, off in enumerate(CAPTION_FRAME_OFFSETS_SEC):
+                cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, climax_sec + off) * 1000.0)
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                h, w = frame.shape[:2]
+                if max(h, w) > CAPTION_MAX_EDGE_PX:
+                    scale = CAPTION_MAX_EDGE_PX / max(h, w)
+                    frame = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+                p = str(Path(temp_dir) / f"cap_{i}.jpg")
+                cv2.imwrite(p, frame)
+                img_paths.append(p)
+            if not img_paths:
+                return None
+            prompt = (
+                "These frames are from a head-mounted camera (you see what the "
+                f"wearer sees). The overall activity is: '{task_label}'. "
+                "In one phrase of 5 to 12 words, describe the physical action the "
+                "camera wearer is performing RIGHT NOW, including who or what it is "
+                "directed at (e.g. 'hands a card to the player opposite'). "
+                "If the wearer is only talking or listening with no "
+                "discrete physical action, reply exactly 'conversation'. If you "
+                "cannot tell, reply exactly 'unclear'. Reply with ONLY the action "
+                "phrase — no explanation, no preamble."
+            )
+            # temperature 0 = deterministic labels; num_predict bounds a
+            # rambling decode (the smoke test saw 25 s spent explaining its way
+            # to 'unclear' — the cap turns that into a fast, parseable answer).
+            out = ollama_chat(vlm_model, prompt, image_paths=img_paths,
+                              options={"temperature": 0, "num_predict": 48},
+                              timeout=CAPTION_VLM_TIMEOUT)
+            caption = " ".join(out.strip().split())
+            if not caption:
+                return None
+            low = caption.lower().strip(" .!'\"")
+            if low in CAPTION_SENTINELS:
+                return low
+            # Sentinel salvage: a verbose model that ENDS on a sentinel
+            # ("...the answer is: unclear.") still means the sentinel.
+            last = low.split()[-1].strip(" .!:'\"") if low.split() else ""
+            if last in CAPTION_SENTINELS:
+                return last
+            return caption
+    except Exception as e:
+        print(f"[02b] caption failed @{climax_sec:.1f}s: {e}")
+        return None
+
+
 def compute_task_climax_for_video(
     cap,
     fps: float,
@@ -257,22 +351,26 @@ def compute_task_climax_for_video(
     tasks: Iterable[dict],
     duration_sec: float,
     bystander_detections: Optional[list] = None,
-    vlm_model: Optional[str] = None,   # deprecated (flow-era) — accepted, ignored
-    skip_vlm: bool = False,            # deprecated (flow-era) — accepted, ignored
+    vlm_model: Optional[str] = None,   # caption model (docs/06 Issue 1); None = no captions
+    skip_vlm: bool = False,            # True disables ALL VLM work (captions)
     face_verify: Optional[bool] = None,
 ) -> None:
     """Populate `task_temporal_metadata` on each task in-place. Tasks that
     already have non-empty metadata are skipped, so this stays safe to invoke
     from multiple Layer 03 pipelines: only the first call does the work.
 
-    `cap` (an open cv2.VideoCapture) is used ONLY for face verification; pass
-    `face_verify=False` (or run without mediapipe) for a pure-manifest pass
-    that never touches the video. `vlm_model`/`skip_vlm` are retained for
-    call-site compatibility with the retired optical-flow+VLM detector."""
+    `cap` (an open cv2.VideoCapture) is used only for face verification and
+    action captions; pass `face_verify=False` and no `vlm_model` for a
+    pure-manifest pass that never touches the video. `vlm_model`/`skip_vlm`
+    keep their flow-era call-site signatures, repurposed for the caption pass
+    (docs/06 Issue 1): every pre-existing caller passes `skip_vlm=True`, which
+    correctly disables captions on the lazy/back-compat path."""
     if face_verify is None:
         face_verify = FACE_VERIFY
     verifier = _FaceVerifier() if face_verify else None
     do_verify = bool(verifier and verifier.available and cap is not None)
+    do_caption = bool(vlm_model and not skip_vlm and ollama_chat is not None
+                      and cap is not None)
 
     for task in tasks:
         if task.get('task_temporal_metadata'):
@@ -318,6 +416,11 @@ def compute_task_climax_for_video(
             }
             if face_px:
                 seg["segment_face_conf"] = face_conf
+            if do_caption:
+                caption = _caption_segment(cap, climax_sec,
+                                           task.get('task_label', 'unknown'), vlm_model)
+                if caption is not None:
+                    seg["segment_action_caption"] = caption
             segments.append(seg)
 
         meta = {
@@ -343,8 +446,11 @@ def _entry_needs_climax(entry) -> bool:
 
 def _annotate_one_entry(args):
     """Worker for the parallel path. Module-level so it is picklable under the
-    macOS 'spawn' start method. Returns (entry, updated_bool)."""
-    entry, face_verify = args
+    macOS 'spawn' start method. `opts` is `{"face_verify": bool,
+    "caption_model": Optional[str]}`. Returns (entry, updated_bool)."""
+    entry, opts = args
+    face_verify = bool(opts.get("face_verify"))
+    caption_model = opts.get("caption_model")
     if not _entry_needs_climax(entry):
         return entry, False
 
@@ -358,7 +464,8 @@ def _annotate_one_entry(args):
     fps = entry.get('fps') or 0.0
     duration_sec = entry.get('duration_sec') or 0.0
     video_path = entry.get('video_path')
-    if face_verify and video_path and Path(video_path).exists():
+    needs_decode = face_verify or bool(caption_model)
+    if needs_decode and video_path and Path(video_path).exists():
         cap = cv2.VideoCapture(str(video_path))
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS) or fps
@@ -383,6 +490,7 @@ def _annotate_one_entry(args):
             cap, fps, 0, entry['identified_tasks'], duration_sec,
             bystander_detections=entry.get('bystander_detections'),
             face_verify=face_verify and cap is not None,
+            vlm_model=caption_model if cap is not None else None,
         )
         return entry, True
     finally:
@@ -400,13 +508,29 @@ class TaskClimaxPipeline:
 
     def __init__(self, manifest_path, force: bool = False,
                  workers: Optional[int] = None, face_verify: Optional[bool] = None,
-                 entry_filter: Optional[Callable[[dict], bool]] = None):
+                 entry_filter: Optional[Callable[[dict], bool]] = None,
+                 action_captions: Optional[bool] = None):
         self.manifest_path = Path(manifest_path)
         self.force = force
         self.workers = max(1, int(workers)) if workers else 1
         self.face_verify = FACE_VERIFY if face_verify is None else face_verify
         self.entry_filter = entry_filter
         self.error_log_path = self.manifest_path.parent / "02b_task_climax_errors.json"
+        # Action captions (docs/06 Issue 1): resolve the caption VLM from the
+        # central tier registry. Degrades to no-captions (logged) if the
+        # registry/vlm_client are unavailable — never blocks the annotation.
+        if action_captions is None:
+            action_captions = ACTION_CAPTIONS
+        self.caption_model = None
+        if action_captions:
+            if get_model is None or ollama_chat is None:
+                print("[02b] action captions requested but models_config/vlm_client "
+                      "unavailable — captions skipped.")
+            else:
+                try:
+                    self.caption_model = get_model("filtering_vlm")
+                except Exception as e:
+                    print(f"[02b] caption model resolution failed ({e}) — captions skipped.")
 
     def _log_error(self, video_id, error):
         errors = []
@@ -442,7 +566,8 @@ class TaskClimaxPipeline:
             print("[02b] nothing to do (all tasks annotated).")
             return 0
 
-        args = [(entries[i], self.face_verify) for i in todo]
+        args = [(entries[i], {"face_verify": self.face_verify,
+                              "caption_model": self.caption_model}) for i in todo]
         updated = 0
 
         def _checkpoint():
@@ -488,12 +613,17 @@ if __name__ == "__main__":
     ap.add_argument("--workers", type=int,
                     default=int(os.getenv("SR_CLIMAX_WORKERS", "0")) or max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--no-face-verify", action="store_true",
-                    help="Skip the per-segment BlazeFace verification (pure manifest pass, no decode).")
+                    help="Skip the per-segment BlazeFace verification.")
+    ap.add_argument("--no-captions", action="store_true",
+                    help="Skip the per-segment VLM action captions (docs/06 Issue 1). "
+                         "Captions need a running ollama server and dominate 02b "
+                         "runtime (~2-5s/segment, serialized by the single GPU).")
     ap.add_argument("--force", action="store_true",
                     help="Re-annotate entries that already have task_temporal_metadata.")
     a = ap.parse_args()
     t0 = time.time()
     pipe = TaskClimaxPipeline(a.manifest, force=a.force, workers=a.workers,
-                              face_verify=not a.no_face_verify)
+                              face_verify=not a.no_face_verify,
+                              action_captions=not a.no_captions)
     n = pipe.run()
     print(f"[02b] annotated {n} entries with {a.workers} workers in {time.time()-t0:.0f}s -> {a.manifest}")

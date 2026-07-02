@@ -93,8 +93,8 @@ def expand_task_segments(tasks: Iterable[dict]) -> Iterator[dict]:
 
 def populate_climax_for_manifest(
     manifest_path: Path,
-    vlm_model: Optional[str] = None,   # deprecated (flow-era) — accepted, ignored
-    skip_vlm: bool = False,            # deprecated (flow-era) — accepted, ignored
+    vlm_model: Optional[str] = None,
+    skip_vlm: bool = False,
     workers: Optional[int] = None,
     entry_filter: Optional[Callable[[dict], bool]] = None,
 ) -> int:
@@ -104,7 +104,14 @@ def populate_climax_for_manifest(
     manifest that was not explicitly pre-annotated; the supported production
     path is running Layer 02b first (`python -m layer_02b_task_climax.pipeline`),
     after which this is a cheap no-op. Returns the number of entries updated.
+
+    `vlm_model`/`skip_vlm` keep their flow-era signature, repurposed for the
+    02b action-caption pass (docs/06 Issue 1): captions run only when a caller
+    explicitly passes `skip_vlm=False` AND a `vlm_model`. Every pre-existing
+    caller passes `skip_vlm=True`, so the lazy path NEVER makes VLM calls (a
+    Layer 03 run must not block on an absent ollama server).
     """
     return TaskClimaxPipeline(
         manifest_path, workers=workers, entry_filter=entry_filter,
+        action_captions=bool(vlm_model) and not skip_vlm,
     ).run()
