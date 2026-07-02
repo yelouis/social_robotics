@@ -68,26 +68,64 @@ def iter_reaction_windows(task: dict) -> Iterator[Tuple[float, list]]:
             yield meta.get('task_climax_sec', (w[0] + w[1]) / 2.0), w
 
 
-def expand_task_segments(tasks: Iterable[dict]) -> Iterator[dict]:
+def expand_task_segments(tasks: Iterable[dict],
+                         include_controls: bool = True) -> Iterator[dict]:
     """Yield one shallow-copied 'pseudo-task' per reaction segment, each carrying
     a *single-window* `task_temporal_metadata`, so an existing per-task loop
     becomes per-segment with no restructuring — replace `for task in tasks:` with
     `for task in expand_task_segments(tasks):` and the body is unchanged. Each
     yielded task keeps all original fields (`task_id`, `task_start_sec`,
-    `task_velocity`, …) and adds `segment_index` / `n_segments`. A task whose
-    range produced no usable reaction window yields nothing (correctly skipped)."""
+    `task_velocity`, …) and adds `segment_index` / `n_segments` / `is_control`.
+    A task whose range produced no usable reaction window yields nothing
+    (correctly skipped).
+
+    **Control-segment contract (docs/06 Issue 3)**: Layer 02b appends flagged
+    negative segments (`is_control: true`) after the real ones. They are
+    yielded BY DEFAULT — a control must be measured by the 03x layers for its
+    "no reaction" label to be real — and every pseudo-task carries `is_control`
+    (+ `control_type`) so a layer *may* opt out per segment. Pass
+    `include_controls=False` to skip them wholesale; `segment_index` is always
+    the segment's ORIGINAL index in `reaction_segments`, so result rows stay
+    join-aligned with the manifest either way."""
     for task in tasks:
-        windows = list(iter_reaction_windows(task))
-        n = len(windows)
-        for i, (climax_sec, window) in enumerate(windows):
+        meta = task.get('task_temporal_metadata') or {}
+        segments = meta.get('reaction_segments')
+        if segments is None:
+            # Legacy single-window metadata: one pseudo-task, never a control.
+            w = meta.get('task_reaction_window_sec')
+            if not (w and len(w) == 2):
+                continue
             pseudo = dict(task)
-            base_meta = dict(task.get('task_temporal_metadata') or {})
-            base_meta.pop('reaction_segments', None)  # collapse to a single-window view
-            base_meta['task_reaction_window_sec'] = window
-            base_meta['task_climax_sec'] = climax_sec
+            base_meta = dict(meta)
+            base_meta['task_climax_sec'] = meta.get('task_climax_sec', (w[0] + w[1]) / 2.0)
             pseudo['task_temporal_metadata'] = base_meta
-            pseudo['segment_index'] = i
+            pseudo['segment_index'] = 0
+            pseudo['n_segments'] = 1
+            pseudo['is_control'] = False
+            yield pseudo
+            continue
+
+        picked = []
+        for i, s in enumerate(segments):
+            w = s.get('task_reaction_window_sec')
+            if not (w and len(w) == 2):
+                continue
+            if not include_controls and s.get('is_control'):
+                continue
+            picked.append((i, s, w))
+        n = len(picked)
+        for i, s, w in picked:
+            pseudo = dict(task)
+            base_meta = dict(meta)
+            base_meta.pop('reaction_segments', None)  # collapse to a single-window view
+            base_meta['task_reaction_window_sec'] = w
+            base_meta['task_climax_sec'] = s.get('task_climax_sec', (w[0] + w[1]) / 2.0)
+            pseudo['task_temporal_metadata'] = base_meta
+            pseudo['segment_index'] = i          # ORIGINAL index — join-aligned
             pseudo['n_segments'] = n
+            pseudo['is_control'] = bool(s.get('is_control'))
+            if s.get('control_type'):
+                pseudo['control_type'] = s['control_type']
             yield pseudo
 
 

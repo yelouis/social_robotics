@@ -34,6 +34,7 @@ def _entry(vid="v1", n_tasks=1):
 def _pipe(man, **kw):
     kw.setdefault("face_verify", False)
     kw.setdefault("action_captions", False)
+    kw.setdefault("control_segments", False)
     return TaskClimaxPipeline(man, **kw)
 
 
@@ -144,6 +145,91 @@ def test_caption_off_on_lazy_path(monkeypatch):
                                   vlm_model="qwen-test", skip_vlm=True)
     assert called == []
     assert "segment_action_caption" not in task["task_temporal_metadata"]["reaction_segments"][0]
+
+
+# --- control (negative) segments (docs/06 Issue 3) ---
+from shared.climax_extraction import expand_task_segments  # noqa: E402
+
+
+def _control_task():
+    """One CONTINUOUS cluster (10-40 s, 2 s cadence; tall boxes early so the
+    climax lands near the start and the far end qualifies as a
+    present_unreactive anchor) + a long empty gap (40-200 s) + a second
+    cluster (200-204 s)."""
+    ts = [10.0 + 2 * i for i in range(16)]          # 10..40
+    heights = [300] * 3 + [50] * 13
+    dets = [{"timestamps_sec": ts,
+             "bounding_boxes": [[0, 0, 50, h] for h in heights]},
+            {"timestamps_sec": [200.0, 202.0, 204.0],
+             "bounding_boxes": [[0, 0, 50, 100]] * 3}]
+    task = {"task_id": "t1", "task_label": "x", "task_start_sec": 0.0,
+            "task_end_sec": 300.0, "task_temporal_metadata": {}}
+    return task, dets
+
+
+def test_controls_emitted_and_flagged():
+    task, dets = _control_task()
+    compute_task_climax_for_video(None, 30.0, 0, [task], 300.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=True)
+    meta = task["task_temporal_metadata"]
+    segs = meta["reaction_segments"]
+    controls = [s for s in segs if s.get("is_control")]
+    real = [s for s in segs if not s.get("is_control")]
+    assert meta["n_control_segments"] == len(controls) >= 2
+    types = {c["control_type"] for c in controls}
+    assert "present_unreactive" in types and "no_audience" in types
+    # controls are APPENDED (index alignment): all real segments come first
+    assert segs[:len(real)] == real
+    # present_unreactive anchor is far from its cluster's chosen climax
+    pu = next(c for c in controls if c["control_type"] == "present_unreactive")
+    real_climaxes = [s["task_climax_sec"] for s in real]
+    assert all(abs(pu["task_climax_sec"] - cx) >= 10.0 for cx in real_climaxes
+               if pu["bystander_cluster_sec"][0] <= cx <= pu["bystander_cluster_sec"][1])
+    # no_audience window has no detection within the clearance
+    na = next(c for c in controls if c["control_type"] == "no_audience")
+    w = na["task_reaction_window_sec"]
+    all_ts = [t for tr in dets for t in tr["timestamps_sec"]]
+    assert not any(w[0] - 5.0 <= t <= w[1] + 5.0 for t in all_ts)
+
+
+def test_primary_mirror_excludes_controls():
+    task, dets = _control_task()
+    compute_task_climax_for_video(None, 30.0, 0, [task], 300.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=True)
+    meta = task["task_temporal_metadata"]
+    reals = [s for s in meta["reaction_segments"] if not s.get("is_control")]
+    assert meta["task_climax_sec"] in [s["task_climax_sec"] for s in reals]
+    assert meta["climax_extraction_method"] == "bbox_kernel_peak"
+
+
+def test_controls_can_be_disabled():
+    task, dets = _control_task()
+    compute_task_climax_for_video(None, 30.0, 0, [task], 300.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False)
+    meta = task["task_temporal_metadata"]
+    assert meta["n_control_segments"] == 0
+    assert not any(s.get("is_control") for s in meta["reaction_segments"])
+
+
+def test_expand_yields_controls_with_original_index():
+    task, dets = _control_task()
+    compute_task_climax_for_video(None, 30.0, 0, [task], 300.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=True)
+    segs = task["task_temporal_metadata"]["reaction_segments"]
+    pseudos = list(expand_task_segments([task]))
+    assert len(pseudos) == len(segs)                      # controls included by default
+    assert [p["segment_index"] for p in pseudos] == list(range(len(segs)))
+    assert [p["is_control"] for p in pseudos] == [bool(s.get("is_control")) for s in segs]
+
+    # include_controls=False: controls skipped, ORIGINAL indexes preserved
+    no_ctrl = list(expand_task_segments([task], include_controls=False))
+    assert all(not p["is_control"] for p in no_ctrl)
+    expected_idx = [i for i, s in enumerate(segs) if not s.get("is_control")]
+    assert [p["segment_index"] for p in no_ctrl] == expected_idx
 
 
 # --- 03a segment-restrict (C') ---

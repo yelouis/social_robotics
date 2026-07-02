@@ -117,6 +117,24 @@ FACE_VERIFY_CANDIDATES = int(os.getenv("SR_02B_FACE_VERIFY_CANDIDATES", "3"))
 FACE_DETECT_CONF = 0.5
 CROP_PAD_PX = 20           # same bbox pad as shared/face_quality_prefilter.py
 
+# --- Control (negative) segments (docs/06 Issue 3; env-overridable) ---
+# Without negatives the dataset is all-positive and a reward model/benchmark
+# degenerates to "always predict a social reaction". Two kinds are emitted,
+# flagged `is_control: true` and APPENDED after the real segments (so
+# segment_index alignment with every layer's result rows is preserved):
+#   present_unreactive — inside a bystander cluster but far from its climax
+#                        (bystander there, no anchored social moment);
+#   no_audience        — from the spans between clusters with no bystander
+#                        within the clearance (wearer acting, nobody watching).
+# Controls are measured by the 03x layers like any segment — that measurement
+# IS the negative label.
+CONTROL_SEGMENTS = os.getenv("SR_02B_CONTROL_SEGMENTS", "1").lower() in ("1", "true", "yes")
+CONTROL_MAX_PRESENT = 2            # present_unreactive cap per task
+CONTROL_MAX_NO_AUDIENCE = 1        # no_audience cap per task
+CONTROL_MIN_CLIMAX_SEPARATION_SEC = 10.0   # present_unreactive: min distance from the cluster's climax
+CONTROL_MIN_GAP_SEC = 30.0                 # no_audience: min bystander-free gap
+CONTROL_CLEARANCE_SEC = 5.0                # no_audience: no detection within this of the window
+
 # --- Per-segment action captions (docs/06 Issue 1; env-overridable) ---
 # Captions run only on the EXPLICIT pipeline path (CLI / TaskClimaxPipeline):
 # the lazy back-compat wrapper's callers all pass skip_vlm=True, so a Layer 03
@@ -344,6 +362,43 @@ def _caption_segment(cap, climax_sec: float, task_label: str,
         return None
 
 
+def _present_unreactive_controls(clusters, chosen_climaxes, dets) -> List[Tuple[float, list]]:
+    """Type-(a) controls: for each cluster, the detection timestamp FARTHEST
+    from that cluster's chosen climax (>= CONTROL_MIN_CLIMAX_SEPARATION_SEC away).
+    Returns up to CONTROL_MAX_PRESENT `(anchor_t, cluster)` picks, farthest first."""
+    picks = []
+    for (cs, ce, n), climax in zip(clusters, chosen_climaxes):
+        cands = [t for t, _, _ in dets if cs <= t <= ce]
+        if not cands:
+            continue
+        far_t = max(cands, key=lambda t: abs(t - climax))
+        if abs(far_t - climax) >= CONTROL_MIN_CLIMAX_SEPARATION_SEC:
+            picks.append((far_t, [cs, ce, n]))
+    picks.sort(key=lambda p: -abs(p[0] - p[1][0]))  # widest separation first
+    return picks[:CONTROL_MAX_PRESENT]
+
+
+def _no_audience_controls(clusters, dets, start_sec, end_sec) -> List[float]:
+    """Type-(b) controls: the midpoint of the largest bystander-free gap
+    (>= CONTROL_MIN_GAP_SEC) between clusters / task edges, verified to have no
+    detection within CONTROL_CLEARANCE_SEC of the window span."""
+    bounds = [start_sec] + [b for cs, ce, _ in clusters for b in (cs, ce)] + [end_sec]
+    gaps = [(bounds[i], bounds[i + 1]) for i in range(0, len(bounds) - 1, 2)]
+    gaps = [(a, b) for a, b in gaps if (b - a) >= CONTROL_MIN_GAP_SEC]
+    gaps.sort(key=lambda g: -(g[1] - g[0]))
+    det_ts = [t for t, _, _ in dets]
+    out = []
+    for a, b in gaps:
+        mid = (a + b) / 2.0
+        w_lo = mid - WINDOW_PRE_SEC - CONTROL_CLEARANCE_SEC
+        w_hi = mid + WINDOW_POST_SEC + CONTROL_CLEARANCE_SEC
+        if not any(w_lo <= t <= w_hi for t in det_ts):
+            out.append(mid)
+        if len(out) >= CONTROL_MAX_NO_AUDIENCE:
+            break
+    return out
+
+
 def compute_task_climax_for_video(
     cap,
     fps: float,
@@ -354,6 +409,7 @@ def compute_task_climax_for_video(
     vlm_model: Optional[str] = None,   # caption model (docs/06 Issue 1); None = no captions
     skip_vlm: bool = False,            # True disables ALL VLM work (captions)
     face_verify: Optional[bool] = None,
+    control_segments: Optional[bool] = None,
 ) -> None:
     """Populate `task_temporal_metadata` on each task in-place. Tasks that
     already have non-empty metadata are skipped, so this stays safe to invoke
@@ -367,6 +423,8 @@ def compute_task_climax_for_video(
     correctly disables captions on the lazy/back-compat path."""
     if face_verify is None:
         face_verify = FACE_VERIFY
+    if control_segments is None:
+        control_segments = CONTROL_SEGMENTS
     verifier = _FaceVerifier() if face_verify else None
     do_verify = bool(verifier and verifier.available and cap is not None)
     do_caption = bool(vlm_model and not skip_vlm and ollama_chat is not None
@@ -387,7 +445,16 @@ def compute_task_climax_for_video(
         clusters = clusters[:CLIMAX_MAX_SEGMENTS]
         clusters.sort(key=lambda c: c[0])                 # back to chronological order
 
+        def _finish_segment(seg, climax_sec):
+            if do_caption:
+                caption = _caption_segment(cap, climax_sec,
+                                           task.get('task_label', 'unknown'), vlm_model)
+                if caption is not None:
+                    seg["segment_action_caption"] = caption
+            return seg
+
         segments: List[dict] = []
+        produced: List[Tuple[list, float]] = []   # (cluster, chosen_climax) for controls
         for cs, ce, n in clusters:
             cluster_dets = [(t, h, bb) for t, h, bb in dets if cs <= t <= ce]
             if not cluster_dets:
@@ -416,21 +483,62 @@ def compute_task_climax_for_video(
             }
             if face_px:
                 seg["segment_face_conf"] = face_conf
-            if do_caption:
-                caption = _caption_segment(cap, climax_sec,
-                                           task.get('task_label', 'unknown'), vlm_model)
-                if caption is not None:
-                    seg["segment_action_caption"] = caption
-            segments.append(seg)
+            segments.append(_finish_segment(seg, climax_sec))
+            produced.append(([cs, ce, n], climax_sec))
+
+        n_real = len(segments)
+
+        # Control (negative) segments — docs/06 Issue 3. APPENDED after the
+        # real segments so segment_index alignment is stable everywhere.
+        if control_segments:
+            used_clusters = [c for c, _ in produced]
+            chosen_climaxes = [cx for _, cx in produced]
+            for anchor_t, cl in _present_unreactive_controls(
+                    used_clusters, chosen_climaxes, dets):
+                face_px, face_conf = 0, 0.0
+                if do_verify:
+                    near = [(t, h, bb) for t, h, bb in dets
+                            if abs(t - anchor_t) <= KERNEL_SUPPORT_SEC]
+                    chosen = _verify_candidates(cap, fps, [(0.0, anchor_t)],
+                                                near or dets, verifier)
+                    if chosen is not None:
+                        _, face_px, face_conf = chosen
+                seg = {
+                    "task_climax_sec": round(anchor_t, 2),
+                    "task_reaction_window_sec": _straddle_window(anchor_t, duration_sec),
+                    "climax_extraction_method": "control_present_unreactive",
+                    "is_control": True,
+                    "control_type": "present_unreactive",
+                    "segment_face_px": int(face_px),
+                    "bystander_cluster_sec": [round(cl[0], 2), round(cl[1], 2)],
+                    "cluster_detection_count": int(cl[2]),
+                }
+                if face_px:
+                    seg["segment_face_conf"] = face_conf
+                segments.append(_finish_segment(seg, anchor_t))
+            for anchor_t in _no_audience_controls(used_clusters, dets, start_sec, end_sec):
+                seg = {
+                    "task_climax_sec": round(anchor_t, 2),
+                    "task_reaction_window_sec": _straddle_window(anchor_t, duration_sec),
+                    "climax_extraction_method": "control_no_audience",
+                    "is_control": True,
+                    "control_type": "no_audience",
+                    "segment_face_px": 0,
+                    "cluster_detection_count": 0,
+                }
+                segments.append(_finish_segment(seg, anchor_t))
 
         meta = {
             "reaction_segments": segments,
             "n_reaction_segments": len(segments),
+            "n_control_segments": len(segments) - n_real,
         }
-        if segments:
-            # Mirror the densest segment at the top level so any legacy
-            # single-window reader still gets a sensible (bystander-aligned) window.
-            primary = max(segments, key=lambda s: s["cluster_detection_count"])
+        real = segments[:n_real]
+        if real:
+            # Mirror the densest REAL segment at the top level so any legacy
+            # single-window reader still gets a sensible (bystander-aligned,
+            # non-control) window.
+            primary = max(real, key=lambda s: s["cluster_detection_count"])
             meta["task_climax_sec"] = primary["task_climax_sec"]
             meta["task_reaction_window_sec"] = primary["task_reaction_window_sec"]
             meta["climax_extraction_method"] = primary["climax_extraction_method"]
@@ -451,6 +559,7 @@ def _annotate_one_entry(args):
     entry, opts = args
     face_verify = bool(opts.get("face_verify"))
     caption_model = opts.get("caption_model")
+    control_segments = opts.get("control_segments")
     if not _entry_needs_climax(entry):
         return entry, False
 
@@ -491,6 +600,7 @@ def _annotate_one_entry(args):
             bystander_detections=entry.get('bystander_detections'),
             face_verify=face_verify and cap is not None,
             vlm_model=caption_model if cap is not None else None,
+            control_segments=control_segments,
         )
         return entry, True
     finally:
@@ -509,11 +619,13 @@ class TaskClimaxPipeline:
     def __init__(self, manifest_path, force: bool = False,
                  workers: Optional[int] = None, face_verify: Optional[bool] = None,
                  entry_filter: Optional[Callable[[dict], bool]] = None,
-                 action_captions: Optional[bool] = None):
+                 action_captions: Optional[bool] = None,
+                 control_segments: Optional[bool] = None):
         self.manifest_path = Path(manifest_path)
         self.force = force
         self.workers = max(1, int(workers)) if workers else 1
         self.face_verify = FACE_VERIFY if face_verify is None else face_verify
+        self.control_segments = CONTROL_SEGMENTS if control_segments is None else control_segments
         self.entry_filter = entry_filter
         self.error_log_path = self.manifest_path.parent / "02b_task_climax_errors.json"
         # Action captions (docs/06 Issue 1): resolve the caption VLM from the
@@ -567,7 +679,8 @@ class TaskClimaxPipeline:
             return 0
 
         args = [(entries[i], {"face_verify": self.face_verify,
-                              "caption_model": self.caption_model}) for i in todo]
+                              "caption_model": self.caption_model,
+                              "control_segments": self.control_segments}) for i in todo]
         updated = 0
 
         def _checkpoint():
@@ -617,13 +730,16 @@ if __name__ == "__main__":
     ap.add_argument("--no-captions", action="store_true",
                     help="Skip the per-segment VLM action captions (docs/06 Issue 1). "
                          "Captions need a running ollama server and dominate 02b "
-                         "runtime (~2-5s/segment, serialized by the single GPU).")
+                         "runtime (~12s/segment cold, serialized by the single GPU).")
+    ap.add_argument("--no-controls", action="store_true",
+                    help="Skip the control (negative) segments (docs/06 Issue 3).")
     ap.add_argument("--force", action="store_true",
                     help="Re-annotate entries that already have task_temporal_metadata.")
     a = ap.parse_args()
     t0 = time.time()
     pipe = TaskClimaxPipeline(a.manifest, force=a.force, workers=a.workers,
                               face_verify=not a.no_face_verify,
-                              action_captions=not a.no_captions)
+                              action_captions=not a.no_captions,
+                              control_segments=not a.no_controls)
     n = pipe.run()
     print(f"[02b] annotated {n} entries with {a.workers} workers in {time.time()-t0:.0f}s -> {a.manifest}")

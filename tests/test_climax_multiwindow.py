@@ -156,7 +156,8 @@ def test_compute_emits_one_segment_per_cluster():
     task = {"task_id": "t1", "task_start_sec": 0.0, "task_end_sec": dur,
             "task_velocity": "medium", "task_temporal_metadata": {}}
     compute_task_climax_for_video(None, fps, 0, [task], dur,
-                                  bystander_detections=dets, face_verify=False)
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False)
     meta = task["task_temporal_metadata"]
     segs = meta["reaction_segments"]
     assert len(segs) == 2                       # one segment per cluster
@@ -181,7 +182,8 @@ def test_compute_no_bystander_yields_no_segments():
     task = {"task_id": "t1", "task_start_sec": 0.0, "task_end_sec": dur,
             "task_velocity": "medium", "task_temporal_metadata": {}}
     compute_task_climax_for_video(None, fps, 0, [task], dur,
-                                  bystander_detections=[], face_verify=False)
+                                  bystander_detections=[], face_verify=False,
+                                  control_segments=False)
     meta = task["task_temporal_metadata"]
     assert meta["reaction_segments"] == []
     assert meta["climax_extraction_method"] == "no_bystander_cluster_in_task"
@@ -195,7 +197,8 @@ def test_compute_caps_segments():
     task = {"task_id": "t1", "task_start_sec": 0.0, "task_end_sec": dur,
             "task_velocity": "medium", "task_temporal_metadata": {}}
     compute_task_climax_for_video(None, fps, 0, [task], dur,
-                                  bystander_detections=dets, face_verify=False)
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False)
     assert len(task["task_temporal_metadata"]["reaction_segments"]) == CLIMAX_MAX_SEGMENTS
 
 
@@ -218,4 +221,6 @@ def test_shared_wrapper_accepts_flow_era_kwargs():
     compute_via_shared(None, 30.0, 0, [task], 60.0,
                        bystander_detections=[_track([1.0, 2.0, 3.0], [100, 100, 100])],
                        skip_vlm=True, vlm_model=None, face_verify=False)
-    assert task["task_temporal_metadata"]["n_reaction_segments"] == 1
+    segs = task["task_temporal_metadata"]["reaction_segments"]
+    # 1 real segment; the wrapper's defaults may add flagged controls on top.
+    assert sum(1 for s in segs if not s.get("is_control")) == 1
