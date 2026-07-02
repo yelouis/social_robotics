@@ -9,7 +9,7 @@ The corpus carries **no action tokens**, so it cannot feed a VLA policy via beha
 
 Plus a two-tier **benchmark**: Tier 1 = social *perception* (held-out segments → questions scored against layer labels); Tier 2 = social *outcome prediction* (context + action shown, model predicts the bystander's reaction before the window is revealed).
 
-The issues below are the pipeline changes needed to curate the right data for those goals. **Issues 1–3 are decided and sequenced** (July 2): implement #1 first, then #2, then #3 — ideally all three before the full-991 Layer-02b re-annotation so one pass over the corpus produces captioned, control-balanced, joinable segments. Issues 4–6 are pending review.
+The issues below are the pipeline changes needed to curate the right data for those goals. **Issues 1, 2, 3 and 5 are implemented** (July 2 — see Resolved below), in time for the full-991 Layer-02b re-annotation to produce captioned, control-balanced, wearer-featured, joinable segments in one pass. **Issues 4 and 6 are deferred by selection** (kept below with the user's decisions recorded).
 
 ---
 
@@ -27,6 +27,26 @@ The issues below are the pipeline changes needed to curate the right data for th
    - **Problem**: Layer 02b sampled **only bystander-dense moments** by design, so the dataset was all-positive — a reward model or benchmark built on it degenerates to "always predict a social reaction". Verified structurally: every emitted segment came from a qualifying bystander cluster.
    - **Solution** (Option A, selected July 2): Layer 02b now emits flagged control segments (`is_control: true`, `control_type`), **appended after** the real segments so `segment_index` alignment with every layer's result rows and the Layer-04 join is preserved. Two kinds: *present_unreactive* — the detection farthest (≥ 10 s) from its cluster's chosen climax, capped at 2/task, face-verified like a real segment; *no_audience* — the midpoint of the largest bystander-free gap (≥ 30 s) between clusters/task edges, verified to have no detection within 5 s of the window, capped at 1/task. Both receive Issue-1 action captions (a negative item still needs its "action" half). The top-level single-window mirror selects from **real segments only**; a task with no real cluster keeps `no_bystander_cluster_in_task` while still contributing its no-audience control. **Consumption contract** (`shared.climax_extraction.expand_task_segments`): controls are yielded **by default** — they must be measured by the 03x layers for the "no reaction" label to be real — with every pseudo-task now carrying `is_control`/`control_type` so a layer may opt out per segment, and an `include_controls=False` parameter to skip them wholesale; `segment_index` is always the segment's ORIGINAL index in `reaction_segments`, so result rows stay join-aligned either way. Disable at annotation time via `--no-controls` / `SR_02B_CONTROL_SEGMENTS=0`. Validated on 8 real clips: 281 real + 58 present_unreactive + 10 no_audience (2–3 controls/task, ≈ the projected ~30 % measurement overhead); the Issue-2 segment dataset picks up `is_control` with no changes. Suite 233/233.
 
+4. **Wearer pseudo-action features + ambiguity taxonomy (Resolved - July 2)**:
+   - **Problem**: The latent-action VLA route needs the WEARER's side of each segment — hands and ego-motion — recorded at annotation time; deferring it would mean a second 991-scale decode later purely to add these fields. Additionally (per the user's selection note), the corpus contains segments where the wearer's action and/or the outcome is inherently ambiguous — e.g. the wearer is just chatting — and nothing routed those cases explicitly.
+   - **Solution** (Option A, selected July 2): Two additive per-segment fields in Layer 02b (`SR_02B_WEARER_FEATURES`, default on): `wearer_hand_detections` — Node-02's wearer `hand_detections` re-cut to the wearer-action span `[climax−2 s, climax+1 s]`, manifest-only; and `wearer_egomotion_proxy` (`{mean_frame_diff, peak_frame_diff, span_sec}`) — downscaled global frame-diff at 2 Hz over the same span, decode-gated and best-effort (named a *proxy* because global diff conflates large bystander motion). The third proposed feature — 03f's ego-kinetic score re-cut to windows — was already satisfied by Issue 2's `segment_index` fix (`ego_kinetic_chaos_score` now joins per segment). The segment dataset surfaces `wearer_n_hand_detections` / `wearer_egomotion_mean` / `wearer_egomotion_peak` per row. The requested **ambiguity brainstorm** is documented as the "Ambiguity taxonomy & routing" section below and is encoded in the pipeline where cheap (caption sentinels; control flags; confidence-gated QA). Suite 236/236.
+
+## Ambiguity taxonomy & routing (Issue-5 brainstorm, July 2)
+
+Cases where the wearer's action and/or the bystander outcome is uncertain, what the pipeline records for each, and where the item may be used. **Key**: RM = social reward model, QA = VQA co-training pairs, T1/T2 = benchmark Tier 1 (perception) / Tier 2 (outcome prediction).
+
+| # | Case | How it shows up in the data | Route |
+|---|---|---|---|
+| 1 | **Conversation only** — wearer is just chatting, no discrete physical action | `segment_action_caption = "conversation"` (prompt sentinel) | QA + T1 (conversational attention/gesture reading is real signal); **exclude from RM/T2** — there is no discrete action for the reaction to be an outcome *of* |
+| 2 | **Indeterminate action** — motion blur, action off-frame, mid-transition | `segment_action_caption = "unclear"` | T1 only (if a face is present); exclude from QA/RM/T2 — an item whose action half is unknown teaches nothing about action→reaction |
+| 3 | **Reaction attribution confound** — bystander reacts to a third party / phone / another event, not the wearer | Not directly detectable; mitigated by control baselines (Issue 3) and, for eval items, human verification (Issue 4) | RM learns it as label noise (acceptable in bulk); **T2 eval items must be human-verified** |
+| 4 | **Continuous companionship** — walking/hiking together; no discrete climax exists, the kernel picks an arbitrary sustained-proximity moment | Caption is a locomotion phrase ("walks alongside others"); low per-channel deltas | QA + T1 as *steady-state* social context; weak for RM/T2 (outcome ≈ context) |
+| 5 | **Direction inversion** — the BYSTANDER acted first and the wearer is the reactor | Partially visible because windows straddle the climax (−1 s side); not separable without bystander-action detection | Known limitation — recorded here; revisit only if a bystander-action captioning pass is ever added |
+| 6 | **No-audience control with unclear wearer action** | `is_control + control_type=no_audience` AND caption sentinel | Drop from training entirely; keep in the export (it documents the sampling) |
+| 7 | **Masked/occluded faces** (common in this corpus) | `segment_face_px = 0` or low; emotion/gesture channels null with reasons | RM/QA on the surviving channels (proxemics, motor resonance); face-dependent QA/T1 items are gated out by `segment_face_px` automatically |
+
+Practical rule encoded downstream: the QA renderer (Issue 2) already skips low-confidence channels and contextualizes with the caption only when it is not a sentinel; RM/T2 dataset builders should additionally filter `segment_action_caption NOT IN ('conversation','unclear')` and `is_control` appropriately per the table.
+
 ## ⚠️ Unresolved Issues & Suggestions
 
 ---
@@ -35,7 +55,7 @@ The issues below are the pipeline changes needed to curate the right data for th
 
 ---
 
-### Issue 4: Human-verified eval split (pending review)
+### Issue 4: Human-verified eval split (deferred July 2 — build when the benchmark stage arrives; selection below binds the design: Option A contact-sheets, generated via the rehydrator so a GitHub collaborator without local videos can review)
 **In one sentence**: our labels are model-generated, which is fine for training bulk but not for a citable public benchmark — the test split needs a human to confirm each item.
 
 **What it looks like**: after Issues 1–3, export candidate eval items (a few hundred), review them in one sitting, store a `human_verified: true/false` verdict that Layer 04 carries into the benchmark export.
@@ -52,24 +72,9 @@ Your selection: Yes, lets build this but I currently do not have the time to rev
 
 ---
 
-### Issue 5: Wearer pseudo-action features (pending review)
-**In one sentence**: for the latent-action VLA route, each segment should also record what the **wearer** did — hands and ego-motion — so (observation, action, outcome) tuples can be built later without re-decoding the corpus.
-
-**What it looks like**: three additive per-segment fields — wearer hand trajectories (Node 02 already emits `hand_detections`; just re-cut to the window), an ego-motion summary over `[climax−2 s, climax+1 s]`, and 03f's ego-kinetic features re-cut to segment windows.
-
-**Option A**: **Small additive fields now** (in 02b/03f) so the 991 pass captures them.
-  - *Pros*: Cheap (data mostly exists); avoids a second full-corpus decode later.
-  - *Cons*: Speculative — schema chosen before the latent-action model that will consume it.
-
-**Option B**: **Defer** until a latent-action approach is actually selected.
-  - *Pros*: No speculative schema.
-  - *Cons*: A future 991-scale re-decode just to add these fields.
-
-Your selection: Proceed with Option A. However, brainstorm the cases where we are unsure what the action in that clip was doing and what the outcome was. Maybe the person was just chatting in that clip.
-
 ---
 
-### Issue 6: Split hygiene + richness metadata (pending review)
+### Issue 6: Split hygiene + richness metadata (deferred July 2 — revisit after the 991 run completes; user leaning Option B)
 **In one sentence**: decide train/val/test membership **per clip (ideally per wearer) now, before more data is published** — segment-level splits would leak (the same wearer/scene on both sides) — and score each segment's "richness" so training mixes can be balanced.
 
 **What it looks like**: a one-shot tool stamps each manifest entry with `benchmark_split: train|val|test` (grouped by Ego4D wearer/scenario metadata so no wearer straddles splits), and Layer 04 computes a per-segment `richness` count (#channels with confident signal) used for balanced sampling and for targeting future acquisition (current labels skew heavily to cards/screens/walking).

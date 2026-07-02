@@ -232,6 +232,45 @@ def test_expand_yields_controls_with_original_index():
     assert [p["segment_index"] for p in no_ctrl] == expected_idx
 
 
+# --- wearer pseudo-action features (docs/06 Issue 5) ---
+def test_wearer_hands_recut_to_span():
+    task, dets = _captionable_task()
+    hands = [{"timestamp_sec": 9.5, "hand_boxes": [[0, 0, 10, 10]]},   # in span (climax~11 ±[-2,+1])
+             {"timestamp_sec": 100.0, "hand_boxes": [[0, 0, 10, 10]]}]  # far away
+    compute_task_climax_for_video(None, 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False, hand_detections=hands,
+                                  wearer_features=True)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    got = seg["wearer_hand_detections"]
+    assert [h["timestamp_sec"] for h in got] == [9.5]
+    # no cap -> egomotion proxy absent, hands still recorded
+    assert "wearer_egomotion_proxy" not in seg
+
+
+def test_wearer_egomotion_proxy_with_cap():
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(_FakeCap(), 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False, hand_detections=[],
+                                  wearer_features=True)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    ego = seg["wearer_egomotion_proxy"]
+    assert ego["mean_frame_diff"] == 0.0          # uniform black fake frames
+    assert ego["span_sec"][0] < seg["task_climax_sec"] < ego["span_sec"][1]
+
+
+def test_wearer_features_can_be_disabled():
+    task, dets = _captionable_task()
+    compute_task_climax_for_video(None, 30.0, 0, [task], 60.0,
+                                  bystander_detections=dets, face_verify=False,
+                                  control_segments=False,
+                                  hand_detections=[{"timestamp_sec": 10.0}],
+                                  wearer_features=False)
+    seg = task["task_temporal_metadata"]["reaction_segments"][0]
+    assert "wearer_hand_detections" not in seg
+
+
 # --- 03a segment-restrict (C') ---
 def _annotated_tasks():
     return [{"task_id": "t0", "task_temporal_metadata": {"reaction_segments": [

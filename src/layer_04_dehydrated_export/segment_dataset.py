@@ -121,6 +121,7 @@ def build_segment_rows(manifest: list, results: Dict[str, Dict[str, dict]]) -> L
 
             for seg_idx, seg in enumerate(segments):
                 w = seg.get("task_reaction_window_sec") or [None, None]
+                ego = seg.get("wearer_egomotion_proxy") or {}
                 base = {
                     "video_id": video_id,
                     "task_id": task_id,
@@ -128,11 +129,18 @@ def build_segment_rows(manifest: list, results: Dict[str, Dict[str, dict]]) -> L
                     "task_label": task.get("task_label"),
                     "segment_action_caption": seg.get("segment_action_caption"),
                     "is_control": bool(seg.get("is_control", False)),
+                    "control_type": seg.get("control_type"),
                     "climax_sec": seg.get("task_climax_sec"),
                     "window_start_sec": w[0],
                     "window_end_sec": w[1],
                     "segment_face_px": seg.get("segment_face_px"),
                     "cluster_detection_count": seg.get("cluster_detection_count"),
+                    # Wearer pseudo-action features (docs/06 Issue 5).
+                    "wearer_n_hand_detections": (len(seg["wearer_hand_detections"])
+                                                 if seg.get("wearer_hand_detections") is not None
+                                                 else None),
+                    "wearer_egomotion_mean": ego.get("mean_frame_diff"),
+                    "wearer_egomotion_peak": ego.get("peak_frame_diff"),
                 }
 
                 # Per-layer segment rows (+ null reason when absent).

@@ -135,6 +135,19 @@ CONTROL_MIN_CLIMAX_SEPARATION_SEC = 10.0   # present_unreactive: min distance fr
 CONTROL_MIN_GAP_SEC = 30.0                 # no_audience: min bystander-free gap
 CONTROL_CLEARANCE_SEC = 5.0                # no_audience: no detection within this of the window
 
+# --- Wearer pseudo-action features (docs/06 Issue 5; env-overridable) ---
+# The latent-action VLA route needs the WEARER's side of each segment recorded
+# now, so (observation, pseudo-action, social outcome) tuples can be built
+# later without a second 991-scale decode: the wearer's hand detections
+# re-cut to a span around the climax (manifest-only) and a cheap ego-motion
+# proxy (downscaled global frame-diff — on egocentric footage global motion is
+# ego-motion dominated; named a *proxy* accordingly).
+WEARER_FEATURES = os.getenv("SR_02B_WEARER_FEATURES", "1").lower() in ("1", "true", "yes")
+WEARER_SPAN_PRE_SEC = 2.0    # wearer action precedes/spans the climax
+WEARER_SPAN_POST_SEC = 1.0
+EGOMOTION_SAMPLE_HZ = 2.0    # frame-diff sampling rate over the span
+EGOMOTION_DOWNSCALE = 0.25
+
 # --- Per-segment action captions (docs/06 Issue 1; env-overridable) ---
 # Captions run only on the EXPLICIT pipeline path (CLI / TaskClimaxPipeline):
 # the lazy back-compat wrapper's callers all pass skip_vlm=True, so a Layer 03
@@ -299,6 +312,52 @@ def _verify_candidates(cap, fps: float, candidates: List[Tuple[float, float]],
     return best
 
 
+def _wearer_hands_in_span(hand_detections, climax_sec: float) -> list:
+    """Node-02 wearer hand detections re-cut to the wearer-action span around
+    the climax. Manifest-only (no decode). Schema per item:
+    `{timestamp_sec, hand_boxes: [[x1,y1,x2,y2], …]}`."""
+    lo = climax_sec - WEARER_SPAN_PRE_SEC
+    hi = climax_sec + WEARER_SPAN_POST_SEC
+    return [h for h in (hand_detections or [])
+            if lo <= h.get("timestamp_sec", -1) <= hi]
+
+
+def _egomotion_proxy(cap, climax_sec: float, duration_sec: float) -> Optional[dict]:
+    """Cheap wearer ego-motion proxy over the wearer-action span: mean/peak
+    absolute frame-diff between consecutive samples at EGOMOTION_SAMPLE_HZ,
+    downscaled EGOMOTION_DOWNSCALE. Best-effort — returns None on any decode
+    failure. (Global frame-diff, not flow: it conflates large bystander motion,
+    acceptable for a proxy whose consumers are told exactly that.)"""
+    import cv2
+    try:
+        lo = max(0.0, climax_sec - WEARER_SPAN_PRE_SEC)
+        hi = min(duration_sec, climax_sec + WEARER_SPAN_POST_SEC)
+        if hi <= lo:
+            return None
+        n = max(2, int((hi - lo) * EGOMOTION_SAMPLE_HZ) + 1)
+        times = np.linspace(lo, hi, n)
+        prev = None
+        diffs = []
+        for t in times:
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(t) * 1000.0)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            g = cv2.resize(g, (0, 0), fx=EGOMOTION_DOWNSCALE, fy=EGOMOTION_DOWNSCALE)
+            if prev is not None and prev.shape == g.shape:
+                diffs.append(float(np.mean(np.abs(g.astype(np.int16) - prev.astype(np.int16)))))
+            prev = g
+        if not diffs:
+            return None
+        return {"mean_frame_diff": round(sum(diffs) / len(diffs), 2),
+                "peak_frame_diff": round(max(diffs), 2),
+                "span_sec": [round(lo, 2), round(hi, 2)]}
+    except Exception as e:
+        print(f"[02b] egomotion proxy failed @{climax_sec:.1f}s: {e}")
+        return None
+
+
 def _caption_segment(cap, climax_sec: float, task_label: str,
                      vlm_model: str) -> Optional[str]:
     """One-line wearer-action caption for a segment (docs/06 Issue 1).
@@ -410,6 +469,8 @@ def compute_task_climax_for_video(
     skip_vlm: bool = False,            # True disables ALL VLM work (captions)
     face_verify: Optional[bool] = None,
     control_segments: Optional[bool] = None,
+    hand_detections: Optional[list] = None,
+    wearer_features: Optional[bool] = None,
 ) -> None:
     """Populate `task_temporal_metadata` on each task in-place. Tasks that
     already have non-empty metadata are skipped, so this stays safe to invoke
@@ -425,6 +486,8 @@ def compute_task_climax_for_video(
         face_verify = FACE_VERIFY
     if control_segments is None:
         control_segments = CONTROL_SEGMENTS
+    if wearer_features is None:
+        wearer_features = WEARER_FEATURES
     verifier = _FaceVerifier() if face_verify else None
     do_verify = bool(verifier and verifier.available and cap is not None)
     do_caption = bool(vlm_model and not skip_vlm and ollama_chat is not None
@@ -451,6 +514,14 @@ def compute_task_climax_for_video(
                                            task.get('task_label', 'unknown'), vlm_model)
                 if caption is not None:
                     seg["segment_action_caption"] = caption
+            if wearer_features:
+                # Wearer pseudo-action features (docs/06 Issue 5).
+                hands = _wearer_hands_in_span(hand_detections, climax_sec)
+                seg["wearer_hand_detections"] = hands
+                if cap is not None:
+                    ego = _egomotion_proxy(cap, climax_sec, duration_sec)
+                    if ego is not None:
+                        seg["wearer_egomotion_proxy"] = ego
             return seg
 
         segments: List[dict] = []
@@ -601,6 +672,7 @@ def _annotate_one_entry(args):
             face_verify=face_verify and cap is not None,
             vlm_model=caption_model if cap is not None else None,
             control_segments=control_segments,
+            hand_detections=entry.get('hand_detections'),
         )
         return entry, True
     finally:
