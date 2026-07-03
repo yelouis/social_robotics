@@ -560,6 +560,9 @@ class AcousticProsodyPipeline:
                 for task in expand_task_segments(identified_tasks):
                     task_res = self._process_task(video_path, task)
                     if task_res:
+                        # Segment attribution for the Layer-04 segment join
+                        # (docs/06 Issue 2).
+                        task_res["segment_index"] = task.get('segment_index', 0)
                         tasks_analyzed.append(task_res)
             except Exception as e:
                 self._log_error(video_id, e)

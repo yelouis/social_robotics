@@ -438,6 +438,9 @@ class ProxemicKinematicsPipeline:
             if per_person:
                 tasks_analyzed.append({
                     "task_id": task_id,
+                    # Segment attribution for the Layer-04 segment join
+                    # (docs/06 Issue 2).
+                    "segment_index": task.get('segment_index', 0),
                     "per_person": per_person
                 })
                 

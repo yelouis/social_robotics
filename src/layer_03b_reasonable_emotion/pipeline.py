@@ -477,6 +477,9 @@ class ReasonableEmotionPipeline:
         for task in expand_task_segments(identified_tasks):
             task_result = self._process_task(cap, fps, task, bystanders, video_id, scored_windows)
             if task_result:
+                # Segment attribution for the Layer-04 segment join (docs/06
+                # Issue 2): which reaction segment this row measured.
+                task_result["segment_index"] = task.get('segment_index', 0)
                 tasks_analyzed.append(task_result)
 
         cap.release()

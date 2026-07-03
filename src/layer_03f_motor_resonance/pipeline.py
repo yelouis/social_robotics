@@ -281,6 +281,9 @@ class MotorResonancePipeline:
             if per_person:
                 tasks_analyzed.append({
                     "task_id": task_id,
+                    # Segment attribution for the Layer-04 segment join
+                    # (docs/06 Issue 2).
+                    "segment_index": task.get('segment_index', 0),
                     "ego_kinetic_chaos_score": round(max_chaos_score, 2),
                     "per_person": per_person
                 })
