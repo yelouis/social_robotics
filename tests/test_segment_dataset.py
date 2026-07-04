@@ -130,6 +130,16 @@ def test_qa_pairs_gated_by_confidence():
     assert render_qa_pairs(r3)[0]["question"].startswith("During this moment")
 
 
+def test_qa_caption_composition():
+    r = next(r for r in _rows() if r["segment_index"] == 0)
+    # bare gerund -> copula inserted (July 3 E2E finding)
+    q = render_qa_pairs(dict(r, segment_action_caption="listening"))[0]["question"]
+    assert q.startswith("While the camera wearer is listening,")
+    # third-person + legacy trailing period/capital -> composed cleanly
+    q = render_qa_pairs(dict(r, segment_action_caption="Hands cards to person on left."))[0]["question"]
+    assert q.startswith("While the camera wearer hands cards to person on left,")
+
+
 def test_end_to_end_files(tmp_path):
     (tmp_path / "filtered_manifest.json").write_text(json.dumps([_manifest_entry()]))
     for lid, per_video in _results().items():

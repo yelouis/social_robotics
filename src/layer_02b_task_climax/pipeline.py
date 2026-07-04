@@ -404,7 +404,11 @@ def _caption_segment(cap, climax_sec: float, task_label: str,
             out = ollama_chat(vlm_model, prompt, image_paths=img_paths,
                               options={"temperature": 0, "num_predict": 48},
                               timeout=CAPTION_VLM_TIMEOUT)
-            caption = " ".join(out.strip().split())
+            caption = " ".join(out.strip().split()).strip()
+            # Normalize: drop a trailing period (it leaks into downstream QA
+            # templates: '...on left., how does...') and leading capitalization
+            # is left to consumers.
+            caption = caption.rstrip(".")
             if not caption:
                 return None
             low = caption.lower().strip(" .!'\"")

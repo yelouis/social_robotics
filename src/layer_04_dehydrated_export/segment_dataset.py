@@ -294,7 +294,14 @@ def _context_phrase(row) -> str:
     if cap and cap not in ("unclear",):
         if cap == "conversation":
             return "While the camera wearer is in a conversation"
-        return f"While the camera wearer {cap}"
+        cap = cap.rstrip(".")   # pre-fix captions may carry a trailing period
+        # A bare-gerund caption ('listening', 'talking and laughing') needs a
+        # copula to compose: 'While the camera wearer IS listening'. Third-person
+        # captions ('places a card...') compose directly.
+        first = cap.split()[0].lower()
+        if first.endswith("ing"):
+            return f"While the camera wearer is {cap[0].lower() + cap[1:]}"
+        return f"While the camera wearer {cap[0].lower() + cap[1:]}"
     return "During this moment"
 
 
