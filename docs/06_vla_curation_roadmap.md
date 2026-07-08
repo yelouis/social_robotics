@@ -7,7 +7,7 @@ The corpus carries **no action tokens**, so it cannot feed a VLA policy via beha
 2. **VQA co-training corpus** — RT-2/π0/GR00T-style co-training of the VLM backbone on non-action vision-language data; our per-segment labels render mechanically into QA pairs ("Is the bystander attending?" → 03a; "How did they react?" → 03b/03e).
 3. **Latent / pseudo-action route** — extract the wearer's own actions (hands, ego-motion) as pseudo-action tokens, giving (obs, action, social outcome) tuples for offline RL later.
 
-Plus a two-tier **benchmark**: Tier 1 = social *perception* (held-out segments → questions scored against layer labels); Tier 2 = social *outcome prediction* (context + action shown, model predicts the bystander's reaction before the window is revealed).
+Plus a two-tier **benchmark**: Tier 1 = social *perception* (held-out segments → questions scored against layer labels); Tier 2 = social *outcome prediction* (context + action shown, model predicts the bystander's reaction before the window is revealed). *(July 6 update: the benchmark has been redesigned around human golden labels and external data sources, and now lives in its own document — `07_benchmark_platform.md`. The two-tier sketch above is superseded by that doc's four task families; this roadmap remains the authority for the training-data curation issues below.)*
 
 The issues below are the pipeline changes needed to curate the right data for those goals. **Issues 1, 2, 3 and 5 are implemented** (July 2 — see Resolved below), in time for the full-991 Layer-02b re-annotation to produce captioned, control-balanced, wearer-featured, joinable segments in one pass. **Issues 4 and 6 are deferred by selection** (kept below with the user's decisions recorded).
 
