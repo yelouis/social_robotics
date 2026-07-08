@@ -34,3 +34,7 @@ debug_smoke_test.jpg
 .claude/
 .agents/
 scratch/
+
+# Logs
+*.log
+

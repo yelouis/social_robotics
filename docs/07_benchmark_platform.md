@@ -347,7 +347,7 @@ These are **design decisions awaiting user selection**, not bugs — but they fo
   - *Pros*: Defensible κ (uncorrelated rater backgrounds); doubles as a live stress-test of the two onboarding artifacts v1 needs anyway (`LABELING_GUIDE.md` + the qualification set + the kit generator on a machine we don't control).
   - *Cons*: Each external rater must obtain their own (free but slow-ish) Ego4D license and a multi-GB download, or be given shared-machine access; adds scheduling latency to the pilot.
 
-Your selection: _____
+Your selection: Lets not worry about rater pools and validation. I will be doing most of the rating myself so lets just say one rater is enough to provide the golden labels for now.
 
 ---
 
@@ -364,7 +364,7 @@ Your selection: _____
   - *Pros*: Early evidence the Node-02/02b moment proposer works on a second corpus; the Ring-1 cross-corpus result lands a version earlier.
   - *Cons*: The adapter is unproven — Charades-Ego clips are ~30 s scripted recordings vs. Ego4D long-form, so Layer 02b's clustering thresholds (e.g. the ≥ 30 s bystander-free gap required for a `no_audience` control) structurally cannot fire and would need re-tuning; that is engine work smuggled into a benchmark milestone whose purpose is validating the *human* instrument.
 
-Your selection: _____
+Your selection: Lets proceed with Option A for now.
 
 ---
 
@@ -381,7 +381,7 @@ Your selection: _____
   - *Pros*: Exact control over form wording and skip logic; hosts natively next to the HF datasets; no separate server to run.
   - *Cons*: Overlap assignment, task queueing, rater accounts, and agreement statistics all get rebuilt from scratch — the same "real UI work" trap for which docs/06 Issue 4 already rejected its own Option B; every UI bug becomes a silent gold-quality bug.
 
-Your selection: _____
+Your selection: Let's not worry about account management and just assume that only trusted raters are working on this so they all use the same account or that I can add the trusted raters as collaborators manually like how you would add a collaborator to a github. Given this information, provide the best options again.
 
 ---
 
@@ -401,7 +401,7 @@ Your selection: _____
   - *Pros*: Zero delay now; the "real" name benefits from seeing the pilot's reception.
   - *Cons*: HF dataset renames break every `load_dataset()` call and dataset-card link that referenced the pilot; any early citation or blog mention permanently points at the dead name.
 
-Your selection: _____
+Your selection: Let's call this SocialRobotics-Bench
 
 ---
 
@@ -422,7 +422,7 @@ Your selection: _____
   - *Pros*: Scales without surrendering the gold path to naive raters; the qualification set already exists as a v0 by-product; paid spend concentrates on the parallelizable bulk work, expert time on the judgment calls.
   - *Cons*: Two pools to manage (onboarding, comms, payment for one of them); still requires committing Option B's budget line, just a smaller one.
 
-Your selection: _____
+Your selection: I will manually add raters that I trust as collaborators.
 
 ---
 
