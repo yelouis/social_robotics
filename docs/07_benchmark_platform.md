@@ -1,6 +1,6 @@
-# 07: Social-Reward Benchmark Platform ("SRB", working name)
+# 07: SocialRobotics-Bench — Benchmark Platform ("SRB")
 
-**Status: DESIGN DRAFT (July 6). Nothing in this document is implemented.** This document is the grounding spec for the benchmark effort and is deliberately **separate from the engine pipeline** (docs/00–06). The engine extracts social features at scale; the benchmark measures whether *other people's models* can read social feedback as a reward signal. The two share tooling but must never share ground truth (§2).
+**Status: DESIGN DRAFT (July 6; the five open design decisions were selected July 7 — see 🧪 Resolved. One decision remains open: ⚠️ Issue 3). Nothing in this document is implemented.** The public name is **SocialRobotics-Bench** (Resolved #3); "SRB" survives as the internal shorthand and id prefix. This document is the grounding spec for the benchmark effort and is deliberately **separate from the engine pipeline** (docs/00–06). The engine extracts social features at scale; the benchmark measures whether *other people's models* can read social feedback as a reward signal. The two share tooling but must never share ground truth (§2).
 
 ---
 
@@ -91,7 +91,7 @@ Three distinct leaks, three distinct rules (all binding on every platform versio
 
 Additional integrity gates (automated, §5.4): blind-baseline filter (kills items answerable from text priors), valence balancing within action categories (kills "action caption predicts reaction" shortcuts), and control-item quota (kills "always predict a reaction").
 
-**Wave lifecycle** (LiveBench-style): items are released in dated waves (`srb-2026.4`, `srb-2027.1`, …). A wave is *live* for a fixed period, then *retired*. Retired waves get their answers published and become ordinary training/analysis data — contamination-by-time turned into a feature. Leaderboard entries are pinned to the wave they ran on.
+**Wave lifecycle** (LiveBench-style): items are released in dated waves (`socialrobotics-bench-2026.4`, `socialrobotics-bench-2027.1`, …). A wave is *live* for a fixed period, then *retired*. Retired waves get their answers published and become ordinary training/analysis data — contamination-by-time turned into a feature. Leaderboard entries are pinned to the wave they ran on.
 
 ---
 
@@ -114,11 +114,11 @@ Ring 1 doubles as a **cross-domain generalization** result (train on Ego4D, test
 | Human task | Applied to | Per-item time | Raters | Stage |
 |---|---|---|---|---|
 | **Moment triage** (Q-A*) | Every candidate moment | ~10–15 s | 1 | A |
-| **Golden labeling** (Q-B*) | Every triage-accepted moment | ~60–90 s | **2 independent** (test split); 1 (train-split verification) | B |
+| **Golden labeling** (Q-B*) | Every triage-accepted moment | ~60–90 s | **v0: 1 (the maintainer — Resolved #1)**; ≥2 independent from the first public wave; 1 (train-split verification) | B |
 | **Missed-moment flagging** (Q-C1) | Whole clips, opportunistically during B | ~0 (side effect) | — | B |
 | **Upload moderation** (Q-M*) | Every Ring-2/3 clip before it enters the queue | ~30–60 s | 1 + escalation | pre-A |
 | **Item QA spot-check** | 10 % random sample of templated items | ~20 s | 1 | post-templating |
-| **Human baseline** | Final released items | full item time | 1 held-out rater (never saw the items in stages A/B) | pre-release |
+| **Human baseline** | Final released items | full item time | 1 held-out rater (never saw the items in stages A/B) — first available at v1; impossible under the v0 single-rater regime | pre-release |
 
 Everything else is automated: candidate mining, blind-baseline gate, valence balancing, dedup, pairing (F3), scoring.
 
@@ -171,12 +171,21 @@ Mapping to the docs/06 ambiguity taxonomy: B1 sentinels reproduce cases 1–2 (`
 
 ### 4.5 Adjudication & agreement (test split)
 
+Two regimes (Resolved #1, July 7): the v0 pilot runs single-rater; every public wave from v1 runs the full multi-rater protocol.
+
+**v0 single-rater regime** (the maintainer is the sole rater — κ is unmeasurable with one rater, so reliability is measured as test–retest self-consistency):
+- After a **≥ 3-day washout**, the rater re-rates a **random 20 % sample** of accepted moments blind (fresh kit order, original answers hidden).
+- **Self-consistency gate**: ≥ 80 % exact categorical match on B3/B4/B5 between the two passes. Below the gate, the instrument (question wording, clip length) gets revised and the pass repeats — not the gate.
+- Any moment answered `Guessing` (B8), and any moment whose two passes disagree on B3/B4/B5, is **dropped from test candidacy** (it may still serve the train split).
+- Every pilot artifact (datasheet, HF card) must state plainly: *single-annotator golden labels (project author)* — pilot items are dev-grade, not citable gold.
+
+**v1+ multi-rater regime** (binding for anything public and citable):
 - Every test-split moment is labeled by **2 independent raters**.
 - **Categorical fields (B2–B5, B7)**: exact match required. Disagreement → third rater adjudicates majority; no majority → item dropped from test (may still serve the train split).
 - **B1 caption**: semantic match judged by the adjudicator (same action, different words = match). Sentinel/non-sentinel disagreement = hard disagreement → third rater.
 - **B6 channels**: union of both raters (it feeds per-channel *reporting*, not item gold).
 - Any rater answering `Guessing` (B8) → automatic third rater.
-- Publish **Cohen's κ per field**; target κ ≥ 0.6 on B3/B4/B5 before any wave releases. If the pilot misses the target, the instrument (question wording, clip length) gets revised — not the target.
+- Publish **Cohen's κ per field**; target κ ≥ 0.6 on B3/B4/B5 before any wave releases. If a wave misses the target, the instrument gets revised — not the target.
 
 ### 4.6 Anti-anchoring policy
 
@@ -186,7 +195,7 @@ Mapping to the docs/06 ambiguity taxonomy: B1 sentinels reproduce cases 1–2 (`
 
 - **Labeling guide** (`bench/LABELING_GUIDE.md`): one worked example per ambiguity-taxonomy case (the docs/06 table maps 1:1 onto guide sections), plus counter-examples for the two sentinels.
 - **Qualification set**: 15 moments with maintainer-established gold; ≥ 80 % categorical agreement to qualify. Re-qualification after any guide revision.
-- Rater pool: v0 = project members + 1–2 collaborators (GitHub-remote workflow, per the Issue-4 selection); v1+ = optionally paid annotators (Prolific) for throughput — see ⚠️ Issue 5.
+- Rater pool (Resolved #1/#4, July 7): v0 = the maintainer as sole rater; v1+ = **trusted collaborators only, manually invited** (GitHub-collaborator model). Paid annotation (Prolific) is out of scope unless a future budget decision reopens it.
 
 ### 4.8 Stage M — Upload moderation questions (Ring 2/3 only, verbatim)
 
@@ -216,12 +225,12 @@ Eligibility: B1 not `unclear`; B1 `conversation` allowed (steady-state social re
 > *A person in the clip reacts during this moment. Is their reaction a response to the camera wearer?*
 > (a) Yes — it responds to the wearer's action (b) No — it responds to something or someone else (c) Not enough evidence to tell
 
-**F3 (pairwise preference, 2-way).** Built by `bench/pair_items.py` from dual-agreed B5 verdicts:
+**F3 (pairwise preference, 2-way).** Built by `bench/pair_items.py` from gold-confirmed B5 verdicts (per whichever §4.5 regime is in force):
 > *Clips 1 and 2 each show the camera wearer performing a similar action. In which clip did the wearer's action receive the more positive social response?* — `Clip 1 / Clip 2`
 
 Pairing rules: same action category (verb-cluster match on B1), different clips (never two moments of one clip — same bystander leaks), valences strictly ordered (approving > neutral > no-reaction > disapproving; pair only non-adjacent ranks in v0 to keep gold unambiguous), presentation order randomized, each moment reused in ≤ 2 pairs.
 
-**F4 (what happened next, 3-way).** Gold from agreed B7; only moments with B7 ≠ "Can't tell".
+**F4 (what happened next, 3-way).** Gold from confirmed B7 (per the §4.5 regime); only moments with B7 ≠ "Can't tell".
 > *[Clip S only — the after-roll is withheld.] The wearer has just received the reaction shown. What did the wearer actually do next?*
 > (a) Continued the same activity (b) Adjusted or corrected the action (c) Stopped or disengaged
 
@@ -247,7 +256,7 @@ Same items with the observation block (§1.3) replacing/augmenting the clip. Ser
 2. **Macro-averaged over gold classes** within F1/F2 (class quotas make micro ≈ macro, but report both).
 3. **Social Hallucination Rate (SHR)** — headline safety metric: on gold-"no reaction"/"not directed" items, the fraction of model answers asserting evaluative feedback (F1 a/b, F2 a). The failure mode that matters for social robotics is *over*-reading approval.
 4. **Pipeline-vs-human agreement** — engine prefill vs. human gold per channel (published honesty number; also the engine's free evaluation).
-5. **Human baseline** — held-out rater on the released items (MimeQA's 86 %-vs-31 % gap is the model for headroom reporting).
+5. **Human baseline** — held-out rater on the released items (MimeQA's 86 %-vs-31 % gap is the model for headroom reporting). First available at v1: the v0 single-rater regime (Resolved #1) has no untainted rater.
 6. **Per-channel breakdown** — model accuracy conditioned on B6 evidence tags ("models read proxemics but miss prosody" is the citable finding).
 7. Scoring is deterministic string-match on option letters; no LLM judge in v0/v1.
 
@@ -257,30 +266,30 @@ Same items with the observation block (§1.3) replacing/augmenting the clip. Ser
 
 ### v0 — "Contact-sheet benchmark" (extends docs/06 Issue 4; goal: validate the instrument)
 
-**Scope**: Ring 1 only (held-out Ego4D clips; whether Charades-Ego joins is ⚠️ Issue 2). Internal + collaborator raters. Output: a pilot wave (`srb-pilot`) of ~100–150 dual-agreed items across F1/F2 (+F3 pairs if valence spread allows), Track B public on HF, Track A as sealed questions + rehydration pointers. **The go/no-go gate for everything after: κ ≥ 0.6 on B3/B4/B5 and a blind-gate survival rate ≥ 50 %.**
+**Scope**: Ring 1 only — held-out Ego4D clips (Charades-Ego declined for v0; Resolved #2). Maintainer as sole rater (Resolved #1). Output: a pilot wave (`socialrobotics-bench-pilot`) of ~100–150 golden-labeled items across F1/F2 (+F3 pairs if valence spread allows), Track B public on HF, Track A as sealed questions + rehydration pointers. **The go/no-go gate for everything after: test–retest self-consistency ≥ 80 % on B3/B4/B5 (§4.5 single-rater regime) and a blind-gate survival rate ≥ 50 %.**
 
-Deliverables & steps (≈ 1–2 weeks of tooling + 2 raters × 8–12 h):
+Deliverables & steps (≈ 1–2 weeks of tooling + ~6–8 h of maintainer rating, incl. triage and the 20 % re-rate pass):
 1. `bench/` scaffold + `candidate_moments.jsonl` exporter from an annotated manifest (thin shim over `expand_task_segments`; **depends on docs/06 Issue 6 wearer-grouped split stamping for the Ego4D held-out selection — blocking prerequisite**).
-2. `bench/make_rating_kit.py` — cuts Clip S / Clip S+ / strip per moment (reuses Node-05's decode utilities; kits are internal-only for Ego4D, per §4.2). Rater without local videos runs it against their own Ego4D download (the Issue-4 "run the rehydrater" selection).
-3. `bench/LABELING_GUIDE.md` + 15-item qualification set (maintainer golds these first).
-4. **Rating round**: Stage A triage (1 rater) → Stage B dual labeling via **CSV** (`ratings_{rater}.csv`, columns: `moment_id, A1..A3, B1..B9, C1`; one row per moment; the strip/clips referenced by relative path). No UI built.
-5. `bench/adjudicate.py` — merges the two CSVs, applies §4.5 rules, emits `golden_labels.jsonl` + κ report.
+2. `bench/make_rating_kit.py` — cuts Clip S / Clip S+ / strip per moment (reuses Node-05's decode utilities; kits are internal-only for Ego4D, per §4.2). Kept remote-runnable for v1's trusted raters: a rater without local videos runs it against their own Ego4D download (the Issue-4 "run the rehydrater" selection).
+3. `bench/LABELING_GUIDE.md` + 15-item qualification set (authored now; it gates future trusted raters from v1 — the v0 sole rater is its author, so it cannot gate them).
+4. **Rating round**: Stage A triage → Stage B labeling, maintainer as sole rater, via **CSV** (`ratings_maintainer.csv`, columns: `moment_id, A1..A3, B1..B9, C1`; one row per moment; the strip/clips referenced by relative path). After a ≥ 3-day washout, blind re-rate of a random 20 % sample (`ratings_maintainer_retest.csv`) for the §4.5 self-consistency gate. No UI built.
+5. `bench/adjudicate.py` — validates the CSV (enums, skip logic), applies the §4.5 single-rater rules (drops `Guessing` and retest-disagreement moments), emits `golden_labels.jsonl` + a self-consistency report. (The multi-rater merge/κ path is added at v1.)
 6. `bench/build_items.py` + `bench/pair_items.py` + `bench/render_track_b.py` + blind gate (`bench/blind_gate.py`, local LLM) → `items_{family}_{track}.jsonl`.
-7. `bench/score.py` — deterministic scorer; run 2–3 open VLMs (qwen2.5-VL via the existing registry client) + 1 frontier API model as anchor numbers; 1 human-baseline pass.
-8. Write-up of instrument metrics (κ, time-per-item, blind kill rate, engine agreement) → go/no-go on v1.
+7. `bench/score.py` — deterministic scorer; run 2–3 open VLMs (qwen2.5-VL via the existing registry client) + 1 frontier API model as anchor numbers. (Human-baseline pass deferred to v1 — no untainted rater exists under the single-rater regime.)
+8. Write-up of instrument metrics (self-consistency, time-per-item, blind kill rate, engine agreement) → go/no-go on v1. **Time-per-item is measured deliberately: it is the deciding input for ⚠️ Issue 3's tooling choice.**
 
 ### v1 — "Hosted labeling + public waves" (goal: first citable public wave)
 
-**Scope**: adds Ring 2 (CC web harvest) and manual Ring-3 intake; real annotation tooling; public leaderboard; `srb-2026.x` wave with shipped pixels for Ring-2/3 items. Benchmark code splits into its own repo.
+**Scope**: adds Ring 2 (CC web harvest) and manual Ring-3 intake; rating tooling per ⚠️ Issue 3; public leaderboard; `socialrobotics-bench-2026.x` wave with shipped pixels for Ring-2/3 items. **The ≥2-rater protocol resumes here** (Resolved #1 bounds the single-rater regime to v0). Benchmark code splits into its own repo.
 
 Steps:
 1. **Ring-2 harvest adapter**: dated keyword sweeps (LLM-generated queries per scenario, the SIV-Bench recipe) → CC-BY filter (API-verified license + archived snapshot of the license page) → download → Node-02/02b pre-pass → `candidate_moments.jsonl`. Harvest date recorded per clip (§2 pixel-leak rule).
-2. **Label Studio** (self-hosted) replaces CSVs: video-segment template implementing §4.3–4.4 verbatim (A/B forms with skip logic), 2-rater overlap, built-in agreement dashboards. `bench/ls_import.py` / `ls_export.py` convert to/from `candidate_moments.jsonl` / `golden_labels.jsonl` so **every v0 script downstream of adjudication is reused unchanged**.
+2. **Rating tooling per ⚠️ Issue 3** (refreshed July 7 under the trusted-rater constraint — the original Label-Studio-vs-custom-UI framing assumed a managed rater pool that Resolved #1/#4 eliminated): git-native CSV scaled up, a local single-page rater, or a minimal Label Studio instance. Whichever is chosen must emit `golden_labels.jsonl` so **every v0 script downstream of adjudication is reused unchanged**; `bench/adjudicate.py` gains the multi-rater merge/κ path either way.
 3. **Upload intake (manual)**: a simple form (HF Space or static form + object storage) collecting the clip, license grant, and consent attestation (§8); Stage-M moderation queue in Label Studio.
 4. **Sealed scorer**: HF Space holding private gold; accepts predictions JSONL; per-model daily submission cap + aggregate-only feedback (answer-extraction resistance); leaderboard pinned per wave.
-5. **lmms-eval / VLMEvalKit adapter** (`--tasks social_reward_bench`) — the accessibility step that decides whether anyone runs it.
+5. **lmms-eval / VLMEvalKit adapter** (`--tasks socialrobotics_bench`) — the accessibility step that decides whether anyone runs it.
 6. **Wave assembly** (`bench/export_wave.py`): balance quotas, gates, datasheet (harvest dates, κ, blind kill rate, SHR definitions), HF dataset (Ring-2/3 pixels + all Track B), retirement schedule.
-7. Paid-annotator option (Prolific) wired through Label Studio if collaborator throughput is insufficient (⚠️ Issue 5).
+7. **Trusted-rater onboarding** (Resolved #4): raters are manually invited collaborators (GitHub-collaborator model), qualified via the §4.7 set; wave size and cadence scale to the trusted pool's available hours — there is no paid-annotation budget.
 
 ### v2 — "Community platform" (goal: self-sustaining refresh)
 
@@ -288,7 +297,7 @@ Build **only if** v1 produces external demand (leaderboard submissions from grou
 1. Self-serve upload portal with accounts, contributor credits on the dataset card, and an upload-status tracker.
 2. **Staged-scenario program**: partner HRI labs record scripted interactions (deliberately disapproving reactions are the under-sampled class in all naturalistic rings); a scenario playbook doc specifies coverage targets by valence × channel × setting.
 3. Model-in-the-loop hardening (§5.4.4) with the 30 % random slice.
-4. Fixed refresh cadence (2 waves/year), retirement automation (answers auto-publish on retirement; retired waves merge into the public training corpus — closing the loop with the engine's HF surface).
+4. Refresh cadence sized to trusted-rater capacity (target 1–2 waves/year; Resolved #4 rules out paid bulk labeling), retirement automation (answers auto-publish on retirement; retired waves merge into the public training corpus — closing the loop with the engine's HF surface).
 5. Governance: takedown SLA, wave patch releases (scorer re-versions when an item is removed).
 
 ### Version comparison
@@ -296,11 +305,11 @@ Build **only if** v1 produces external demand (leaderboard submissions from grou
 | | v0 pilot | v1 public | v2 community |
 |---|---|---|---|
 | Rings | 1 | 1 + 2 (+3 manual) | 1 + 2 + 3 self-serve |
-| Labeling | CSV + contact-sheet kits | Label Studio, 2-rater overlap | + paid pool, contributor program |
+| Labeling | maintainer-only CSV kits (single rater) | ⚠️ Issue 3 tooling, 2-rater overlap (trusted pool) | + contributor program (trusted, manually added) |
 | Items | ~100–150, F1/F2 (±F3) | ~800–1,500, F1–F4, dated wave | waves ×2/yr, hardened |
 | Pixels shipped | No (Track B public; Track A via rehydration) | Yes for Ring 2/3 | Yes |
 | Eval access | scripts in repo | sealed scorer + lmms-eval adapter | + leaderboard archive |
-| Gate to next | κ ≥ 0.6, blind-survival ≥ 50 % | external submissions exist | — |
+| Gate to next | self-consistency ≥ 80 %, blind-survival ≥ 50 % | external submissions exist | — |
 
 ---
 
@@ -323,106 +332,56 @@ Build **only if** v1 produces external demand (leaderboard submissions from grou
 [docs/06 Issue 6]   wearer-grouped split stamping ───────┘        │ (blocking for Ring-1 test selection)
 [docs/06 Issue 4]   contact-sheet verification ──(train split only; shares kit tooling)
                                                                   ↓
-                    v0 instrument pilot ──κ gate──→ v1 public wave ──demand gate──→ v2
+                    v0 instrument pilot ──self-consistency gate──→ v1 public wave ──demand gate──→ v2
 ```
 
 The full-991 run (in flight, docs/06) feeds the *training* surface and the engine-agreement statistic — it is **not** on the benchmark's critical path except as the corpus from which Ring-1 held-out clips are excluded.
 
 ---
 
+## 🧪 Resolved Issues & Implementation Refinements
+
+These are **design decisions**, not code fixes — "Solution" below records the selection, the design changes propagated through this document, and the consequences the selection binds. Original issue numbering is preserved in each title (docs/06 convention).
+
+1. **Issue 1: v0 Rater Pool — Single-Rater Golden Labels (Resolved - July 7)**:
+   - **Problem**: The rating instrument (§4.5) mandated two independent raters per test moment with a Cohen's-κ ≥ 0.6 release gate, which made the pilot's schedule hostage to rater recruitment; the drafted options were two project members (correlated errors inflate κ) vs. one member plus external collaborators (Ego4D license + download latency per rater).
+   - **Solution** (user-directed — neither drafted option): *"I will be doing most of the rating myself so lets just say one rater is enough to provide the golden labels for now."* The maintainer is the **sole v0 rater**. Design consequences propagated: (1) κ is mathematically unmeasurable with one rater, so the v0 reliability measure and go/no-go gate were **replaced with test–retest self-consistency** — blind re-rate of a random 20 % sample after a ≥ 3-day washout, ≥ 80 % exact categorical match on B3/B4/B5 (§4.5 "v0 single-rater regime"; §7 v0 gate; §9 diagram). (2) Moments answered `Guessing` or disagreeing between the two passes are dropped from test candidacy. (3) Every pilot artifact must be labeled *single-annotator golden labels (project author)* — pilot items are dev-grade, not citable gold. (4) The v0 human-baseline pass is deferred to v1 (no untainted rater exists). (5) The *"for now"* in the selection is encoded as a **v0-only regime**: the ≥ 2-independent-rater protocol resumes at the first public v1 wave (§4.5 "v1+ multi-rater regime") — a citable public wave never ships single-rater gold.
+
+2. **Issue 2: v0 Corpus Scope — Ego4D Held-Out Only (Resolved - July 7)**:
+   - **Problem**: Undecided whether the pilot validates only the rating instrument (Ego4D held-out clips) or also attempts the first cross-corpus claim by adding Charades-Ego — whose ~30 s scripted clips structurally break Layer 02b's clustering thresholds (e.g. the ≥ 30 s bystander-free gap a `no_audience` control requires can never occur), meaning engine re-tuning smuggled into an instrument-validation milestone.
+   - **Solution** (Option A, selected July 7): **Ego4D held-out clips only** for v0. The `candidate_moments.jsonl` exporter scope is fixed accordingly (§7 v0 step 1), and docs/06 Issue-6 wearer-grouped split stamping remains the single blocking engine prerequisite. Charades-Ego (and any Ring-1 sibling corpus) is revisited at v1 alongside the Ring-2 harvest work, with 02b threshold re-tuning recorded as its prerequisite.
+
+3. **Issue 4: Public Benchmark Name — SocialRobotics-Bench (Resolved - July 7)**:
+   - **Problem**: The permanent public identifier (HF slugs, eval-harness task name, paper title) was a placeholder ("SRB / Social-Reward-Bench"), and it blocks the *first* public artifact — v0's Track-B HF publish — because HF dataset renames break every `load_dataset()` call and fragment citations.
+   - **Solution** (user counter-proposal, selected July 7): the benchmark is named **SocialRobotics-Bench**. Slugs pinned now: HF dataset `<org>/socialrobotics-bench`, eval-harness task `socialrobotics_bench`, waves `socialrobotics-bench-<year>.<quarter>`, pilot wave `socialrobotics-bench-pilot`. "**SRB**" is retained as the internal shorthand and `moment_id` prefix (the acronym still reads as **S**ocial**R**obotics-**B**ench). Names updated throughout this document (title, §2 wave lifecycle, §7). One caveat recorded: the name shares its surface with the generic field term "social robotics", so discoverability rides on the hyphenated compound — verify the HF namespace is free at org-creation time before the first upload.
+
+4. **Issue 5: Annotator Sourcing — Trusted Collaborators, Manually Added (Resolved - July 7)**:
+   - **Problem**: A v1 wave of ~800–1,500 items × 2 raters × 60–90 s/item ≈ 40–75 h of Stage-B labor, forcing a decision between unpaid collaborators (stall risk), Prolific-paid raters (~$1.1–1.5 k/wave, web-servable kits required), or a hybrid.
+   - **Solution** (Option A variant, selected July 7): *"I will manually add raters that I trust as collaborators."* The rater pool is **trusted collaborators only, manually invited** (GitHub-collaborator model); there is **no paid-annotation budget**. Consequences propagated: (1) wave size and cadence scale to the trusted pool's available hours — a wave shrinks or slips rather than lowering the 2-rater bar (§7 v1 step 7; v2 cadence target softened to capacity-scaled 1–2 waves/year). (2) All Prolific/paid-pool language removed (§4.7, §7, version table). (3) The web-servable-kit requirement that paid raters would have forced is dropped, and — because every rater is now trusted — account management, task queueing, and rater-pool tooling fall out of scope entirely, which collapsed the premise of the original Issue-3 options (see refreshed ⚠️ Issue 3 below).
+
 ## ⚠️ Unresolved Issues & Suggestions
 
-These are **design decisions awaiting user selection**, not bugs — but they follow the project's unresolved-issue format so each blocks-what, options, and trade-offs are explicit. Each issue states exactly what is being decided.
+One design decision remains open. Issues 1, 2, 4 and 5 were resolved July 7 (see 🧪 above); Issue 3 was **refreshed July 7** at the user's request rather than resolved, because the selections above invalidated its original premise.
 
-### Issue 1: v0 Rater Pool Composition
-**Status**: ⚠️ Confirmed Unresolved — Awaiting user selection. Blocks scheduling of the v0 rating round (§7 v0 step 4): the Stage-B dual-labeling protocol (§4.5) requires two *independent* raters per test moment, and who those raters are determines how defensible the pilot's published κ is.
+### Issue 3: v1 Rating Tooling for a Trusted Rater Pool
+**Status**: ⚠️ Confirmed Unresolved — Refreshed July 7. The original Options A/B (self-hosted Label Studio vs. custom Gradio UI) were framed around a *managed* rater pool — accounts, task queueing, pool administration. The July 7 selections (Resolved #1/#4) eliminated that premise: all raters are trusted, manually invited, and few (maintainer + a handful of collaborators). User directive on the original options: *"Let's not worry about account management … provide the best options again."* Re-scoped options below. Blocks §7 v1 step 2 only; v0 proceeds on CSV regardless, and v0 step 8 deliberately measures the number (time-per-item) that decides this issue.
 
-**The decision you are making**: Who provides the two independent golden-label ratings for the pilot test split — and therefore how strong an independence claim the benchmark can make when its inter-rater agreement is published.
+**The decision you are making**: What tooling the small trusted pool rates with at v1 wave scale (~800–1,500 items) — now purely a trade of **rating ergonomics vs. build/ops cost**, since trust removed accounts, queueing, and moderation-pool tooling from scope. All three options emit the identical `golden_labels.jsonl`, so downstream scripts are unaffected by the choice.
 
-**Option A**: **Two project members** — both raters are people already working on the engine.
-  - *Pros*: Zero coordination overhead; both already hold Ego4D access and local videos; the rating round can start the day the kits exist.
-  - *Cons*: Weakest independence claim — both raters shaped the pipeline and plausibly share its perceptual biases, so their errors are *correlated*, which inflates κ without improving gold quality; a reviewer can reasonably challenge the test set on this alone.
+**Option A.1**: **Git-native CSV workflow, scaled up from v0** — an assignment manifest in the repo maps moments to raters (2-rater overlap on test items); each collaborator commits `ratings_<rater>.csv` on a branch; `bench/validate_ratings.py` enforces enums + skip logic at PR time; `bench/adjudicate.py` computes agreement/κ in batch.
+  - *Pros*: Zero new infrastructure — v1 labeling works the day v0 ends; "add a trusted rater" is *literally* adding a GitHub collaborator, the exact access model selected in Resolved #4; every rating is versioned and attributable for free (git history as audit trail).
+  - *Cons*: Worst ergonomics of the three — the rater juggles video files against spreadsheet rows, so 60–90 s/item is the *floor*, and at wave scale that costs the pool tens of hours; enum typos surface only at validation, not at entry; no live agreement view (batch script only).
 
-**Option B (recommended)**: **One project member + 1–2 external collaborators** via the GitHub kit workflow (`make_rating_kit.py` run against the collaborator's own Ego4D download, per the docs/06 Issue-4 selection).
-  - *Pros*: Defensible κ (uncorrelated rater backgrounds); doubles as a live stress-test of the two onboarding artifacts v1 needs anyway (`LABELING_GUIDE.md` + the qualification set + the kit generator on a machine we don't control).
-  - *Cons*: Each external rater must obtain their own (free but slow-ish) Ego4D license and a multi-GB download, or be given shared-machine access; adds scheduling latency to the pilot.
+**Option A.2 (recommended)**: **Local single-page rater (`bench/rater.html`) as an ergonomic layer over A.1** — a static HTML page opened against a kit folder (`file://` or `python -m http.server`); plays Clip S / Clip S+, renders the Stage-B form with §4.4's skip logic and keyboard shortcuts, writes the same per-rater CSV that A.1's validator and adjudicator consume. Not a fork of the workflow — a front-end for it.
+  - *Pros*: Plausibly halves per-item time (clip and form in one view, keystroke answers, skip logic automated) — the payoff lands mostly on the maintainer, who does most of the rating (Resolved #1); no server, no accounts, no hosting — distribution is "pull the repo, open the file"; output stays git-native, so A.1's audit/overlap machinery is unchanged.
+  - *Cons*: ~1 day of real UI work plus upkeep when the §4.4 form changes (two sources of truth: guide + form); browser local-file quirks (autoplay policies, path handling) cost debugging time; it is the docs/06 Issue-4 "custom UI" trap in miniature — accepted here only because trust shrank the scope to a form + a video tag.
+  - *Adoption rule*: build it **only if** v0's measured time-per-item (§7 v0 step 8) exceeds ~75 s — below that, A.1's zero-build wins; above it, the wave-scale hours saved repay the build in the first wave.
 
-Your selection: Lets not worry about rater pools and validation. I will be doing most of the rating myself so lets just say one rater is enough to provide the golden labels for now.
+**Option A.3**: **Minimal Label Studio, single shared instance** — community edition on one small server (or localhost + a tunnel for remote raters), users manually invited by email; only the video-segment template and agreement dashboard features are used.
+  - *Pros*: Best rating ergonomics and the only option with live overlap/agreement dashboards; the Stage-B form (skip logic, enums) is configuration, not code we maintain.
+  - *Cons*: A running service, clip-storage plumbing, and upgrade upkeep purchased for ≤ ~3 trusted raters — the ops footprint the trusted-pool decision was meant to avoid; labeling-config XML learning curve; Ego4D Ring-1 clips must stay access-controlled on whatever storage backs it (§4.2).
 
----
-
-### Issue 2: v0 Corpus Scope
-**Status**: ⚠️ Confirmed Unresolved — Awaiting user selection. Blocks the scope of the `candidate_moments.jsonl` exporter (§7 v0 step 1) and defines what claim the pilot is allowed to make. The only engine prerequisite either way is docs/06 Issue-6 wearer-grouped split stamping.
-
-**The decision you are making**: Whether the v0 pilot exists purely to validate the rating instrument (Ego4D-only), or also carries the first cross-corpus generalization claim (adding Charades-Ego) at the cost of new ingestion work.
-
-**Option A (recommended)**: **Ego4D held-out clips only.**
-  - *Pros*: Zero new ingestion code; keeps v0 pointed at its actual gate (κ ≥ 0.6 on B3/B4/B5, blind-survival ≥ 50 %) — instrument validation, not corpus breadth; the Issue-6 split stamp is the only blocker.
-  - *Cons*: Pilot says nothing about the moment proposer generalizing beyond Ego4D; Ego4D pixel-familiarity risk (low, license-gated) goes unmeasured until v1's Ring-2 wave.
-
-**Option B**: **Ego4D held-out + Charades-Ego.**
-  - *Pros*: Early evidence the Node-02/02b moment proposer works on a second corpus; the Ring-1 cross-corpus result lands a version earlier.
-  - *Cons*: The adapter is unproven — Charades-Ego clips are ~30 s scripted recordings vs. Ego4D long-form, so Layer 02b's clustering thresholds (e.g. the ≥ 30 s bystander-free gap required for a `no_audience` control) structurally cannot fire and would need re-tuning; that is engine work smuggled into a benchmark milestone whose purpose is validating the *human* instrument.
-
-Your selection: Lets proceed with Option A for now.
-
----
-
-### Issue 3: v1 Labeling Infrastructure
-**Status**: ⚠️ Confirmed Unresolved — Awaiting user selection. Blocks §7 v1 step 2 only (v0 is deliberately CSV-based and unaffected). Decision needed before v1 work starts because the import/export shims and the Stage-M moderation queue are built against whichever tool is chosen.
-
-**The decision you are making**: Which annotation platform hosts the Stage-A/B/M rating workflow once volume exceeds what hand-edited CSVs tolerate (~hundreds of moments, multi-rater overlap, moderation queue).
-
-**Option A (recommended)**: **Self-hosted Label Studio.**
-  - *Pros*: Video-segment display, per-question forms, 2-rater overlap assignment, and agreement dashboards are native features, not code we write; its prediction-prefill import cleanly serves the docs/06 Issue-4 *train-split* verification on the same instance (while §4.6 keeps prefill out of test-gold tasks); `ls_import.py`/`ls_export.py` shims mean every v0 script downstream of adjudication is reused unchanged.
-  - *Cons*: Real self-hosting ops (server, auth, backups, upgrades); the labeling-config XML has a learning curve; clip hosting requires object storage reachable by remote raters (Ego4D Ring-1 clips must stay access-controlled, §4.2).
-
-**Option B**: **Custom Gradio / HF Space UI.**
-  - *Pros*: Exact control over form wording and skip logic; hosts natively next to the HF datasets; no separate server to run.
-  - *Cons*: Overlap assignment, task queueing, rater accounts, and agreement statistics all get rebuilt from scratch — the same "real UI work" trap for which docs/06 Issue 4 already rejected its own Option B; every UI bug becomes a silent gold-quality bug.
-
-Your selection: Let's not worry about account management and just assume that only trusted raters are working on this so they all use the same account or that I can add the trusted raters as collaborators manually like how you would add a collaborator to a github. Given this information, provide the best options again.
-
----
-
-### Issue 4: Public Benchmark Name
-**Status**: ⚠️ Confirmed Unresolved — Awaiting user selection. Blocks the **first public artifact, which is v0's Track-B HF publish** (§7 v0), not v1 — this decision is due earlier than it looks. "SRB / Social-Reward-Bench" throughout this document is a placeholder.
-
-**The decision you are making**: The permanent public identifier — HF org/dataset slugs, leaderboard URL, eval-harness task name (`--tasks <name>`), and eventual paper title. Renames after first publish break download scripts and fragment citations.
-
-**Option A (recommended)**: **Choose the final name now**, before any HF upload. Candidates to react to (pick one or counter-propose):
-  - `BystanderBench` — memorable; names the signal source (bystander reactions); no collision found with existing benchmarks.
-  - `SocialReward-Bench` — maximally descriptive; but lands in a crowded namespace (SI-Bench, SIV-Bench, RewardBench, RoboReward all exist) and is easy to confuse in citation.
-  - `EgoSRB` — compact; but "Ego" misleads once Ring-2/3 non-Ego4D data dominates.
-  - *Pros*: Slugs, links, and task names are stable from the very first upload; the pilot's early adopters never hit a rename.
-  - *Cons*: Naming under mild time pressure; hard to reverse once the HF dataset exists.
-
-**Option B**: **Publish the pilot under the SRB placeholder**, rename at v1.
-  - *Pros*: Zero delay now; the "real" name benefits from seeing the pilot's reception.
-  - *Cons*: HF dataset renames break every `load_dataset()` call and dataset-card link that referenced the pilot; any early citation or blog mention permanently points at the dead name.
-
-Your selection: Let's call this SocialRobotics-Bench
-
----
-
-### Issue 5: Annotator Sourcing at v1 Scale
-**Status**: ⚠️ Confirmed Unresolved — Awaiting user selection. Blocks v1 budget planning and the Label Studio pool configuration. The math forcing the decision: a v1 wave of ~800–1,500 items × 2 raters × 60–90 s/item ≈ **40–75 h of Stage-B labor** (plus triage and adjudication) — beyond what unpaid collaborators have historically absorbed on this project.
-
-**The decision you are making**: Who performs the bulk labeling labor for public waves, and whether a recurring annotation budget exists for this project.
-
-**Option A**: **Community / collaborators only.**
-  - *Pros*: Free; raters carry project context, so guide drift and taxonomy misreads are rare.
-  - *Cons*: Throughput unpredictable — a wave can stall for months on volunteer availability; rater attrition wastes qualification effort; a stalled wave undermines the LiveBench-style cadence that is the platform's contamination story (§2).
-
-**Option B**: **Prolific-paid raters, qualification-gated.**
-  - *Pros*: Predictable throughput (a full wave labels in days); demographic breadth in raters is itself a validity plus for social-perception gold.
-  - *Cons*: Recurring cost (rough order: 75 h × ~$15/h ≈ **$1.1–1.5 k per wave** + platform fees + adjudication time); naive raters must clear the qualification set (§4.7) to hit κ ≥ 0.6; kits must be web-servable (no local-video workflow), which rules paid raters out of Ego4D Ring-1 items unless we solve access-controlled streaming.
-
-**Option C (recommended)**: **Hybrid** — collaborators run v0 and maintain the qualification/gold set; Prolific handles v1 bulk labeling; collaborators adjudicate all disagreements and third-rater cases.
-  - *Pros*: Scales without surrendering the gold path to naive raters; the qualification set already exists as a v0 by-product; paid spend concentrates on the parallelizable bulk work, expert time on the judgment calls.
-  - *Cons*: Two pools to manage (onboarding, comms, payment for one of them); still requires committing Option B's budget line, just a smaller one.
-
-Your selection: I will manually add raters that I trust as collaborators.
+Your selection: _____
 
 ---
 
