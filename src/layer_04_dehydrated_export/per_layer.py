@@ -124,15 +124,16 @@ _LAYER_SPECS = {
         lid="03b", title="Reasonable Emotion",
         tagline="Was the bystander's facial-emotion trajectory contextually appropriate to the task?",
         method="HSEmotion face emotion + an LLM (Gemma) reasoning pass over emotion transitions.",
-        signal="A 0–1 'reasonableness' score for how the bystander's emotional response evolved during a task's reaction window (late-stage-weighted success of emotion transitions toward a contextually-appropriate direction).",
+        signal="A signed −1…+1 'reasonableness' score for how the bystander's emotional response evolved during a task's reaction window: positive = emotion moved in a contextually-appropriate direction, negative = contextually inappropriate, ~0 = neutral/no change (late-stage-weighted across emotion-transition slices).",
         tags=["emotion-recognition", "facial-emotion"],
         caveats=[
             "**Very sparse** — bystander faces are rarely both visible and emotion-legible in egocentric video. Treat as illustrative, not statistically representative.",
+            "The score is **signed** (−1…+1): a negative value means the emotional trajectory ran *against* contextual expectation, not merely a low score.",
         ],
         columns={
-            "reasonable_emotion_avg_task_score": ("float (0–1)", "Mean across tasks of `task_aggregate_score` — higher = more contextually reasonable emotional trajectory."),
+            "reasonable_emotion_avg_task_score": ("float (−1…+1, signed)", "Mean across tasks of `task_aggregate_score` — positive = contextually reasonable emotional trajectory, negative = contextually inappropriate, ~0 = neutral."),
             "reasonable_emotion_emotion_source": ("string", "Which emotion backend produced the underlying labels (face-emotion model vs VLM fallback)."),
-            "reasonable_emotion_tasks_analyzed_raw": ("JSON string", "Per-task detail: `task_label`, `task_reaction_window_sec`, per-person `temporal_slices` (`{window_sec, transition_pair, terminal_magnitude, classified_direction, slice_success_scalar}`), `late_stage_weighted_success_score`, `task_aggregate_score`."),
+            "reasonable_emotion_tasks_analyzed_raw": ("JSON string", "Per-task detail: `task_label`, `task_reaction_window_sec`, `segment_index`, per-person `temporal_slices` (`{window_sec, transition_pair, terminal_magnitude, classified_direction, slice_success_scalar}` — `slice_success_scalar` is signed: emotion magnitude negated when `classified_direction` is contextually inappropriate), `late_stage_weighted_success_score`, `task_aggregate_score` (both −1…+1, signed)."),
         },
     ),
     "acoustic_prosody": dict(
