@@ -38,3 +38,6 @@ scratch/
 # Logs
 *.log
 
+
+# Benchmark split stamping is TRACKED by design (docs/07; bench/README)
+!bench/splits_ego4d.json
