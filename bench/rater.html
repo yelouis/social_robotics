@@ -26,6 +26,15 @@
   .q.skipped{opacity:.4}
   .q h3{margin:0 0 7px;font-size:13px;font-weight:600}
   .q h3 b{color:var(--acc);font-weight:600}
+  .cb{display:inline-block;vertical-align:1px;margin-left:4px;padding:1px 8px;
+      border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer;
+      border:1px solid transparent}
+  .cb.moment{background:rgba(90,169,255,.16);color:#8cc6ff;border-color:rgba(90,169,255,.4)}
+  .cb.after{background:rgba(255,180,84,.16);color:var(--warn);border-color:rgba(255,180,84,.45)}
+  .cb.both{background:#242932;color:var(--dim);border-color:var(--line);cursor:default}
+  .cb.moment:hover{background:rgba(90,169,255,.3)}
+  .cb.after:hover{background:rgba(255,180,84,.3)}
+  .qnote{color:var(--dim);font-size:11.5px;font-style:italic;margin:-2px 0 7px}
   .opts{display:flex;flex-wrap:wrap;gap:6px}
   button.opt{background:#242932;color:var(--fg);border:1px solid var(--line);
              border-radius:6px;padding:7px 11px;font-size:13px;cursor:pointer;
@@ -44,6 +53,9 @@
        padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer}
   .btn:disabled{background:#39414f;color:var(--dim);cursor:not-allowed}
   .btn.ghost{background:#242932;color:var(--fg);border:1px solid var(--line);font-weight:500}
+  #tS.on{border-color:var(--acc);color:#8cc6ff}
+  #tP.on{border-color:var(--warn);color:var(--warn)}
+  .warnnote{color:var(--warn);font-size:12px;font-weight:600}
   #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
          background:var(--ok);color:#062015;padding:8px 16px;border-radius:20px;
          font-weight:600;opacity:0;transition:opacity .18s;pointer-events:none}
@@ -75,6 +87,7 @@
       <button class="btn ghost" id="replay">Replay <kbd>R</kbd></button>
       <span class="muted" id="clipinfo"></span>
     </div>
+    <div class="muted" id="nowplaying"></div>
     <div class="hint" id="hint"></div>
     <div class="muted">Keys: <kbd>1</kbd>…<kbd>5</kbd> answer active question ·
       <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> save &amp; next ·
@@ -92,37 +105,47 @@
 <div id="toast"></div>
 
 <script>
+// `clip` = which video answers this question (rendered as a clickable badge):
+//   moment = Clip S only · after = Clip S+ only · both = either/neither.
+// Only B7 uses the after-roll — that split is the F4 information boundary
+// (the model sees Clip S and must PREDICT what B7 records). Answer B1-B6 from
+// the moment BEFORE opening the after-roll, or hindsight leaks into B5.
 const SCHEMA = [
-  {id:"A1", q:"<b>A1</b> Besides the camera wearer, can you see at least one person?",
+  {id:"A1", clip:"moment", q:"<b>A1</b> Besides the camera wearer, can you see at least one person?",
    opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
-  {id:"A2", q:"<b>A2</b> Is the moment watchable? (not too dark/blurred/occluded to judge behavior)",
+  {id:"A2", clip:"moment", q:"<b>A2</b> Is the moment watchable? (not too dark/blurred/occluded to judge behavior)",
    opts:[["yes","Yes"],["no","No"]]},
-  {id:"A3", q:"<b>A3</b> Content flags (quarantines the moment)", multi:true,
+  {id:"A3", clip:"both", q:"<b>A3</b> Content flags (quarantines the moment)", multi:true,
+   note:"flag anything you notice in either clip",
    opts:[["minor","Minor focal"],["nudity_private","Nudity/private"],
          ["sensitive_info","Sensitive info"],["distress","Distress"],["other","Other"]]},
-  {id:"B1", q:"<b>B1</b> What does the <u>camera wearer</u> do? (verb first)", text:true,
+  {id:"B1", clip:"moment", q:"<b>B1</b> What does the <u>camera wearer</u> do? (verb first)", text:true,
    quick:[["conversation","conversation"],["unclear","unclear"]]},
-  {id:"B2", q:"<b>B2</b> Is at least one visible person positioned to notice the action?",
+  {id:"B2", clip:"moment", q:"<b>B2</b> Is at least one visible person positioned to notice the action?",
    opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
-  {id:"B3", q:"<b>B3</b> Does any visible person noticeably react?",
+  {id:"B3", clip:"moment", q:"<b>B3</b> Does any visible person noticeably react?",
    opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
-  {id:"B4", q:"<b>B4</b> What is the reaction most likely responding to?",
+  {id:"B4", clip:"moment", q:"<b>B4</b> What is the reaction most likely responding to?",
    opts:[["wearer","The wearer's action"],["something_else","Something/someone else"],
          ["cant_tell","Can't tell"]]},
-  {id:"B5", q:"<b>B5</b> How would the wearer most reasonably read this reaction?",
+  {id:"B5", clip:"moment", q:"<b>B5</b> How would the wearer most reasonably read this reaction?",
+   note:"judge the reaction itself — decide this BEFORE watching the after-roll",
    opts:[["approving","Approving"],["disapproving","Disapproving"],
          ["neutral","Neutral ack."],["mixed","Mixed/ambiguous"]]},
-  {id:"B6", q:"<b>B6</b> Evidence channels (all that apply)", multi:true,
+  {id:"B6", clip:"moment", q:"<b>B6</b> Evidence channels (all that apply)", multi:true,
    opts:[["face","Face"],["head_gesture","Head gesture"],["hand_body","Hand/body"],
          ["proxemics","Proxemics"],["voice","Voice"],["gaze","Gaze"]]},
-  {id:"B7", q:"<b>B7</b> Right after, does the wearer change what they are doing? <span class='muted'>(after-roll)</span>",
+  {id:"B7", clip:"after", q:"<b>B7</b> Right after, does the wearer change what they are doing?",
+   note:"the only question needing the after-roll",
    opts:[["continues","Continues"],["adjusts","Adjusts/corrects"],
          ["stops","Stops/disengages"],["cant_tell","Can't tell"]]},
-  {id:"B8", q:"<b>B8</b> Your confidence in this moment",
+  {id:"B8", clip:"both", q:"<b>B8</b> Your confidence in this moment",
    opts:[["confident","Confident"],["somewhat","Somewhat"],["guessing","Guessing"]]},
   {id:"B9", q:"<b>B9</b> Notes / flags (optional)", text:true},
-  {id:"C1", q:"<b>C1</b> Missed moment in this clip? (timestamp + note, optional)", text:true},
+  {id:"C1", q:"<b>C1</b> Missed moment in this clip? (timestamp + note, optional)", text:true,
+   note:"about the whole source video, not these two cuts"},
 ];
+const CLIP_LABEL={moment:"▶ Moment", after:"▶ After-roll", both:"either clip"};
 
 let S={moments:[],ratings:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main"};
 
@@ -160,7 +183,13 @@ function render(){
     d.className="q"+(idx===S.active&&vis?" active":"")+(vis?"":" skipped")+
                 ((S.ans[q.id]||"").length?" done":"");
     d.dataset.idx=idx;
-    let h=`<h3>${q.q}${required(q.id)?' <span class="muted">·required</span>':''}</h3>`;
+    const badge=q.clip&&vis
+      ? `<span class="cb ${q.clip}" data-clip="${q.clip==="after"?"p":"s"}"
+              title="${q.clip==="both"?"answerable from either clip"
+                      :"click to play the "+(q.clip==="after"?"after-roll":"moment")}"
+         >${CLIP_LABEL[q.clip]}</span>` : "";
+    let h=`<h3>${q.q}${required(q.id)?' <span class="muted">·required</span>':''} ${badge}</h3>`;
+    if(vis&&q.note) h+=`<div class="qnote">${q.note}</div>`;
     if(!vis) h+=`<div class="muted">skipped by the form's routing</div>`;
     else if(q.text){
       const v=(S.ans[q.id]||"").replace(/"/g,"&quot;");
@@ -218,8 +247,16 @@ function load(i){
 }
 function showClip(which){
   const m=cur();
+  S.clip=which;
   $("#vid").src=`/kits/${m.moment_id}/${which==="s"?"clip_s.mp4":"clip_splus.mp4"}`;
   $("#vid").play().catch(()=>{});
+  // Make the on-screen source unmistakable: the two clips look alike, and
+  // answering B1-B6 off the after-roll would silently corrupt the labels.
+  $("#tS").classList.toggle("on",which==="s");
+  $("#tP").classList.toggle("on",which!=="s");
+  $("#nowplaying").textContent=which==="s"?"showing: Moment (the action + reaction)"
+                                          :"showing: After-roll (what the wearer did next)";
+  $("#nowplaying").className=which==="s"?"muted":"warnnote";
 }
 function toast(msg,err){
   const t=$("#toast"); t.textContent=msg; t.className="show"+(err?" err":"");
@@ -243,6 +280,11 @@ async function save(advance){
 }
 
 document.addEventListener("click",e=>{
+  const cb=e.target.closest(".cb[data-clip]");
+  if(cb&&!cb.classList.contains("both")){
+    if(cb.dataset.clip==="p"&&!cur().has_splus){ toast("no after-roll for this moment",1); return; }
+    showClip(cb.dataset.clip==="p"?"p":"s"); return;      // badge = jump to that clip
+  }
   const b=e.target.closest("button.opt");
   if(b){ setAns(b.dataset.f,b.dataset.v,b.dataset.multi); return; }
   const q=e.target.closest(".q");

@@ -71,17 +71,26 @@ class Store:
         self.path = Path(csv_path)
         self.order = list(moment_ids)
         self.rows = {m: blank_row(m) for m in self.order}
-        if self.path.exists():
-            with open(self.path, newline="") as f:
-                for r in csv.DictReader(f):
-                    mid = (r.get("moment_id") or "").strip()
-                    if mid:
-                        self.rows[mid] = {c: (r.get(c) or "") for c in RATING_COLUMNS}
-                        self.rows[mid]["moment_id"] = mid
-                        if mid not in self.order:
-                            self.order.append(mid)
+        self.reload()
+
+    def reload(self):
+        """Re-read the CSV from disk. Called before every write so edits made
+        in a spreadsheet (or by another tool) while the server runs are merged
+        rather than clobbered — the README promises the two are mixable."""
+        if not self.path.exists():
+            return
+        with open(self.path, newline="") as f:
+            for r in csv.DictReader(f):
+                mid = (r.get("moment_id") or "").strip()
+                if not mid:
+                    continue
+                self.rows[mid] = {c: (r.get(c) or "") for c in RATING_COLUMNS}
+                self.rows[mid]["moment_id"] = mid
+                if mid not in self.order:
+                    self.order.append(mid)
 
     def save(self, answer: dict) -> dict:
+        self.reload()
         mid = answer.get("moment_id")
         if mid not in self.rows:
             raise KeyError(mid)

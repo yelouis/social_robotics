@@ -125,6 +125,33 @@ def test_rating_store_roundtrip_and_time_preserved(tmp_path):
     assert not validate(list(Store(p, ["m1", "m2"]).rows.values()))[1]
 
 
+def test_rating_store_merges_external_edits(tmp_path):
+    """Spreadsheet edits made while the server runs must survive its next
+    write (the README advertises mixing the UI and a spreadsheet)."""
+    from rate_server import Store
+    import csv as _csv
+    from srb_common import RATING_COLUMNS as COLS
+    p = tmp_path / "ratings.csv"
+    st = Store(p, ["m1", "m2"])
+    st.save({"moment_id": "m1", "A1": "yes", "A2": "no", "seconds_spent": "10"})
+
+    # someone edits m2 in a spreadsheet behind the running server
+    rows = list(_csv.DictReader(open(p)))
+    for r in rows:
+        if r["moment_id"] == "m2":
+            r.update({"A1": "no", "A2": "no", "seconds_spent": "8"})
+    with open(p, "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=COLS)
+        w.writeheader()
+        w.writerows(rows)
+
+    st.save({"moment_id": "m1", "A1": "yes", "A2": "yes", "B1": "waves", "B2": "yes",
+             "B3": "no", "B8": "confident", "seconds_spent": "12"})
+    on_disk = {r["moment_id"]: r for r in _csv.DictReader(open(p))}
+    assert on_disk["m2"]["A1"] == "no"          # external edit preserved
+    assert on_disk["m1"]["B1"] == "waves"       # UI edit applied
+
+
 def _golden(mid, action, valence, reaction="yes", directed="wearer", audience="yes"):
     return {"moment_id": mid, "wearer_action": action, "audience": audience,
             "reaction": reaction, "directedness": directed, "valence": valence,
