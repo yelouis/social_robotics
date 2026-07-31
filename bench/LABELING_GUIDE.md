@@ -17,6 +17,13 @@ is machine-generated — ignore it whenever it disagrees with your eyes.
 A3: content flags (`minor / nudity_private / sensitive_info / distress / other`,
 semicolon-separated). Any A3 flag quarantines the moment; keep rating the rest.
 
+> **Where the definitions live**: every question in the rating UI has a **`?`**
+> button holding its full definition — what counts, what does not, and what each
+> option means. That wording is authoritative; press **`?`** to expand them all
+> (the setting sticks between sessions — leave it on for your first couple of
+> dozen moments). This guide covers the ambiguous *cases* below; the UI covers
+> the *terms*.
+
 **Stage B (gold, ~60–90 s)** — answer with the short codes:
 
 | Field | Question | Codes |

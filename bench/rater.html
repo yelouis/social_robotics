@@ -35,6 +35,23 @@
   .cb.moment:hover{background:rgba(90,169,255,.3)}
   .cb.after:hover{background:rgba(255,180,84,.3)}
   .qnote{color:var(--dim);font-size:11.5px;font-style:italic;margin:-2px 0 7px}
+  .qh{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+      border-radius:50%;border:1px solid var(--line);background:#242932;color:var(--dim);
+      font-size:11px;font-weight:700;cursor:pointer;margin-left:4px;vertical-align:1px}
+  .qh:hover,.qh.on{border-color:var(--acc);color:var(--acc)}
+  .help{background:#11151b;border:1px solid var(--line);border-radius:6px;
+        padding:9px 11px;margin:0 0 8px;font-size:12.5px;line-height:1.5}
+  .help p{margin:0 0 6px}
+  .help ul{margin:0 0 6px;padding-left:0;list-style:none}
+  .help li{padding-left:16px;position:relative;color:var(--dim);margin-bottom:2px}
+  .help li:before{position:absolute;left:0;font-weight:700}
+  .help ul.yes li:before{content:"✓";color:var(--ok)}
+  .help ul.no li:before{content:"✗";color:var(--bad)}
+  .help dl{margin:0 0 6px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px}
+  .help dt{color:var(--acc);font-weight:600;white-space:nowrap}
+  .help dd{margin:0;color:var(--dim)}
+  .help .tip{color:var(--warn);margin:6px 0 0}
+  .help .tip:before{content:"▸ ";font-weight:700}
   .opts{display:flex;flex-wrap:wrap;gap:6px}
   button.opt{background:#242932;color:var(--fg);border:1px solid var(--line);
              border-radius:6px;padding:7px 11px;font-size:13px;cursor:pointer;
@@ -53,6 +70,7 @@
        padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer}
   .btn:disabled{background:#39414f;color:var(--dim);cursor:not-allowed}
   .btn.ghost{background:#242932;color:var(--fg);border:1px solid var(--line);font-weight:500}
+  .btn.ghost.on{border-color:var(--acc);color:#8cc6ff}
   #tS.on{border-color:var(--acc);color:#8cc6ff}
   #tP.on{border-color:var(--warn);color:var(--warn)}
   .warnnote{color:var(--warn);font-size:12px;font-weight:600}
@@ -78,6 +96,8 @@
       <span class="pill" id="counter">—</span>
       <span class="pill" id="stats">—</span>
       <span class="pill" id="timer">0s</span>
+      <button class="btn ghost" id="helpall" style="padding:3px 10px;font-size:12px">
+        Definitions <kbd>?</kbd></button>
       <span class="muted" id="mode"></span>
     </div>
     <video id="vid" controls autoplay loop playsinline></video>
@@ -110,47 +130,133 @@
 // Only B7 uses the after-roll — that split is the F4 information boundary
 // (the model sees Clip S and must PREDICT what B7 records). Answer B1-B6 from
 // the moment BEFORE opening the after-roll, or hindsight leaks into B5.
+// `help` is the AUTHORITATIVE per-question definition (LABELING_GUIDE.md covers
+// ambiguous *cases*; this covers the *terms*). Wording is deliberately
+// operational — a rule you can apply the same way twice three days apart,
+// because the v0 gate is test-retest self-consistency on B3/B4/B5.
 const SCHEMA = [
   {id:"A1", clip:"moment", q:"<b>A1</b> Besides the camera wearer, can you see at least one person?",
-   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]],
+   help:{what:"Is another real human visible at any point in the moment clip? A face is not required — any identifying body part counts.",
+     counts:["Hands, arms, torso, legs of someone who is not the wearer",
+             "Someone partly out of frame, or briefly passing through",
+             "Someone far away but clearly recognisable as a person"],
+     excludes:["The wearer's OWN hands, arms, legs or reflection — the commonest egocentric mistake",
+               "People on a screen, poster, photo or in a mirror only",
+               "Shapes too small or dark to tell whether they are human (use Unsure)"]}},
   {id:"A2", clip:"moment", q:"<b>A2</b> Is the moment watchable? (not too dark/blurred/occluded to judge behavior)",
-   opts:[["yes","Yes"],["no","No"]]},
+   opts:[["yes","Yes"],["no","No"]],
+   help:{what:"Could you judge a person's behaviour IF they reacted? This is a floor on legibility, not a judgement of video quality.",
+     counts:["Dim, grainy, or wobbly but people's movements are still readable",
+             "Part of the window is blurred but the rest is usable"],
+     excludes:["Near-black, lens covered, or whip-pan for essentially the whole clip",
+               "The only person is a handful of pixels across"],
+     tip:"When in doubt answer Yes — B8 (confidence) is where uncertainty belongs."}},
   {id:"A3", clip:"both", q:"<b>A3</b> Content flags (quarantines the moment)", multi:true,
    note:"flag anything you notice in either clip",
    opts:[["minor","Minor focal"],["nudity_private","Nudity/private"],
-         ["sensitive_info","Sensitive info"],["distress","Distress"],["other","Other"]]},
+         ["sensitive_info","Sensitive info"],["distress","Distress"],["other","Other"]],
+   help:{what:"Anything that would make this moment unwise to publish or to keep. A flag quarantines the moment — it is excluded from the benchmark, so flag freely.",
+     each:{minor:"A child is a main visible participant (not incidentally in a background crowd)",
+           nudity_private:"Undress, bathroom/bedroom/medical context, or anything obviously private",
+           sensitive_info:"Readable screens, documents, addresses, licence plates, ID cards",
+           distress:"Someone visibly upset, injured, frightened, or in real conflict",
+           other:"Anything else you would hesitate to show a stranger — say why in B9"}}},
   {id:"B1", clip:"moment", q:"<b>B1</b> What does the <u>camera wearer</u> do? (verb first)", text:true,
-   quick:[["conversation","conversation"],["unclear","unclear"]]},
+   quick:[["conversation","conversation"],["unclear","unclear"]],
+   help:{what:"The physical action of the person WEARING the camera — you see through their eyes; their hands enter from the bottom of frame. Verb first, present tense, roughly 5–12 words, and name the target: “hands a card to the player opposite”.",
+     each:{conversation:"Wearer is only talking or listening — no discrete physical act",
+           unclear:"You genuinely cannot tell what the wearer did (blur, action off-frame)"},
+     tip:"Trap: when the most eye-catching motion belongs to a BYSTANDER, still describe the wearer — usually “conversation” or “watches …”. Never describe the bystander's action here."}},
   {id:"B2", clip:"moment", q:"<b>B2</b> Is at least one visible person positioned to notice the action?",
-   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]],
+   help:{what:"Could someone have PERCEIVED the wearer's action, whether or not they responded? This is about opportunity, not response — B3 asks whether anything actually happened.",
+     counts:["Facing the wearer, or turned toward the shared activity or workspace",
+             "Close enough that ordinary speech or movement would register (roughly within a few metres)",
+             "Engaged in the same task, table, or conversation as the wearer"],
+     excludes:["Turned away AND far off, or absorbed in something unrelated across the room",
+               "Behind a barrier, or a distant passer-by who never orients toward the wearer"],
+     tip:"Yes here with No on B3 is a valuable combination, not a contradiction: someone could have responded and did not. That is the control class the benchmark needs."}},
   {id:"B3", clip:"moment", q:"<b>B3</b> Does any visible person noticeably react?",
-   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]],
+   help:{what:"Did any visible person's behaviour visibly CHANGE during the clip? A change of state, not a steady state. Useful test: compare the person at the start of the window with the same person at the end — would a bystander say “something happened there”?",
+     counts:["Expression changes (a smile or frown appears)",
+             "Head movement: nod, shake, turn toward or away",
+             "Gesture: point, wave, hand raised, object offered",
+             "Body movement: steps closer or back, leans in, flinches, straightens up",
+             "Audible: speech starts, laugh, exclamation",
+             "Gaze shifts to or away from the wearer"],
+     excludes:["Simply continuing an activity they were already doing",
+               "Merely being present, standing, or looking on unchanged",
+               "Apparent motion caused by the CAMERA moving — that is the wearer, not them"],
+     tip:"Answer for ANY visible person, even one clearly reacting to their phone. Who the reaction was FOR is B4's job, not this one."}},
   {id:"B4", clip:"moment", q:"<b>B4</b> What is the reaction most likely responding to?",
    opts:[["wearer","The wearer's action"],["something_else","Something/someone else"],
-         ["cant_tell","Can't tell"]]},
+         ["cant_tell","Can't tell"]],
+   help:{what:"Credit assignment: what caused the reaction you just recorded? Weigh three things — timing (did it follow the wearer's action closely?), orientation (were they turned toward the wearer or the object involved?), and plausibility (does it make sense as a response to that action?).",
+     each:{wearer:"Follows the wearer's action and is oriented toward the wearer, their hands, or the object involved",
+           something_else:"Clearly responding to a phone, a third person, their own task, or an off-screen event",
+           cant_tell:"A reaction happened but the evidence for its target is genuinely balanced or missing"},
+     tip:"“Can't tell” is a real answer that scores — models are graded on abstaining here. Never force a guess to avoid it."}},
   {id:"B5", clip:"moment", q:"<b>B5</b> How would the wearer most reasonably read this reaction?",
    note:"judge the reaction itself — decide this BEFORE watching the after-roll",
    opts:[["approving","Approving"],["disapproving","Disapproving"],
-         ["neutral","Neutral ack."],["mixed","Mixed/ambiguous"]]},
+         ["neutral","Neutral ack."],["mixed","Mixed/ambiguous"]],
+   help:{what:"Take the wearer's perspective: received as feedback on what I just did, was this positive, negative, or neither? Not “was the person happy” in general.",
+     each:{approving:"Smile, nod, laugh along, thumbs-up, accepts the object, moves closer, warm tone",
+           disapproving:"Frown, head shake, recoil or pull away, refusal, correction, sharp tone",
+           neutral:"Noticed with no evaluation — a glance up and back down, a flat acknowledgement",
+           mixed:"Genuinely both at once (laughs but backs away), or readable either way"},
+     tip:"Neutral is not the same as “can't tell”: neutral means you SAW acknowledgement carrying no valence. If you cannot read it at all, that is Mixed plus a lower B8."}},
   {id:"B6", clip:"moment", q:"<b>B6</b> Evidence channels (all that apply)", multi:true,
    opts:[["face","Face"],["head_gesture","Head gesture"],["hand_body","Hand/body"],
-         ["proxemics","Proxemics"],["voice","Voice"],["gaze","Gaze"]]},
+         ["proxemics","Proxemics"],["voice","Voice"],["gaze","Gaze"]],
+   help:{what:"Which signals did YOU actually use to reach your answers? Tick what you used, not everything theoretically present — this feeds per-channel reporting (“models read proxemics but miss prosody”), never the gold answer.",
+     each:{face:"Facial expression", head_gesture:"Nod, shake, tilt",
+           hand_body:"Hand gesture or body posture", proxemics:"Moving nearer or further away",
+           voice:"Anything audible — speech, laugh, tone", gaze:"Where they looked; attention shifting"}}},
   {id:"B7", clip:"after", q:"<b>B7</b> Right after, does the wearer change what they are doing?",
    note:"the only question needing the after-roll",
    opts:[["continues","Continues"],["adjusts","Adjusts/corrects"],
-         ["stops","Stops/disengages"],["cant_tell","Can't tell"]]},
+         ["stops","Stops/disengages"],["cant_tell","Can't tell"]],
+   help:{what:"In the after-roll, what does the WEARER do next? Purely descriptive — record what happened, never whether it was the right response, and do not worry about whether the reaction caused it.",
+     each:{continues:"Same activity, no visible change of course",
+           adjusts:"Same goal, changed execution — repeats, corrects, slows, redirects, hands it over differently",
+           stops:"Abandons or disengages — walks away, puts it down, switches to something unrelated",
+           cant_tell:"After-roll too blurred, too short, or too ambiguous to say"},
+     tip:"Judge the wearer's own behaviour, not the bystanders'."}},
   {id:"B8", clip:"both", q:"<b>B8</b> Your confidence in this moment",
-   opts:[["confident","Confident"],["somewhat","Somewhat"],["guessing","Guessing"]]},
-  {id:"B9", q:"<b>B9</b> Notes / flags (optional)", text:true},
+   opts:[["confident","Confident"],["somewhat","Somewhat"],["guessing","Guessing"]],
+   help:{what:"How much would you trust your own answers here?",
+     each:{confident:"You would give the same answers again next week",
+           somewhat:"The main calls are solid; one field is shaky",
+           guessing:"You are not really sure"},
+     tip:"Use Guessing freely — those moments are dropped from the test set automatically, so honesty here protects the benchmark instead of costing you anything."}},
+  {id:"B9", q:"<b>B9</b> Notes / flags (optional)", text:true,
+   help:{what:"Anything odd worth remembering: the window looks mistimed, several people react at once, the content looks staged, the machine caption is wrong, or you nearly chose a different answer."}},
   {id:"C1", q:"<b>C1</b> Missed moment in this clip? (timestamp + note, optional)", text:true,
-   note:"about the whole source video, not these two cuts"},
+   note:"about the whole source video, not these two cuts",
+   help:{what:"If you happen to notice a clear social reaction elsewhere in this source video that the system never proposed, note its rough timestamp. This measures the engine's recall for free and feeds a hard-case pool.",
+     tip:"Entirely opportunistic — never go hunting for these."}},
 ];
 const CLIP_LABEL={moment:"▶ Moment", after:"▶ After-roll", both:"either clip"};
 
-let S={moments:[],ratings:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main"};
+let S={moments:[],ratings:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main",
+       help:new Set(), helpAll:localStorage.getItem("srb_help_all")==="1"};
 
 const $=s=>document.querySelector(s);
 const cur=()=>S.moments[S.i];
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+
+function helpHTML(hp){
+  let h=`<div class="help"><p>${hp.what}</p>`;
+  if(hp.counts) h+=`<ul class="yes">`+hp.counts.map(x=>`<li>${x}</li>`).join("")+`</ul>`;
+  if(hp.excludes) h+=`<ul class="no">`+hp.excludes.map(x=>`<li>${x}</li>`).join("")+`</ul>`;
+  if(hp.each) h+=`<dl>`+Object.entries(hp.each)
+      .map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")+`</dl>`;
+  if(hp.tip) h+=`<p class="tip">${hp.tip}</p>`;
+  return h+`</div>`;
+}
 
 function visible(id){
   const a=S.ans;
@@ -188,8 +294,13 @@ function render(){
               title="${q.clip==="both"?"answerable from either clip"
                       :"click to play the "+(q.clip==="after"?"after-roll":"moment")}"
          >${CLIP_LABEL[q.clip]}</span>` : "";
-    let h=`<h3>${q.q}${required(q.id)?' <span class="muted">·required</span>':''} ${badge}</h3>`;
+    const hasHelp=q.help&&vis;
+    const helpOpen=hasHelp&&(S.helpAll||S.help.has(q.id));
+    let h=`<h3>${q.q}${required(q.id)?' <span class="muted">·required</span>':''} ${badge}`
+        + (hasHelp?`<span class="qh${helpOpen?" on":""}" data-help="${q.id}"
+                      title="what this question means">?</span>`:"")+`</h3>`;
     if(vis&&q.note) h+=`<div class="qnote">${q.note}</div>`;
+    if(helpOpen) h+=helpHTML(q.help);
     if(!vis) h+=`<div class="muted">skipped by the form's routing</div>`;
     else if(q.text){
       const v=(S.ans[q.id]||"").replace(/"/g,"&quot;");
@@ -280,6 +391,9 @@ async function save(advance){
 }
 
 document.addEventListener("click",e=>{
+  const qh=e.target.closest(".qh[data-help]");
+  if(qh){ const id=qh.dataset.help;
+    S.help.has(id)?S.help.delete(id):S.help.add(id); render(); return; }
   const cb=e.target.closest(".cb[data-clip]");
   if(cb&&!cb.classList.contains("both")){
     if(cb.dataset.clip==="p"&&!cur().has_splus){ toast("no after-roll for this moment",1); return; }
@@ -294,6 +408,14 @@ document.addEventListener("input",e=>{
   if(e.target.dataset&&e.target.dataset.f){ S.ans[e.target.dataset.f]=e.target.value;
     $("#save").disabled=!complete(); }
 });
+function toggleAllHelp(){
+  S.helpAll=!S.helpAll;
+  localStorage.setItem("srb_help_all",S.helpAll?"1":"0");   // sticky across sessions
+  S.help.clear();
+  $("#helpall").classList.toggle("on",S.helpAll);
+  render();
+}
+$("#helpall").onclick=toggleAllHelp;
 $("#save").onclick=()=>save(true);
 $("#prev").onclick=()=>load(S.i-1);
 $("#next").onclick=()=>load(S.i+1);
@@ -323,6 +445,7 @@ document.addEventListener("keydown",e=>{
   } else if(e.key==="s"){ showClip("s");
   } else if(e.key==="d"){ if(cur().has_splus) showClip("p");
   } else if(e.key==="r"){ $("#vid").currentTime=0; $("#vid").play();
+  } else if(e.key==="?"||(e.key==="/"&&e.shiftKey)){ toggleAllHelp(); e.preventDefault();
   } else if(e.key==="ArrowLeft"){ load(S.i-1);
   } else if(e.key==="ArrowRight"){ load(S.i+1); }
 });
@@ -331,6 +454,7 @@ document.addEventListener("keydown",e=>{
   const st=await (await fetch("/api/state")).json();
   S.moments=st.moments; S.ratings=st.ratings; S.mode=st.mode;
   $("#mode").textContent=(st.mode==="retest"?"RETEST (blind re-rate) → ":"→ ")+st.csv;
+  $("#helpall").classList.toggle("on",S.helpAll);
   const first=S.moments.findIndex(m=>!(S.ratings[m.moment_id]||{}).A1);
   load(first>=0?first:0);
 })();
