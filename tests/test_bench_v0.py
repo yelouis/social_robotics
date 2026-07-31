@@ -74,6 +74,57 @@ def test_gerundize():
     assert gerundize("listening") == "is listening"
 
 
+def test_rating_ui_rows_satisfy_the_validator():
+    """docs/07 Issue 3 A.2: the UI is a front-end over the SAME CSV, so every
+    row it writes must pass adjudicate.validate() unchanged."""
+    from rate_server import apply_skip_logic, Store
+
+    # full answer -> untouched
+    row = apply_skip_logic({"moment_id": "m1", "A1": "yes", "A2": "yes", "B1": "waves",
+                            "B2": "yes", "B3": "yes", "B4": "wearer", "B5": "approving",
+                            "B6": ["face", "gaze"], "B7": "continues", "B8": "confident"})
+    assert row["B6"] == "face;gaze"
+    clean, errors = validate([row])
+    assert not errors and clean[0]["B5"] == "approving"
+
+    # stale B-fields are BLANKED, not carried, when B3 flips to no
+    row = apply_skip_logic({"moment_id": "m2", "A1": "yes", "A2": "yes", "B1": "waves",
+                            "B2": "yes", "B3": "no", "B4": "wearer", "B5": "approving",
+                            "B7": "continues", "B8": "confident"})
+    assert row["B4"] == row["B5"] == row["B7"] == ""
+    assert not validate([row])[1]
+
+    # B4 != wearer blanks only B5
+    row = apply_skip_logic({"moment_id": "m3", "A1": "yes", "A2": "yes", "B1": "waves",
+                            "B2": "yes", "B3": "yes", "B4": "something_else",
+                            "B5": "approving", "B8": "somewhat"})
+    assert row["B5"] == "" and row["B4"] == "something_else"
+    assert not validate([row])[1]
+
+    # triage drop blanks the whole B block
+    row = apply_skip_logic({"moment_id": "m4", "A1": "no", "A2": "yes", "B1": "waves",
+                            "B3": "yes", "B4": "wearer", "B5": "approving", "B8": "confident"})
+    assert all(row[f] == "" for f in ("B1", "B2", "B3", "B4", "B5", "B7", "B8"))
+    assert not validate([row])[1]
+
+
+def test_rating_store_roundtrip_and_time_preserved(tmp_path):
+    from rate_server import Store
+    p = tmp_path / "ratings.csv"
+    st = Store(p, ["m1", "m2"])
+    st.save({"moment_id": "m1", "A1": "yes", "A2": "yes", "B1": "waves", "B2": "yes",
+             "B3": "no", "B8": "confident", "seconds_spent": "63"})
+    assert p.exists()
+    # reload sees it; unrated row still present (order preserved for adjudicate)
+    st2 = Store(p, ["m1", "m2"])
+    assert st2.rows["m1"]["B1"] == "waves" and st2.rows["m2"]["A1"] == ""
+    # re-edit keeps the FIRST timing (the docs/07 Issue-3 measurement)
+    st2.save({"moment_id": "m1", "A1": "yes", "A2": "yes", "B1": "waves harder",
+              "B2": "yes", "B3": "no", "B8": "confident", "seconds_spent": "5"})
+    assert st2.rows["m1"]["seconds_spent"] == "63"
+    assert not validate(list(Store(p, ["m1", "m2"]).rows.values()))[1]
+
+
 def _golden(mid, action, valence, reaction="yes", directed="wearer", audience="yes"):
     return {"moment_id": mid, "wearer_action": action, "audience": audience,
             "reaction": reaction, "directedness": directed, "valence": valence,

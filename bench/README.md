@@ -33,11 +33,34 @@ When it finishes you have `bench_v0/kits/…` (one folder per moment:
 ## Step 1 — YOUR PART: rate (≈4–6 h total, splittable)
 
 1. Read `bench/LABELING_GUIDE.md` once (10 min).
-2. Open `bench_v0/ratings_maintainer.csv` in a spreadsheet next to the kits
-   folder. For each row: watch `clip_s.mp4` (+ `clip_splus.mp4` for B7),
-   fill A1–B9 with the short codes. Rough `seconds_spent` per item is gold
-   for the v1 tooling decision — please fill it when you remember.
-3. Validate in batches (catches typos early):
+2. Start the rating UI (docs/07 Resolved #5, Option A.2) — it opens your browser:
+
+   ```zsh
+   venv/bin/python bench/rate_server.py
+   ```
+
+   Video and form in one view. **Every answer is written to
+   `bench_v0/ratings_maintainer.csv` the moment you save**, so you can close
+   the tab any time and resume — it reopens on the first unrated moment.
+   `seconds_spent` is captured automatically; no need to time yourself.
+
+   | Key | Does |
+   |---|---|
+   | `1`–`5` | answer the highlighted question (auto-advances) |
+   | `↑` `↓` / `j` `k` | move between questions |
+   | `Enter` | save & jump to the next unrated moment |
+   | `Space` / `R` | play-pause / replay |
+   | `S` / `D` | moment clip / after-roll clip |
+   | `←` `→` | previous / next moment (revisit and edit anything) |
+
+   The form enforces the §4.4 skip logic for you: answer `B3 = No` and B4–B7
+   grey out and are written blank, so the CSV always validates. The
+   machine-generated caption is shown greyed under the video (§4.2); engine
+   channel values are never served to the page at all (§4.6).
+
+   *The spreadsheet still works* — the UI reads and writes that same file, so
+   you can mix the two freely.
+3. Validate in batches (belt-and-braces; the UI already enforces the rules):
    `venv/bin/python bench/adjudicate.py --validate "/Volumes/Extreme SSD/social_robotics/bench_v0/ratings_maintainer.csv"`
 
 ## Step 2 — retest sample (same day it finishes)
@@ -50,6 +73,7 @@ venv/bin/python bench/adjudicate.py --make-retest ".../ratings_maintainer.csv"
 
 ```zsh
 venv/bin/python bench/make_rating_kit.py --only-retest ".../bench_v0/retest_ids.json"
+venv/bin/python bench/rate_server.py --retest    # blind: round-one answers never loaded
 ```
 
 and blind re-rate `ratings_maintainer_retest.csv` (fresh order; don't look at

@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SRB rater</title>
+<style>
+  :root{--bg:#14161a;--panel:#1c2027;--line:#2c313b;--fg:#e8eaed;--dim:#8d95a3;
+        --acc:#5aa9ff;--ok:#3ddc97;--warn:#ffb454;--bad:#ff6b6b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+  #wrap{display:grid;grid-template-columns:minmax(420px,1fr) minmax(430px,510px);
+        gap:18px;padding:16px;height:100vh}
+  #left{display:flex;flex-direction:column;gap:10px;min-width:0}
+  video{width:100%;background:#000;border-radius:8px;outline:none}
+  #right{overflow-y:auto;padding-right:6px}
+  .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .prog{flex:1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+  .prog>i{display:block;height:100%;background:var(--acc);width:0}
+  .muted{color:var(--dim);font-size:12px}
+  .hint{color:var(--dim);font-size:12px;font-style:italic}
+  .q{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line);
+     border-radius:8px;padding:10px 12px;margin-bottom:9px}
+  .q.active{border-left-color:var(--acc)}
+  .q.done{border-left-color:var(--ok)}
+  .q.skipped{opacity:.4}
+  .q h3{margin:0 0 7px;font-size:13px;font-weight:600}
+  .q h3 b{color:var(--acc);font-weight:600}
+  .opts{display:flex;flex-wrap:wrap;gap:6px}
+  button.opt{background:#242932;color:var(--fg);border:1px solid var(--line);
+             border-radius:6px;padding:7px 11px;font-size:13px;cursor:pointer;
+             display:flex;align-items:center;gap:7px}
+  button.opt:hover{border-color:var(--acc)}
+  button.opt.sel{background:var(--acc);border-color:var(--acc);color:#08111c;font-weight:600}
+  button.opt.sel.flag{background:var(--warn);border-color:var(--warn)}
+  kbd{background:#0f1319;border:1px solid var(--line);border-radius:3px;
+      padding:0 5px;font-size:11px;color:var(--dim);font-family:ui-monospace,monospace}
+  button.opt.sel kbd{background:rgba(0,0,0,.22);color:#08111c;border-color:transparent}
+  input[type=text],textarea{width:100%;background:#0f1319;color:var(--fg);
+      border:1px solid var(--line);border-radius:6px;padding:7px 9px;font:inherit}
+  textarea{resize:vertical;min-height:38px}
+  .row{display:flex;gap:8px;align-items:center}
+  .btn{background:var(--acc);color:#08111c;border:0;border-radius:7px;
+       padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn:disabled{background:#39414f;color:var(--dim);cursor:not-allowed}
+  .btn.ghost{background:#242932;color:var(--fg);border:1px solid var(--line);font-weight:500}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+         background:var(--ok);color:#062015;padding:8px 16px;border-radius:20px;
+         font-weight:600;opacity:0;transition:opacity .18s;pointer-events:none}
+  #toast.show{opacity:1}
+  #toast.err{background:var(--bad);color:#2b0808}
+  .pill{background:#242932;border:1px solid var(--line);border-radius:20px;
+        padding:2px 10px;font-size:12px;color:var(--dim)}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="left">
+    <div class="bar">
+      <button class="btn ghost" id="prev">&larr;</button>
+      <div class="prog"><i id="progbar"></i></div>
+      <button class="btn ghost" id="next">&rarr;</button>
+    </div>
+    <div class="bar">
+      <span class="pill" id="counter">—</span>
+      <span class="pill" id="stats">—</span>
+      <span class="pill" id="timer">0s</span>
+      <span class="muted" id="mode"></span>
+    </div>
+    <video id="vid" controls autoplay loop playsinline></video>
+    <div class="bar">
+      <button class="btn ghost" id="tS">Moment <kbd>S</kbd></button>
+      <button class="btn ghost" id="tP">After-roll <kbd>D</kbd></button>
+      <button class="btn ghost" id="replay">Replay <kbd>R</kbd></button>
+      <span class="muted" id="clipinfo"></span>
+    </div>
+    <div class="hint" id="hint"></div>
+    <div class="muted">Keys: <kbd>1</kbd>…<kbd>5</kbd> answer active question ·
+      <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> save &amp; next ·
+      <kbd>Space</kbd> play/pause</div>
+  </div>
+
+  <div id="right">
+    <div id="form"></div>
+    <div class="row" style="margin:12px 0 30px">
+      <button class="btn" id="save">Save &amp; next <kbd>⏎</kbd></button>
+      <span class="muted" id="valid"></span>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const SCHEMA = [
+  {id:"A1", q:"<b>A1</b> Besides the camera wearer, can you see at least one person?",
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+  {id:"A2", q:"<b>A2</b> Is the moment watchable? (not too dark/blurred/occluded to judge behavior)",
+   opts:[["yes","Yes"],["no","No"]]},
+  {id:"A3", q:"<b>A3</b> Content flags (quarantines the moment)", multi:true,
+   opts:[["minor","Minor focal"],["nudity_private","Nudity/private"],
+         ["sensitive_info","Sensitive info"],["distress","Distress"],["other","Other"]]},
+  {id:"B1", q:"<b>B1</b> What does the <u>camera wearer</u> do? (verb first)", text:true,
+   quick:[["conversation","conversation"],["unclear","unclear"]]},
+  {id:"B2", q:"<b>B2</b> Is at least one visible person positioned to notice the action?",
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+  {id:"B3", q:"<b>B3</b> Does any visible person noticeably react?",
+   opts:[["yes","Yes"],["no","No"],["unsure","Unsure"]]},
+  {id:"B4", q:"<b>B4</b> What is the reaction most likely responding to?",
+   opts:[["wearer","The wearer's action"],["something_else","Something/someone else"],
+         ["cant_tell","Can't tell"]]},
+  {id:"B5", q:"<b>B5</b> How would the wearer most reasonably read this reaction?",
+   opts:[["approving","Approving"],["disapproving","Disapproving"],
+         ["neutral","Neutral ack."],["mixed","Mixed/ambiguous"]]},
+  {id:"B6", q:"<b>B6</b> Evidence channels (all that apply)", multi:true,
+   opts:[["face","Face"],["head_gesture","Head gesture"],["hand_body","Hand/body"],
+         ["proxemics","Proxemics"],["voice","Voice"],["gaze","Gaze"]]},
+  {id:"B7", q:"<b>B7</b> Right after, does the wearer change what they are doing? <span class='muted'>(after-roll)</span>",
+   opts:[["continues","Continues"],["adjusts","Adjusts/corrects"],
+         ["stops","Stops/disengages"],["cant_tell","Can't tell"]]},
+  {id:"B8", q:"<b>B8</b> Your confidence in this moment",
+   opts:[["confident","Confident"],["somewhat","Somewhat"],["guessing","Guessing"]]},
+  {id:"B9", q:"<b>B9</b> Notes / flags (optional)", text:true},
+  {id:"C1", q:"<b>C1</b> Missed moment in this clip? (timestamp + note, optional)", text:true},
+];
+
+let S={moments:[],ratings:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main"};
+
+const $=s=>document.querySelector(s);
+const cur=()=>S.moments[S.i];
+
+function visible(id){
+  const a=S.ans;
+  const triagedOut = a.A1!=="yes" || (a.A2 && a.A2!=="yes") || (a.A1 && !a.A2);
+  if(["A1","A2","A3","C1"].includes(id)) return true;
+  if(a.A1!=="yes"||a.A2!=="yes") return false;            // triage drop → B skipped
+  if(["B1","B2","B3","B8","B9"].includes(id)) return true;
+  if(a.B3!=="yes") return false;                          // no reaction → B4-B7 skipped
+  if(id==="B4"||id==="B6") return true;
+  if(id==="B5") return a.B4==="wearer";                   // only wearer-directed has valence
+  if(id==="B7") return !!cur().has_splus;
+  return true;
+}
+function required(id){
+  if(!visible(id)) return false;
+  if(["A1","A2"].includes(id)) return true;
+  if(["B1","B2","B3","B8"].includes(id)) return true;
+  if(id==="B4") return S.ans.B3==="yes";
+  if(id==="B5") return S.ans.B4==="wearer";
+  return false;
+}
+function complete(){ return SCHEMA.every(q=>!required(q.id)||(S.ans[q.id]||"").length); }
+
+function render(){
+  const m=cur(), f=$("#form");
+  f.innerHTML="";
+  SCHEMA.forEach((q,idx)=>{
+    const vis=visible(q.id);
+    const d=document.createElement("div");
+    d.className="q"+(idx===S.active&&vis?" active":"")+(vis?"":" skipped")+
+                ((S.ans[q.id]||"").length?" done":"");
+    d.dataset.idx=idx;
+    let h=`<h3>${q.q}${required(q.id)?' <span class="muted">·required</span>':''}</h3>`;
+    if(!vis) h+=`<div class="muted">skipped by the form's routing</div>`;
+    else if(q.text){
+      const v=(S.ans[q.id]||"").replace(/"/g,"&quot;");
+      h+=`<input type="text" data-f="${q.id}" value="${v}" placeholder="${
+           q.id==="B1"?"e.g. hands a card to the player opposite":"optional"}">`;
+      if(q.quick) h+=`<div class="opts" style="margin-top:6px">`+q.quick.map(([v2,l],j)=>
+        `<button class="opt${S.ans[q.id]===v2?" sel":""}" data-f="${q.id}" data-v="${v2}">
+           <kbd>${j+1}</kbd>${l}</button>`).join("")+`</div>`;
+    } else {
+      const sel=(S.ans[q.id]||"").split(";").filter(Boolean);
+      h+=`<div class="opts">`+q.opts.map(([v,l],j)=>
+        `<button class="opt${sel.includes(v)?" sel":""}${q.id==="A3"?" flag":""}"
+           data-f="${q.id}" data-v="${v}" ${q.multi?'data-multi="1"':''}>
+           <kbd>${j+1}</kbd>${l}</button>`).join("")+`</div>`;
+    }
+    d.innerHTML=h;
+    f.appendChild(d);
+  });
+  const rated=Object.values(S.ratings).filter(r=>r.A1).length;
+  const acc=Object.values(S.ratings).filter(r=>r.A1==="yes"&&r.A2==="yes"&&!r.A3).length;
+  const times=Object.values(S.ratings).map(r=>+r.seconds_spent).filter(x=>x>0);
+  const med=times.length?times.sort((a,b)=>a-b)[Math.floor(times.length/2)]:0;
+  $("#counter").textContent=`${S.i+1} / ${S.moments.length}`;
+  $("#stats").textContent=`${rated} rated · ${acc} accepted`+(med?` · ~${med}s/item`:"");
+  $("#progbar").style.width=(100*rated/S.moments.length)+"%";
+  $("#save").disabled=!complete();
+  $("#valid").textContent=complete()?"":"answer the required questions";
+  $("#clipinfo").textContent=`clip ${m.clip_id.slice(0,8)} · climax ${m.t_climax_sec.toFixed(1)}s`
+                             +(m.has_splus?"":" · no after-roll");
+  $("#hint").innerHTML=m.task_label_hint
+    ? `machine-generated hint (ignore if it disagrees with your eyes): “${m.task_label_hint}”` : "";
+}
+
+function setAns(field,val,multi){
+  if(multi){
+    const s=new Set((S.ans[field]||"").split(";").filter(Boolean));
+    s.has(val)?s.delete(val):s.add(val);
+    S.ans[field]=[...s].join(";");
+  } else {
+    S.ans[field]=S.ans[field]===val?"":val;
+    const order=SCHEMA.map(q=>q.id), k=order.indexOf(field);
+    for(let j=k+1;j<order.length;j++){ if(visible(order[j])){ S.active=j; break; } }
+  }
+  render();
+}
+
+function load(i){
+  S.i=Math.max(0,Math.min(i,S.moments.length-1));
+  const m=cur();
+  const r=S.ratings[m.moment_id]||{};
+  S.ans={}; SCHEMA.forEach(q=>{ if(r[q.id]) S.ans[q.id]=r[q.id]; });
+  S.active=0; S.t0=Date.now();
+  showClip("s");
+  render();
+}
+function showClip(which){
+  const m=cur();
+  $("#vid").src=`/kits/${m.moment_id}/${which==="s"?"clip_s.mp4":"clip_splus.mp4"}`;
+  $("#vid").play().catch(()=>{});
+}
+function toast(msg,err){
+  const t=$("#toast"); t.textContent=msg; t.className="show"+(err?" err":"");
+  setTimeout(()=>t.className="",1200);
+}
+
+async function save(advance){
+  const m=cur();
+  const payload={moment_id:m.moment_id, ...S.ans,
+                 seconds_spent:Math.round((Date.now()-S.t0)/1000)};
+  const res=await fetch("/api/rating",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const j=await res.json();
+  if(!j.ok){ toast("save failed",1); return; }
+  S.ratings[m.moment_id]=j.row;
+  toast("saved");
+  if(advance){
+    const nextUnrated=S.moments.findIndex((mm,k)=>k>S.i&&!(S.ratings[mm.moment_id]||{}).A1);
+    load(nextUnrated>=0?nextUnrated:S.i+1);
+  } else render();
+}
+
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button.opt");
+  if(b){ setAns(b.dataset.f,b.dataset.v,b.dataset.multi); return; }
+  const q=e.target.closest(".q");
+  if(q){ S.active=+q.dataset.idx; render(); }
+});
+document.addEventListener("input",e=>{
+  if(e.target.dataset&&e.target.dataset.f){ S.ans[e.target.dataset.f]=e.target.value;
+    $("#save").disabled=!complete(); }
+});
+$("#save").onclick=()=>save(true);
+$("#prev").onclick=()=>load(S.i-1);
+$("#next").onclick=()=>load(S.i+1);
+$("#tS").onclick=()=>showClip("s");
+$("#tP").onclick=()=>showClip("p");
+$("#replay").onclick=()=>{ $("#vid").currentTime=0; $("#vid").play(); };
+
+document.addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"){
+    if(e.key==="Enter") e.target.blur();
+    return;
+  }
+  const vis=SCHEMA.map((q,i)=>[q,i]).filter(([q])=>visible(q.id));
+  if(e.key>="1"&&e.key<="9"){
+    const q=SCHEMA[S.active];
+    if(q&&visible(q.id)){
+      const list=q.opts||q.quick||[];
+      const pick=list[+e.key-1];
+      if(pick){ setAns(q.id,pick[0],q.multi); e.preventDefault(); }
+    }
+  } else if(e.key==="ArrowDown"||e.key==="j"){
+    const nxt=vis.find(([,i])=>i>S.active); if(nxt){S.active=nxt[1];render();} e.preventDefault();
+  } else if(e.key==="ArrowUp"||e.key==="k"){
+    const pr=[...vis].reverse().find(([,i])=>i<S.active); if(pr){S.active=pr[1];render();} e.preventDefault();
+  } else if(e.key==="Enter"){ if(complete()) save(true); e.preventDefault();
+  } else if(e.key===" "){ const v=$("#vid"); v.paused?v.play():v.pause(); e.preventDefault();
+  } else if(e.key==="s"){ showClip("s");
+  } else if(e.key==="d"){ if(cur().has_splus) showClip("p");
+  } else if(e.key==="r"){ $("#vid").currentTime=0; $("#vid").play();
+  } else if(e.key==="ArrowLeft"){ load(S.i-1);
+  } else if(e.key==="ArrowRight"){ load(S.i+1); }
+});
+
+(async()=>{
+  const st=await (await fetch("/api/state")).json();
+  S.moments=st.moments; S.ratings=st.ratings; S.mode=st.mode;
+  $("#mode").textContent=(st.mode==="retest"?"RETEST (blind re-rate) → ":"→ ")+st.csv;
+  const first=S.moments.findIndex(m=>!(S.ratings[m.moment_id]||{}).A1);
+  load(first>=0?first:0);
+})();
+</script>
+</body>
+</html>
