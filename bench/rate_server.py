@@ -67,10 +67,11 @@ def apply_skip_logic(answer: dict) -> dict:
 class Store:
     """CSV-backed rating store: load on start, atomic rewrite on every save."""
 
-    def __init__(self, csv_path: Path, moment_ids):
+    def __init__(self, csv_path: Path, moment_ids, seeds=None):
         self.path = Path(csv_path)
         self.order = list(moment_ids)
         self.rows = {m: blank_row(m) for m in self.order}
+        self.seeds = seeds or {}
         self.reload()
 
     def reload(self):
@@ -89,12 +90,64 @@ class Store:
                 if mid not in self.order:
                     self.order.append(mid)
 
+    AUDIT_COLS = ["moment_id", "models", "agreed_with", "diverged_from",
+                  "conflict_fields", "n_models"]
+
+    def audit_seed(self, mid, row, by_model):
+        """Per moment, record which seeding models the human ended up agreeing
+        with, which they diverged from, and where the models conflicted. This
+        is what makes the pre-seeding deviation disclosable rather than
+        invisible: anchoring becomes measurable after the fact."""
+        if not by_model:
+            return
+        fields = ("A1", "A2", "A3", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8")
+        agreed, diverged = [], []
+        for model, seed in sorted(by_model.items()):
+            same = True
+            for f in fields:
+                sv = seed.get(f) or ""
+                sv = ";".join(sv) if isinstance(sv, list) else str(sv).strip()
+                hv = (row.get(f) or "").strip()
+                if not sv and not hv:
+                    continue
+                if sv.lower() != hv.lower():
+                    same = False
+                    break
+            (agreed if same else diverged).append(model)
+        conflict = []
+        for f in fields:
+            vals = set()
+            for seed in by_model.values():
+                sv = seed.get(f) or ""
+                sv = ";".join(sv) if isinstance(sv, list) else str(sv).strip()
+                if sv:
+                    vals.add(sv.lower())
+            if len(vals) > 1:
+                conflict.append(f)
+        path = self.path.parent / (self.path.stem + "_seed_audit.csv")
+        rows = {}
+        if path.exists():
+            with open(path, newline="") as f:
+                rows = {r["moment_id"]: r for r in csv.DictReader(f)}
+        rows[mid] = {"moment_id": mid, "models": ";".join(sorted(by_model)),
+                     "agreed_with": ";".join(agreed), "diverged_from": ";".join(diverged),
+                     "conflict_fields": ";".join(conflict), "n_models": len(by_model)}
+        tmp = path.with_suffix(".csv.tmp")
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=self.AUDIT_COLS)
+            w.writeheader()
+            for m in self.order:
+                if m in rows:
+                    w.writerow(rows[m])
+        os.replace(tmp, path)
+
     def save(self, answer: dict) -> dict:
         self.reload()
         mid = answer.get("moment_id")
         if mid not in self.rows:
             raise KeyError(mid)
         row = apply_skip_logic(answer)
+        self.audit_seed(mid, row, (self.seeds or {}).get(mid))
         # Preserve the FIRST completion time — it is the docs/07 Issue-3
         # measurement; re-edits must not inflate it.
         prev = self.rows[mid].get("seconds_spent", "")
@@ -157,7 +210,11 @@ def make_handler(store: Store, moments: list, kits_dir: Path, mode: str):
                 return self._send(200, (HERE / "rater.html").read_bytes(), "text/html")
             if p == "/api/state":
                 payload = {"mode": mode, "csv": str(store.path),
-                           "moments": moments, "ratings": store.rows}
+                           "moments": moments, "ratings": store.rows,
+                           # Seeds are shown ONLY in the main round. A blind
+                           # retest that displayed Claude's answers would
+                           # measure agreement-with-Claude, not self-consistency.
+                           "seeds": ({} if mode == "retest" else store.seeds)}
                 return self._send(200, json.dumps(payload).encode())
             if p.startswith("/kits/"):
                 rel = p[len("/kits/"):]
@@ -203,7 +260,17 @@ def main():
                     "task_label_hint": r.get("task_label_hint", "")}
                    for r in csv.DictReader(f)]
 
-    store = Store(csv_path, [m["moment_id"] for m in moments])
+    # Multi-model seeds: bench_v0/seeds/<model>.jsonl, one file per seeding model.
+    seeds = {}
+    seed_dir = BENCH_DATA / "seeds"
+    if seed_dir.exists() and not a.retest:
+        for p in sorted(seed_dir.glob("*.jsonl")):
+            with open(p) as f:
+                for line in f:
+                    if line.strip():
+                        s = json.loads(line)
+                        seeds.setdefault(s["moment_id"], {})[s.get("model", p.stem)] = s
+    store = Store(csv_path, [m["moment_id"] for m in moments], seeds=seeds)
     handler = make_handler(store, moments, kits_dir, "retest" if a.retest else "main")
 
     socketserver.TCPServer.allow_reuse_address = True

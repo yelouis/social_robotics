@@ -52,6 +52,25 @@
   .help dd{margin:0;color:var(--dim)}
   .help .tip{color:var(--warn);margin:6px 0 0}
   .help .tip:before{content:"▸ ";font-weight:700}
+  .seed{background:#161d17;border:1px solid #2a3a2e;border-left:3px solid var(--ok);
+        border-radius:6px;padding:7px 10px;margin:0 0 8px;font-size:12.5px}
+  .seed.conflict{background:#1d1a16;border-color:#3a332a;border-left-color:var(--warn)}
+  .seed .shead{color:var(--ok);font-weight:700;font-size:11px;text-transform:uppercase;
+               letter-spacing:.04em;margin-bottom:5px}
+  .seed.conflict .shead{color:var(--warn)}
+  .srow{margin-bottom:5px}
+  .smodel{display:inline-block;min-width:96px;color:var(--dim);font-size:11px;
+          font-family:ui-monospace,monospace}
+  button.sval{background:#242932;color:var(--fg);border:1px solid var(--line);
+              border-radius:5px;padding:2px 9px;font-size:12px;cursor:pointer;font-weight:600}
+  button.sval:hover{border-color:var(--acc)}
+  button.sval.chosen{background:var(--acc);border-color:var(--acc);color:#08111c}
+  .sval.none{color:var(--dim)}
+  .seed .sr{color:var(--dim);margin:2px 0 0 96px;line-height:1.45}
+  .seed .conflictnote{margin-left:0;color:var(--warn);font-style:italic}
+  #seedbanner{background:#161d17;border:1px solid #2a3a2e;border-radius:6px;
+              padding:6px 10px;font-size:12px;color:var(--dim);margin-bottom:2px}
+  #seedbanner b{color:var(--ok)}
   .opts{display:flex;flex-wrap:wrap;gap:6px}
   button.opt{background:#242932;color:var(--fg);border:1px solid var(--line);
              border-radius:6px;padding:7px 11px;font-size:13px;cursor:pointer;
@@ -241,12 +260,56 @@ const SCHEMA = [
 ];
 const CLIP_LABEL={moment:"▶ Moment", after:"▶ After-roll", both:"either clip"};
 
-let S={moments:[],ratings:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main",
+let S={moments:[],ratings:{},seeds:{},i:0,ans:{},active:0,t0:Date.now(),mode:"main",
        help:new Set(), helpAll:localStorage.getItem("srb_help_all")==="1"};
 
 const $=s=>document.querySelector(s);
 const cur=()=>S.moments[S.i];
 const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+
+function seedPicksFor(mid,qid){
+  // [{model, value, rationale}] for one question, across every seeding model.
+  const by=S.seeds[mid]||{};
+  return Object.entries(by).map(([model,s])=>{
+    let v=s[qid];
+    if(Array.isArray(v)) v=v.join(";");
+    return {model, value:(v===undefined||v===null)?"":String(v),
+            rationale:(s.rationale||{})[qid]||""};
+  }).filter(p=>p.value!==""||p.rationale);
+}
+function seedConsensusFor(mid,qid){
+  // null = no seeds · {value} = all models agree · {conflict:[…]} = they differ
+  const picks=seedPicksFor(mid,qid).filter(p=>p.value!=="");
+  if(!picks.length) return null;
+  const vals=[...new Set(picks.map(p=>p.value.toLowerCase()))];
+  return vals.length===1 ? {value:picks[0].value, picks} : {conflict:picks};
+}
+const seedPicks=qid=>seedPicksFor(cur().moment_id,qid);
+const seedConsensus=qid=>seedConsensusFor(cur().moment_id,qid);
+
+function seedHTML(q){
+  const picks=seedPicks(q.id);
+  if(!picks.length) return "";
+  const con=seedConsensus(q.id);
+  const conflict=con&&con.conflict;
+  const mine=(S.ans[q.id]||"").toLowerCase();
+  let h=`<div class="seed${conflict?" conflict":""}">`;
+  h+=`<div class="shead">${conflict?"models disagree — you decide"
+        :"model suggestion"+(picks.length>1?" (all agree)":"")}</div>`;
+  for(const p of picks){
+    const chosen=mine&&p.value&&mine===p.value.toLowerCase();
+    h+=`<div class="srow">
+          <span class="smodel">${esc(p.model)}</span>
+          ${p.value?`<button class="sval${chosen?" chosen":""}" data-adopt="${q.id}"
+                       data-val="${esc(p.value)}" title="use this answer"
+                     >${esc(p.value)}</button>`:'<span class="sval none">—</span>'}
+          ${p.rationale?`<div class="sr">${esc(p.rationale)}</div>`:""}
+        </div>`;
+  }
+  if(conflict&&!mine) h+=`<div class="sr conflictnote">Left blank on purpose: pick the
+      one you agree with, or answer independently.</div>`;
+  return h+`</div>`;
+}
 
 function helpHTML(hp){
   let h=`<div class="help"><p>${hp.what}</p>`;
@@ -301,6 +364,7 @@ function render(){
                       title="what this question means">?</span>`:"")+`</h3>`;
     if(vis&&q.note) h+=`<div class="qnote">${q.note}</div>`;
     if(helpOpen) h+=helpHTML(q.help);
+    if(vis) h+=seedHTML(q);
     if(!vis) h+=`<div class="muted">skipped by the form's routing</div>`;
     else if(q.text){
       const v=(S.ans[q.id]||"").replace(/"/g,"&quot;");
@@ -352,6 +416,17 @@ function load(i){
   const m=cur();
   const r=S.ratings[m.moment_id]||{};
   S.ans={}; SCHEMA.forEach(q=>{ if(r[q.id]) S.ans[q.id]=r[q.id]; });
+  // Pre-select Claude's seed ONLY on a moment you have not saved yet — a saved
+  // row is your answer and must never be overwritten by a seed.
+  // Prefill ONLY where every seeding model agrees. Where they conflict the
+  // field is left blank on purpose — picking an arbitrary winner would anchor
+  // you on exactly the moments that are genuinely ambiguous.
+  if(!r.A1 && S.seeds[m.moment_id]){
+    SCHEMA.forEach(q=>{
+      const con=seedConsensusFor(m.moment_id,q.id);
+      if(con&&con.value) S.ans[q.id]=con.value;
+    });
+  }
   S.active=0; S.t0=Date.now();
   showClip("s");
   render();
@@ -391,6 +466,11 @@ async function save(advance){
 }
 
 document.addEventListener("click",e=>{
+  const ad=e.target.closest("button.sval[data-adopt]");
+  if(ad){ const f=ad.dataset.adopt, v=ad.dataset.val;
+    const q=SCHEMA.find(x=>x.id===f);
+    if(q&&q.text) S.ans[f]=v; else S.ans[f]=v;    // text or option: adopt verbatim
+    render(); return; }
   const qh=e.target.closest(".qh[data-help]");
   if(qh){ const id=qh.dataset.help;
     S.help.has(id)?S.help.delete(id):S.help.add(id); render(); return; }
@@ -452,7 +532,7 @@ document.addEventListener("keydown",e=>{
 
 (async()=>{
   const st=await (await fetch("/api/state")).json();
-  S.moments=st.moments; S.ratings=st.ratings; S.mode=st.mode;
+  S.moments=st.moments; S.ratings=st.ratings; S.mode=st.mode; S.seeds=st.seeds||{};
   $("#mode").textContent=(st.mode==="retest"?"RETEST (blind re-rate) → ":"→ ")+st.csv;
   $("#helpall").classList.toggle("on",S.helpAll);
   const first=S.moments.findIndex(m=>!(S.ratings[m.moment_id]||{}).A1);

@@ -33,6 +33,10 @@ def main():
     ap.add_argument("--min-sec", type=float, default=300)
     ap.add_argument("--max-sec", type=float, default=2400)
     ap.add_argument("--max-per-wearer", type=int, default=2)
+    ap.add_argument("--max-per-scenario", type=int, default=2,
+                    help="Diversity cap. Without it, ranking by scenario yield drains the "
+                         "single highest-yield scenario and the pilot becomes a monoculture "
+                         "(the first v0 harvest returned 13/13 clips of one scenario).")
     ap.add_argument("--seed", type=int, default=7)
     a = ap.parse_args()
     rng = random.Random(a.seed)
@@ -66,23 +70,39 @@ def main():
         dur = v.get("duration_sec") or 0
         if not (a.min_sec <= dur <= a.max_sec):
             continue
-        weight = max((scen_weight.get(s, 0) for s in (v.get("scenarios") or [])), default=0)
+        scens = v.get("scenarios") or []
+        weight = max((scen_weight.get(s, 0) for s in scens), default=0)
         if weight == 0:
             continue                          # scenario never yielded social clips
-        candidates.append((weight, rng.random(), u, w, dur))
+        candidates.append((weight, rng.random(), u, w, dur, tuple(scens)))
 
-    # Rank: social-yield weight desc, random tiebreak; cap per wearer.
+    # Rank by social-yield weight, then fill ROUND-ROBIN over scenarios so no
+    # single scenario can drain the list (a monoculture pilot cannot support
+    # the cross-domain claim, and it over-samples sedentary talk-heavy scenes).
     candidates.sort(key=lambda x: (-x[0], x[1]))
-    picked = []
-    for weight, _, u, w, dur in candidates:
-        if per_wearer[w] >= a.max_per_wearer:
-            continue
-        per_wearer[w] += 1
-        picked.append({"video_uid": u, "wearer": w, "duration_sec": dur,
-                       "scenario_weight": weight,
-                       "scenarios": by_uid[u].get("scenarios")})
-        if len(picked) >= a.target_clips:
-            break
+    by_scenario = defaultdict(list)
+    for c in candidates:
+        by_scenario[c[5][0] if c[5] else "?"].append(c)
+    # scenarios ordered by their best candidate's weight, then round-robin
+    order = sorted(by_scenario, key=lambda s: -by_scenario[s][0][0])
+    picked, per_scenario, exhausted = [], defaultdict(int), False
+    while len(picked) < a.target_clips and not exhausted:
+        exhausted = True
+        for s in order:
+            if per_scenario[s] >= a.max_per_scenario:
+                continue
+            while by_scenario[s]:
+                weight, _, u, w, dur, scens = by_scenario[s].pop(0)
+                if per_wearer[w] >= a.max_per_wearer:
+                    continue
+                per_wearer[w] += 1
+                per_scenario[s] += 1
+                picked.append({"video_uid": u, "wearer": w, "duration_sec": dur,
+                               "scenario_weight": weight, "scenarios": list(scens)})
+                exhausted = False
+                break
+            if len(picked) >= a.target_clips:
+                break
 
     SPLITS_FILE.write_text(json.dumps(
         {"generated_from": "select_heldout.py",

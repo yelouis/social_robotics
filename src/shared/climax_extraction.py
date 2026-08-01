@@ -118,6 +118,13 @@ def expand_task_segments(tasks: Iterable[dict],
             pseudo = dict(task)
             base_meta = dict(meta)
             base_meta.pop('reaction_segments', None)  # collapse to a single-window view
+            # Carry THIS segment's own fields (segment_action_caption,
+            # segment_face_px, control_type, bbox_kernel_score, …). Without
+            # this the collapsed view silently exposes only the task-level
+            # mirror of the PRIMARY segment, so per-segment consumers fall back
+            # to whole-video metadata — which is how the bench kits ended up
+            # captioned with the coarse Ego4D scenario label.
+            base_meta.update(s)
             base_meta['task_reaction_window_sec'] = w
             base_meta['task_climax_sec'] = s.get('task_climax_sec', (w[0] + w[1]) / 2.0)
             pseudo['task_temporal_metadata'] = base_meta
