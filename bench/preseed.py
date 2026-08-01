@@ -226,9 +226,18 @@ def main():
         SEED_DIR.mkdir(parents=True, exist_ok=True)
         ordered = [seeds[m["moment_id"]] for m in moments if m["moment_id"] in seeds]
         write_jsonl(seed_path(a.model), ordered)
+        remaining = len(moments) - len(ordered)
+        # Durable checkpoint trail: a resuming agent (or a human) can read the
+        # whole history without reconstructing it from the seed file.
+        import time
+        with open(SEED_DIR / f"{a.model}.progress.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  +{len(incoming):3d}  "
+                    f"total={len(ordered):4d}  remaining={remaining:4d}  "
+                    f"modality={a.modality}\n")
         print(json.dumps({"model": a.model, "accepted": len(incoming),
                           "total_seeded": len(ordered),
-                          "remaining": len(moments) - len(ordered)}, indent=2))
+                          "remaining": remaining,
+                          "checkpoint_log": str(SEED_DIR / f"{a.model}.progress.log")}, indent=2))
         return
 
     ap.print_help()
