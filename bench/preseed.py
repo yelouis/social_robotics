@@ -155,10 +155,12 @@ def main():
     ap.add_argument("--record", metavar="SEEDS_JSON")
     ap.add_argument("--agreement", action="store_true",
                     help="Cross-model agreement + the list of conflicting moments.")
-    ap.add_argument("--modality", choices=("frames", "video"), default="frames",
-                    help="How the seeding model consumed the moment. 'video' means it "
-                         "received the mp4 itself INCLUDING the audio track (e.g. Gemini "
-                         "via the Files API); only then may a seed cite voice evidence.")
+    ap.add_argument("--modality", choices=("video", "frames"), default="video",
+                    help="Seeding is VIDEO-ONLY by policy (PRESEED_PROMPT.md): the model "
+                         "must watch the mp4 with its audio, because tone routinely decides "
+                         "B3/B5/B6. 'frames' is a deprecated escape hatch for a seeder that "
+                         "genuinely cannot receive video; it forbids voice evidence and "
+                         "marks the seeds blind.")
     a = ap.parse_args()
 
     moments = kit_moments()
@@ -213,6 +215,10 @@ def main():
         if bad:
             print(json.dumps({"rejected": bad}, indent=2))
             raise SystemExit(1)
+        if a.modality == "frames":
+            print("[preseed] WARNING: recording FRAME-BASED seeds. Policy is video-only "
+                  "(PRESEED_PROMPT.md) — these seeds cannot carry voice evidence and are "
+                  "stamped blind:['voice']. Use only if the seeder truly cannot take video.")
         known = {m["moment_id"] for m in moments}
         seeds = load_seeds(a.model)
         for s in incoming:

@@ -21,26 +21,48 @@ Set these once per session and reuse them:
 cd /Users/louisye/Desktop/Louis/social_robotics
 PY=venv/bin/python
 MODEL=<your-model-id>        # e.g. gemini-3-pro — pick ONE and never change it
-MODALITY=video               # 'video' if you receive the mp4 WITH audio, else 'frames'
 ```
+
+**You must watch the actual video with its audio.** This task is video-only:
+seeding from extracted stills is not an option here, because speech, laughter
+and tone routinely decide B3, B5 and B6, and a silent read of them is
+systematically wrong in ways the reviewer cannot see. If you cannot receive an
+mp4 with a working audio track, **stop and tell the human** — do not substitute
+frames, screenshots, or a description of the video obtained from elsewhere.
 
 ---
 
 ## 0. Hard rules (violating these silently ruins the dataset)
 
-1. **Never open, read, or ask for another model's seeds.** Not
-   `bench_v0/seeds/*.jsonl`, not the human's `ratings_maintainer.csv`. Several
-   models seed the same moments *independently*; agreement between them is only
-   meaningful if you never saw the others. This is the single most important rule.
-2. **Never read the pipeline's own predictions** — `candidate_moments.jsonl`
-   (it contains `engine_prefill`), or anything under `bench_v0/03*_result.json`.
-   The benchmark exists to test whether models can do this; seeding from the
-   pipeline's guesses would make it circular. The commands below never expose
-   them to you.
+1. **The judgement must be yours, formed by watching the clip.** Never open,
+   read, or ask for another model's seeds (`bench_v0/seeds/*.jsonl`) or the
+   human's `ratings_maintainer.csv`. Several models seed the same moments
+   *independently*; agreement between them is only meaningful if you never saw
+   the others. This is the single most important rule.
+
+   You **may** build or use tools that help *you* perceive the clip better —
+   a script that slows playback, extracts a crop, isolates or amplifies the
+   audio, or produces a speech transcript. Those give you raw perception.
+   You **may not** hand the clip to another model and copy back its *answer* —
+   a captioner, a VLM, or an agent asked "what social feedback is this?" is a
+   judgement, not a perception aid. The line: a tool may tell you **what is
+   there**; only you may decide **what it means**.
+
+   Whenever a tool contributed to an answer, say so in that field's
+   `rationale` (e.g. "transcript from ASR: '…'; tone judged from the audio").
+
+2. **Never let the project's own pipeline inform your answers.** Do not read
+   `candidate_moments.jsonl` (it carries `engine_prefill`), anything under
+   `bench_v0/03*_result.json`, the `segment_dataset/`, or the greyed
+   machine-generated caption. Do not run the engine's layers (`src/layer_*`) to
+   help you decide. The benchmark exists to test whether models can read social
+   feedback; seeding from the pipeline's guesses would make it measure itself.
+   The commands in this runbook never expose those to you — keep it that way.
 3. **Every answered field needs a `rationale` entry.** A seed without one is
    rejected. Cite what you saw or heard and roughly when ("frames 3–4", "at ~2 s").
-4. **`voice` in B6 only if you actually heard audio.** On `MODALITY=frames` the
-   recorder rejects it. Never claim to have heard something you did not.
+4. **`voice` in B6 only if you actually heard it in this clip.** Never infer
+   speech from moving mouths and never claim to have heard something you did
+   not. Many clips are silent; that is a fact about the clip, not a failure.
 5. **Never edit `ratings_maintainer.csv`.** That file belongs to the human.
    You write only via `preseed.py --record`.
 6. **Say when you are unsure.** `unsure` / `cant_tell` / `unclear` are real,
@@ -59,10 +81,19 @@ Prints how many kits exist and how many you have already seeded. If
 `this_model.seeded` is `0`, you are starting fresh. If it is non-zero, you are
 resuming — that is normal, go straight to the loop.
 
-If `MODALITY=video`, verify on your first clip that audio really reached you
-(ask yourself: can I hear speech?). Many clips are genuinely silent, so test on
-one where people are visibly talking. If you cannot hear anything on such a
-clip, switch to `MODALITY=frames` and say so to the human.
+**Audio gate — do this before seeding anything.** Open this clip, which is known
+to contain audible conversation:
+
+```
+/Volumes/Extreme SSD/social_robotics/bench_v0/kits/srb-ego4d-2e1f8114-7fd1-4728-82a1-a4b92ebb6af2-321000/clip_s.mp4
+```
+
+Confirm you can hear speech in it and report what you hear. Many Ego4D clips are
+genuinely silent, so this specific clip is the test — a "no audio" answer here
+means the audio is not reaching you, not that the clip is quiet.
+
+If you cannot hear it: **stop and tell the human.** Do not proceed on stills and
+do not ask another model to describe it for you.
 
 ---
 
@@ -71,7 +102,7 @@ clip, switch to `MODALITY=frames` and say so to the human.
 ### Step 1 — get your next batch (clips are found for you)
 
 ```bash
-$PY bench/preseed.py --model $MODEL --modality $MODALITY --next 5
+$PY bench/preseed.py --model $MODEL --next 5
 ```
 
 This prints a JSON array of moments you have **not** yet seeded. Each entry has:
@@ -79,7 +110,6 @@ This prints a JSON array of moments you have **not** yet seeded. Each entry has:
 - `moment_id` — the id you must echo back in your seed
 - `clip_moment` — absolute path to the 7 s moment clip (**with audio**)
 - `clip_after` — absolute path to the ~9 s after-roll, or `null` if none exists
-- `frames_moment` / `frames_after` — extracted JPEGs (only on `--modality frames`)
 - `t_climax_sec`, `has_splus`
 
 **You never need a human to give you file paths.** If the array comes back
@@ -90,7 +120,7 @@ without losing the batch.
 
 ### Step 2 — watch the moment clip only
 
-Open `clip_moment` (or the `frames_moment` stills). **Do not open `clip_after`
+Watch `clip_moment` — video and audio together. **Do not open `clip_after`
 yet.** Answer A1–A2, then B1–B6.
 
 Withholding the after-roll is not a formality: benchmark family F4 asks a model
@@ -110,7 +140,7 @@ Write a JSON **array** (one object per moment) to a temp path, e.g.
 ### Step 5 — record it (this is your checkpoint)
 
 ```bash
-$PY bench/preseed.py --model $MODEL --modality $MODALITY --record /tmp/seeds_batch.json
+$PY bench/preseed.py --model $MODEL --record /tmp/seeds_batch.json
 ```
 
 - Success prints `{"accepted": N, "total_seeded": M, "remaining": R, ...}` and
@@ -148,7 +178,7 @@ Then go to §2 Step 1. Nothing else needs to be recovered.
 it — re-rating 5 moments is cheaper than reasoning about which ones landed.
 
 **Report to the human** at each checkpoint, in one line:
-`seeded <total>/<kits>, <remaining> left, modality=<video|frames>` plus anything
+`seeded <total>/<kits>, <remaining> left` plus anything
 that surprised you (clips with no audio, unreadable footage, repeated `unclear`).
 
 ---
