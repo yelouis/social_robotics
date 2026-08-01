@@ -21,11 +21,18 @@ is designed so the next session (yours or another model's) continues cleanly.
 2. **State a reason for every field you answer.** A seed without a rationale is
    rejected by the recorder. The rationale is what makes your answer reviewable
    — the human reads it to decide whether to keep or change your pick.
-3. **You cannot hear audio.** You are looking at extracted frames. Any evidence
-   that would come from speech, laughter, or tone is invisible to you. Never
-   claim voice evidence; never tick `voice` in B6. Every seed is stamped
-   `blind:["voice"]` automatically. Where audio would plausibly decide the
-   answer, say so in the rationale and lower B8.
+3. **Know which modality you are using — it changes what you may claim.**
+   - **Frame track** (`--modality frames`, the default): you see extracted
+     stills only. You cannot hear anything. Never tick `voice` in B6 — the
+     recorder rejects it — and where audio would plausibly decide the answer,
+     say so in the rationale and lower B8. Seeds are stamped `blind:["voice"]`.
+   - **Native-video track** (`--modality video`): the model received the mp4
+     itself, audio included (see §2b). You may cite tone, speech, and laughter,
+     and you may tick `voice`. Seeds are stamped `blind:[]`.
+
+   Do not use `--modality video` unless the model genuinely received the audio
+   track. A silent-video model claiming voice evidence is worse than a frame
+   model admitting it cannot hear.
 4. **Say when you are unsure.** `unsure` / `cant_tell` / `unclear` are real,
    scored answers. A confident wrong seed costs the maintainer more time than
    an honest uncertain one, because it is more likely to be accepted silently.
@@ -77,23 +84,28 @@ rejects violations, so you cannot silently corrupt the form.
 cd /Users/louisye/Desktop/Louis/social_robotics
 PY=venv/bin/python
 MODEL=claude-opus-5            # your model id — pick one and keep it stable
+MODALITY=frames                # or: video   (see §2b)
 
 # 1. Where am I?
 $PY bench/preseed.py --model $MODEL --status
 
 # 2. Get the next batch (start with 5; tune to what your context allows)
-$PY bench/preseed.py --model $MODEL --next 5
+$PY bench/preseed.py --model $MODEL --modality $MODALITY --next 5
 ```
 
 `--next` prints a JSON array. Each entry has `moment_id`, `t_climax_sec`,
-`has_splus`, and two lists of **already-extracted JPEG paths**:
-`frames_moment` (6 frames across the moment) and `frames_after` (6 across the
-after-roll).
+`has_splus`, plus:
 
-**3. Look at the frames.** Open every `frames_moment` image. Open
-`frames_after` only when you need B7 — and answer B1–B6 first, because knowing
-what happened next biases the read of the reaction itself (the same rule the
-human raters follow).
+- `clip_moment` / `clip_after` — absolute paths to the **mp4s with audio**
+  (use these on the native-video track);
+- `frames_moment` / `frames_after` — 6 extracted JPEGs each (frame track only;
+  omitted when `--modality video`).
+
+**3. Watch the moment.** On the frame track, open every `frames_moment` image.
+On the native-video track, send `clip_moment` itself. Either way, hold back
+`clip_after` / `frames_after` until you need B7 — answer B1–B6 first, because
+knowing what happened next biases the read of the reaction itself (the same
+rule the human raters follow).
 
 **4. Write your seeds** to a temp JSON file — a list of objects:
 
@@ -124,7 +136,7 @@ human raters follow).
 **5. Record it** (validates enums + skip logic, appends, and is idempotent):
 
 ```bash
-$PY bench/preseed.py --model $MODEL --record /tmp/seeds_batch.json
+$PY bench/preseed.py --model $MODEL --modality $MODALITY --record /tmp/seeds_batch.json
 ```
 
 It prints `{"accepted": N, "total_seeded": M, "remaining": R}`. **That printed
@@ -134,6 +146,57 @@ is written unless the whole batch validates.
 
 **6. Repeat from step 1.** A new session picks up exactly where the last stopped,
 because `--next` skips moments already in your model's seed file.
+
+---
+
+## 2b. Native-video track (models that accept the mp4 with audio)
+
+If your model takes video directly — Gemini via the Files API is the usual case
+— **prefer it**. The clips carry their original audio, and speech, laughter and
+tone are decisive evidence for B3 (did anyone react), B5 (how the wearer would
+read it), and B6 (`voice`). A frame-based seeder is structurally blind to all of
+it, so an audio-capable seed is the more valuable one.
+
+Run with `--modality video`. Send `clip_moment` (7 s, audio included), and only
+fetch `clip_after` when you reach B7.
+
+A minimal Gemini recipe — one moment, one call:
+
+```python
+import json, os
+from google import genai
+
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+moment = json.loads(open("/tmp/batch.json").read())[0]      # from --next
+
+f = client.files.upload(file=moment["clip_moment"])         # audio comes with it
+prompt = open("bench/PRESEED_PROMPT.md").read() + "\n\nmoment_id: " + moment["moment_id"]
+
+resp = client.models.generate_content(
+    model="gemini-3-pro",                                   # any video+audio model
+    contents=[f, prompt],
+    config={"response_mime_type": "application/json"},
+)
+print(resp.text)          # -> append to your batch seeds file
+```
+
+Notes that matter:
+
+- **Confirm the audio actually arrived.** Ask the model, on the first clip, to
+  describe any sound it hears. Many Ego4D clips are genuinely silent, so a
+  single "no audio" answer proves nothing — check on a clip where people are
+  visibly talking. If it cannot hear, switch back to `--modality frames`; a
+  silent model claiming voice evidence is the one failure mode this design
+  cannot detect for you.
+- **Upload the moment clip only** until you need B7. Sending both at once leaks
+  the after-roll into the B1–B6 answers and destroys the F4 boundary.
+- **Batch by API limits, not context.** Video calls are heavier than image
+  calls; 3–5 moments per run is a sane start.
+- Ask for JSON matching the schema in step 4 exactly (`response_mime_type` above
+  does most of the work), then hand the array straight to `--record`.
+
+`bench/PRESEED_PROMPT.md` holds a ready-made system prompt with the question
+definitions inlined, so a non-agentic model can be driven from a plain script.
 
 ---
 

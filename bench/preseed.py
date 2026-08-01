@@ -75,15 +75,23 @@ def extract_frames(moment_id, after=False):
     return [str(p) for p in sorted(out.glob("*.jpg"))]
 
 
-def validate_seed(s):
+def validate_seed(s, modality="frames"):
     """Same enum + skip-logic contract the human form uses, so a seed can never
-    pre-fill an invalid combination."""
+    pre-fill an invalid combination. `modality` additionally gates the voice
+    channel: a frame-based seeder cannot have heard anything."""
     errs = []
     mid = s.get("moment_id")
     if not mid:
         return ["missing moment_id"]
     if not s.get("rationale"):
         errs.append("missing rationale (every seeded field needs a stated reason)")
+    if modality == "frames":
+        b6 = s.get("B6") or ""
+        b6 = ";".join(b6) if isinstance(b6, list) else str(b6)
+        if "voice" in b6.lower():
+            errs.append("B6 lists 'voice' but this seed is frame-based (no audio was "
+                        "available) — use --modality video only if the model actually "
+                        "received the clip's audio track")
     for f in ("A1", "A2"):
         if s.get(f) not in ENUMS[f]:
             errs.append(f"{f}={s.get(f)!r} invalid")
@@ -147,6 +155,10 @@ def main():
     ap.add_argument("--record", metavar="SEEDS_JSON")
     ap.add_argument("--agreement", action="store_true",
                     help="Cross-model agreement + the list of conflicting moments.")
+    ap.add_argument("--modality", choices=("frames", "video"), default="frames",
+                    help="How the seeding model consumed the moment. 'video' means it "
+                         "received the mp4 itself INCLUDING the audio track (e.g. Gemini "
+                         "via the Files API); only then may a seed cite voice evidence.")
     a = ap.parse_args()
 
     moments = kit_moments()
@@ -175,8 +187,14 @@ def main():
         done = load_seeds(a.model)
         todo = [m for m in moments if m["moment_id"] not in done][:a.next]
         for m in todo:
-            m["frames_moment"] = extract_frames(m["moment_id"])
-            m["frames_after"] = extract_frames(m["moment_id"], after=True)
+            kit = BENCH_DATA / "kits" / m["moment_id"]
+            # Video-capable models take these directly (audio included); frame-only
+            # models use the extracted stills. Both are always provided.
+            m["clip_moment"] = str(kit / "clip_s.mp4")
+            m["clip_after"] = str(kit / "clip_splus.mp4") if (kit / "clip_splus.mp4").exists() else None
+            if a.modality == "frames":
+                m["frames_moment"] = extract_frames(m["moment_id"])
+                m["frames_after"] = extract_frames(m["moment_id"], after=True)
         print(json.dumps(todo, indent=1))
         return
 
@@ -191,7 +209,7 @@ def main():
         incoming = json.loads(Path(a.record).read_text())
         incoming = incoming if isinstance(incoming, list) else [incoming]
         bad = [{"moment_id": s.get("moment_id"), "errors": e}
-               for s in incoming if (e := validate_seed(s))]
+               for s in incoming if (e := validate_seed(s, a.modality))]
         if bad:
             print(json.dumps({"rejected": bad}, indent=2))
             raise SystemExit(1)
@@ -200,7 +218,9 @@ def main():
         for s in incoming:
             if s["moment_id"] not in known:
                 raise SystemExit(f"unknown moment_id {s['moment_id']}")
-            s.setdefault("blind", ["voice"])   # frame-based seeding cannot hear
+            s["modality"] = a.modality
+            # Frame-based seeding is deaf; native-video seeding is not.
+            s["blind"] = [] if a.modality == "video" else ["voice"]
             s["model"] = a.model
             seeds[s["moment_id"]] = s
         SEED_DIR.mkdir(parents=True, exist_ok=True)
