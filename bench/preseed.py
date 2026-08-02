@@ -46,6 +46,8 @@ def load_seeds(model: str = None):
         return {s["moment_id"]: s for s in (read_jsonl(p) if p.exists() else [])}
     out = {}
     for p in sorted(SEED_DIR.glob("*.jsonl")) if SEED_DIR.exists() else []:
+        if p.name.startswith("."):
+            continue
         for s in read_jsonl(p):
             out.setdefault(s["moment_id"], {})[s.get("model", p.stem)] = s
     return out

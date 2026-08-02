@@ -49,7 +49,7 @@ def moment_id(corpus: str, clip_id: str, t_climax_sec: float) -> str:
 def read_jsonl(path):
     import json
     out = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -60,6 +60,6 @@ def read_jsonl(path):
 def write_jsonl(path, rows):
     import json
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

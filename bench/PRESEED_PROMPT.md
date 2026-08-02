@@ -1,5 +1,50 @@
 # Pre-seeding runbook — read this, then work the loop until it says DONE
 
+## ★ GOAL — the task is not finished until this is true
+
+**Seed every moment in the kit set.** You are done when, and only when:
+
+```bash
+venv/bin/python bench/preseed.py --model $MODEL --status
+# -> "this_model": { "remaining": 0 }
+```
+
+equivalently, when `--next` returns an empty array `[]`. That is the **single**
+completion condition. At the time of writing there are ~349 moments; `--status`
+is the authority, not this number.
+
+### Do not stop before `remaining` is 0
+
+This is a long, repetitive job — a few hundred moments, five at a time. It is
+*expected* to take many batches. Specifically:
+
+- **Finishing a batch is not finishing the task.** After every `--record`, go
+  straight back to §2 Step 1 and pull the next batch.
+- **Do not ask for permission to continue.** You already have it. Continue
+  automatically until `remaining` is 0.
+- **Reporting progress is not stopping.** Print your one-line status and keep
+  going in the same turn.
+- **Do not stop because the work feels repetitive, or because you have done
+  "enough", or because a milestone looks tidy.** There are no milestones other
+  than `remaining: 0`.
+- **A rejected batch is not a stop condition.** Fix the fields the recorder
+  listed and re-run the same `--record`.
+- **If you are interrupted or restarted**, resume with §3 and carry on — the
+  goal is unchanged and your progress is on disk.
+
+### The only legitimate reasons to stop early
+
+Stop, and say plainly which one applies:
+
+1. The audio gate in §1 fails — you cannot hear the known-good clip.
+2. The same batch fails validation three times and you cannot see why.
+3. `--status` reports 0 kits, or the paths in this file do not exist.
+4. The human tells you to stop.
+
+Anything else: keep going.
+
+---
+
 You are pre-rating short clips from a head-mounted (egocentric) camera for the
 **SocialRobotics-Bench v0** pilot. A human reviews and corrects everything you
 produce. Your job is an honest first pass **with a stated reason for every
@@ -151,9 +196,19 @@ $PY bench/preseed.py --model $MODEL --record /tmp/seeds_batch.json
 **Record after every single batch.** An unrecorded batch is lost work. Never
 hold two batches of unrecorded seeds.
 
-### Step 6 — go back to Step 1
+### Step 6 — go back to Step 1 (do not end your turn here)
 
 Do not carry anything forward in your head. Step 1 recomputes what is left.
+
+**Check the completion condition, then act on it:**
+
+- `remaining > 0` → immediately run Step 1 again. Do not pause, do not ask, do
+  not summarise-and-halt. The loop continues in the same turn.
+- `remaining == 0` → you are DONE. Report the final count and stop.
+
+If you find yourself about to write "I have completed a batch" or "let me know
+if you'd like me to continue" while `remaining > 0`, that is the failure this
+runbook exists to prevent. Pull the next batch instead.
 
 ---
 
