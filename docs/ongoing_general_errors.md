@@ -4,7 +4,7 @@
 - The build spec is [`agent_execution_guide.md`](agent_execution_guide.md). This file is where findings and choices live.
 - The project's decision log lives in [`00_thesis.md`](00_thesis.md) (one source).
 
-**Filing format.** An open issue states its status, the facts with dates and sources, two to four options each with pros and cons, a recommendation, and a final `Your selection: _____` line. **That line belongs to the maintainer, and an agent must never fill it in.**
+**Filing format.** An open issue states its status, the facts with dates and sources, two or more options, each with pros and cons, a recommendation, and a final `Your selection: _____` line. **That line belongs to the maintainer, and an agent must never fill it in.**
 
 ---
 
@@ -37,6 +37,13 @@
    - The [YouTube Researcher Program](https://research.youtube.com/) expands API quota for researchers affiliated with an accredited higher-education institution. That is metadata only, not video files.
 4. **Precedent:** Kinetics, AudioSet and HowTo100M distribute YouTube IDs plus annotations. **Link rot is real.** Kinetics' older editions lost enough videos that a snapshot is now hosted separately ([Kinetics-700-2020 note](https://arxiv.org/abs/2010.10864)).
 5. **What we release, under any option:** IDs, timestamps, verdict labels, model scores. **Never face or voice embeddings of identifiable people.**
+6. **The maintainer is not affiliated with a university** (stated October 9, 2026). The consequences:
+   - the YouTube Researcher Program is unavailable;
+   - there is no institutional ethics review or counsel, and the EU research text-and-data-mining exception (for research organisations) does not apply, so any terms or copyright risk is personal;
+   - academic-only datasets are closed: Emognition needs an academic email, and DEAP needs a permanent academic position.
+7. **Licensed reaction-plus-verdict data does exist, behind agreements without a stated affiliation rule:**
+   - **AM-FED / AM-FED+:** webcam reactions to a few Super Bowl ads, with self-reported "Did you like the video?"; AM-FED+ has 1,044 videos. Access is a signed non-commercial EULA, emailed to `amfed@affectiva.com` ([AM-FED](https://www.affectiva.com/facial-expression-dataset-/)).
+   - **A taste-liking database:** 2,970 videos of taste-induced expressions from 495 people (*Automatic Estimation of Taste Liking Through Facial Expression Dynamics*, IEEE TAC 2020). No public download was found; ask the authors.
 
 **Option A: Download public videos for research; release only IDs, timestamps and labels (as v0 did)**
 - *Pros:*
@@ -82,7 +89,26 @@
   - cannot produce the H2 scaling curve alone.
 - Best as a **complement** to A/B/C, not a replacement.
 
-**Recommendation:** **C**, with D as an optional complement for a clean, consented evaluation slice. Expect C to resolve to A at pilot scale. The paper's decisive H1 numbers can then rest on licensed datasets (HoloAssist, Oops!, BAD), with web video carrying the scale story.
+**Option E: licensed reaction-plus-verdict datasets** (AM-FED+, plus the taste-liking database if its authors share it)
+- *Pros:*
+  - real verdict labels, legally obtained through an agreement;
+  - no YouTube involvement;
+  - in AM-FED+, many viewers see the same ad, so an action-only judge is blind *by design*. Only reactions can explain who liked it. That is the cleanest test of "this person, right now".
+- *Cons:*
+  - the stimuli are ads, not food, so it is a different domain from verdict videos;
+  - fixed size (no scaling curve);
+  - depends on the EULA holders accepting an independent researcher.
+
+**Recommendation (revised October 9, 2026 for an unaffiliated maintainer):** **D + E as the hidden-outcome core, with B (or creator permission) for scale.**
+- **D:** record your own taste tests. It is the only fully owned, consented verdict data, and it rehearses stage A.
+- **E:** request AM-FED+ (and the taste-liking database).
+- **Scale:**
+  - CC videos from platforms that *allow* downloading (Internet Archive, Wikimedia Commons, Vimeo with download enabled);
+  - direct permission from taste-test creators (templates in [`maintainer_access_requests.md`](maintainer_access_requests.md));
+  - C's API count is still useful to size the CC pool.
+- **A (unauthorized public download) is no longer recommended** without institutional cover.
+
+The paper's H1 claims then rest on HoloAssist, Oops!, AM-FED+ and your own recordings, all obtained legitimately. Web video adds scale only where permission exists.
 
 Your selection: _____
 
@@ -124,9 +150,11 @@ Your selection: _____
 
 | Id | Action | Why | Status |
 |---|---|---|---|
-| M1 | Request **BAD dataset** access (Cornell IRL; research protocol / data-use agreement) and check **ERR@HRI 3.0** data availability | H2 targets: reactions to robots. Lead time | Open |
-| M2 | Add an "Archived (October 2026)" note to the 6 public `louisye/social-robotics-*` Hugging Face cards | They describe the v0 pipeline as current | Approved October 8; the designer applies it once the wording is confirmed |
-| M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Needed by Issue 1 Option C and any Wave B discovery | Open |
+| M1 | Request **BAD dataset** access (QDR account → "Contact Owner") and email the **ERR@HRI 3.0** organizers about post-challenge access | H2 targets: reactions to robots. Lead time. Drafts: `maintainer_access_requests.md` M1a/M1b | Open |
+| M2 | Add an "Archived (October 2026)" note to the 6 public `louisye/social-robotics-*` Hugging Face cards | They describe the v0 pipeline as current | ✅ Done October 9 (wording confirmed by the maintainer; 6 HF commits) |
+| M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional |
+| M4 | Sign and send the **AM-FED+** EULA | Issue 1 option E: reactions + self-reported liking | Open, pending the Issue 1 selection |
+| M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | Optional |
 
 ---
 

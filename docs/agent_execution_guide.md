@@ -468,14 +468,13 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 
 ## 4. Deferred: do NOT start
 
-- **Wave B (verdict videos), DW1.** Needs Issue 1's selection **and** a Wave B spec from the designer. Do not write it yourself.
+- **Wave B (hidden-outcome verdict data), DW1.** Needs Issue 1's selection **and** a Wave B spec from the designer. Do not write it yourself.
 - **The face encoder** (`react-face`), DW2: part of Wave B.
 - **H2 transfer** to BAD / ERR@HRI, DW3: needs maintainer action M1 (access) and Wave B.
 - **The Ego4D false-positive set,** DW4.
 - **H3** (robot trajectories, RL), DW5.
 - **Stage A live** (the microduck), DW6.
 - **Any web or YouTube video acquisition.**
-- **The Hugging Face card edits** (M2): maintainer/designer only.
 - **Re-downloading any Ego4D or Charades-Ego video.**
 - **Anything from tag `v0-saf-final`** (layers, bench, visualizer): read it for reference, never restore it.
 

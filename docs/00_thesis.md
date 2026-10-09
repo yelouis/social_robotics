@@ -75,7 +75,7 @@ On data with known outcomes, observer reactions predict the outcome **and add in
   - On **visible-outcome** data (Oops! failures), (a) is strong and (c) ≈ (a).
   - On **hidden-outcome** data (verdict videos, HoloAssist mistakes), (b) > (a) and (c) > (a).
 - **Pass (proposed):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 **and** fusion − `action_best` ≥ +0.03 with the paired CI excluding 0.
-- **Kill:** if reactions add nothing over `action_best` on the **verdict videos** (the purest hidden-outcome test), the strong thesis is false. Stop, and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
+- **Kill:** if reactions add nothing over `action_best` on the **verdict data** (Wave B, the purest hidden-outcome test), the strong thesis is false. Stop, and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
 
 ### H2: Scale and transfer
 A reaction model trained on web video transfers to held-out datasets it never saw, including **reactions to robots** (BAD, ERR@HRI) and **first-person** data (HoloAssist), and improves with more web data.
@@ -107,7 +107,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 | Wave | Deliverable | Gate |
 |---|---|---|
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
-| **B** (≈ weeks 4–7) | **Verdict-video H1 pilot**, ~200 videos: the purest hidden-outcome test, with face + non-verbal audio | **Issue 1** (web-video sourcing) selected; Wave A closed |
+| **B** (≈ weeks 4–7) | **Hidden-outcome H1 pilot**: a reaction followed by a verdict (your own taste-test recordings, AM-FED+, permitted web video, per Issue 1), with face + non-verbal audio | **Issue 1** selected; Wave A closed |
 | **C** (≈ weeks 7–10) | **H2**: transfer to BAD / ERR@HRI; scaling curves on the verdict corpus | BAD access granted (maintainer action M1) |
 | **D** (≈ weeks 10–12) | Paper write-up; decide H3 | — |
 

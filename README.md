@@ -26,6 +26,7 @@
 | [`LESSONS_v0.md`](docs/LESSONS_v0.md) | What the v0 pipeline taught us (negative results + operations) |
 | [`agent_execution_guide.md`](docs/agent_execution_guide.md) | The build spec: what is approved, in what order, and how each item is validated |
 | [`ongoing_general_errors.md`](docs/ongoing_general_errors.md) | Open issues, decisions awaiting your selection, deferred work, resolved index |
+| [`maintainer_access_requests.md`](docs/maintainer_access_requests.md) | Ready-to-send dataset access requests (BAD, ERR@HRI, AM-FED+, taste-liking, creators) |
 
 ## Layout
 
