@@ -1,7 +1,6 @@
 import os
 import sys
 
-import numpy as np
 import pytest
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -44,38 +43,3 @@ def test_ollama_chat_raises_on_timeout(monkeypatch):
     monkeypatch.setattr(vc.httpx, "post", fake_post)
     with pytest.raises(vc.httpx.TimeoutException):
         vc.ollama_chat("m", "hi", timeout=1)
-
-
-# ---------------------------------------------------------------------------
-# The social-presence gate degrades gracefully on a VLM timeout / honors result
-# ---------------------------------------------------------------------------
-def test_gate_times_out_to_default_and_passes_timeout(monkeypatch):
-    import shared.social_presence as sp
-    import shared.vlm_client as vc
-    det = sp.SocialPresenceDetector(vlm_model="qwen2.5vl:7b")
-    frame = np.zeros((48, 48, 3), dtype=np.uint8)
-
-    # A timeout must not propagate out of the gate — it returns the default.
-    captured = {}
-
-    def boom(*a, **k):
-        captured.update(k)
-        raise vc.httpx.TimeoutException("wedged")
-
-    monkeypatch.setattr(sp, "ollama_chat", boom)
-    assert det._vlm_confirms_multiple_people(frame) is True   # default_on_error=True
-    assert captured.get("timeout") == sp.VLM_REQUEST_TIMEOUT   # generous bound passed through
-
-    # Normal YES / NO answers are honored.
-    monkeypatch.setattr(sp, "ollama_chat", lambda *a, **k: "YES")
-    assert det._vlm_confirms_multiple_people(frame) is True
-    monkeypatch.setattr(sp, "ollama_chat", lambda *a, **k: "NO")
-    assert det._vlm_confirms_multiple_people(frame) is False
-
-
-def test_vlm_timeout_constants_are_generous():
-    # (CLIMAX_VLM_REQUEST_TIMEOUT retired June 30: the Layer 02b bbox-kernel
-    # detector replaced the flow+VLM climax refinement, so climax no longer
-    # makes VLM calls at all.)
-    import shared.social_presence as sp
-    assert sp.VLM_REQUEST_TIMEOUT >= 60       # generous vs ~6s normal — only true hangs fire

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Supervised runner — resolves docs/03_social_layer_architecture.md Unresolved
-# Issue 1 (Option A): long unattended layer runs die silently (the recurring
-# macOS "Python quit unexpectedly" native-crash mode) and an operator cannot
-# tell a dead run from a slow one. Every layer pipeline is already resumable
-# (per-video atomic writes + resume-by-default), so recovery is one relaunch
-# away — this wrapper performs that relaunch automatically and surfaces a
-# genuinely-stuck run loudly.
+# Supervised runner: long unattended runs die silently (the recurring macOS
+# "Python quit unexpectedly" native-crash mode) and an operator cannot tell a
+# dead run from a slow one. If the runner is resumable (per-item atomic writes +
+# resume-by-default), recovery is one relaunch away — this wrapper performs that
+# relaunch automatically and surfaces a genuinely-stuck run loudly.
+# (History: docs/LESSONS_v0.md, "Operations".)
 #
 # What it adds around any resumable runner:
 #   - caffeinate -dimsu : blocks system/disk sleep for the run's lifetime
@@ -15,16 +14,14 @@
 #   - no-progress guard   : counts records in the result JSON between attempts;
 #                          aborts after 2 consecutive relaunches that add zero
 #                          records (a deterministic "poison clip" crash-loop —
-#                          the edge the docs/01 acquisition wrapper never hit,
-#                          because layer pipelines mark a video processed only
-#                          AFTER success, not before).
+#                          runners that mark an item processed only AFTER
+#                          success can otherwise crash-loop forever).
 #
 # Usage:
 #   tools/run_supervised.sh <result_json> <runner command...>
 # Example:
-#   tools/run_supervised.sh \
-#       e2e_reports/2026_06_10_layer03d_50_postfix/03d_result_50.json \
-#       ./venv/bin/python tools/run_03d_50.py
+#   tools/run_supervised.sh results/features.json \
+#       ./venv/bin/python -m <resumable runner>
 #
 # Env:
 #   SR_SUPERVISE_MAX_ATTEMPTS  hard ceiling on relaunches (default 50)
