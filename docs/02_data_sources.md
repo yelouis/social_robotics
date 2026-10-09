@@ -4,12 +4,12 @@ Every source must provide three things: an **action**, a **reaction** from someo
 
 | Source | Outcome visible in the action? | Reaction channel | Outcome label | Role | Access |
 |---|---|---|---|---|---|
-| **Verdict videos** (web) | **Hidden** | Taster's face + voice before the verdict | Spoken verdict ("7 out of 10"), parsed from ASR | H1 core; H2 training corpus and scaling curve | Web; licensing decision pending ([00](00_thesis.md) open questions) |
+| **Verdict videos** (web) | **Hidden** | Taster's face + voice before the verdict | Spoken verdict ("7 out of 10"), parsed from ASR | H1 core; H2 training corpus and scaling curve | Web; sourcing decision pending (Issue 1) |
 | **HoloAssist** | **Hidden / partly visible** | Remote instructor's voice | Mistake annotations per action segment | H1 first-person; H2 target | Public download ([site](https://holoassist.github.io)) |
 | **Oops!** | **Visible** | Filmer's audio (laughs, gasps), visible spectators | Failure-onset timestamp | H1 visible-outcome contrast | Public download ([site](https://oops.cs.columbia.edu/data)) |
 | **BAD** / **ERR@HRI 3.0** | Visible (stimulus video) | Webcam face of the viewer | Failure vs. control stimulus | H2 target: reactions *to robots* | Request + data-use agreement |
 | **REACT** | — | Reactions to robots + explicit feedback | Explicit evaluative feedback | H2 target candidate | Check availability |
-| **Ego4D v0 corpus** (archived) | — | Bystanders | **None** | Optional: false-positive rate on steady-state co-activity | On SSD (`full_run_2026_06_18/segment_dataset_991/`) |
+| **Ego4D v0 corpus** (archived) | — | Bystanders | **None** | Optional: false-positive rate on steady-state co-activity | Derived data on the SSD; raw videos deleted October 8 (re-download by id) |
 
 ---
 
@@ -22,7 +22,7 @@ Every source must provide three things: an **action**, a **reaction** from someo
 **Labeling pipeline (fully automatic):**
 1. **ASR** with word timestamps (Whisper; `mlx-whisper` on Apple Silicon).
 2. **Verdict extraction**: a regex for `N/10`, `N out of 10`, `N stars`, with an LLM fallback for phrasings like "solid eight". Map each verdict to its item when one video reviews several (segment by item mentions in the transcript).
-3. **Reaction window**: from the item's first taste to the start of the verdict utterance, minus a safety margin. First-taste detection starts as a simple transcript and visual heuristic, tuned in the Phase-1 pilot.
+3. **Reaction window**: from the item's first taste to the start of the verdict utterance, minus a safety margin. First-taste detection starts as a simple transcript and visual heuristic, tuned in the Wave-B pilot.
 4. **Label**: binary high/low (e.g. ≥ 8 vs ≤ 5 out of 10, middle excluded) for AUROC, plus the raw score for rank correlation.
 5. **Code QA**: check verdict parsing and windowing on a random sample of transcripts. This tests our parser, not the meaning of any label.
 
@@ -33,19 +33,61 @@ Every source must provide three things: an **action**, a **reaction** from someo
 
 ## HoloAssist: first-person, hidden outcome
 
-An egocentric performer (headset camera) completes physical tasks while a remote instructor watches the live feed and talks them through it. Annotations include **mistakes**, **intervention types** and action segments. The reaction is the instructor's voice; the outcome is the mistake label for the segment.
+An egocentric performer (HoloLens camera) completes physical tasks while a remote instructor watches the live feed and talks them through it.
 
-**Check before use:** if mistake labels were derived *from* the instructor's interventions, reaction and label are not independent and the H1 number would be circular. Read the annotation protocol in the paper and repo first.
+**Facts (checked October 8, 2026; re-verify on download):**
+- **Scale:** 166 h, 350 instructor–performer pairs. The homepage now says 169 h.
+- **License:** "CDLAv2", described on the homepage as permissive. Confirm the exact variant on download.
+- **Annotations:** the paper says each **fine-grained action carries a mistake/correct attribute**, and each **utterance carries a purpose label** (the type of verbal intervention). Raw and processed annotation formats are released, with train/val/test splits.
+- **Official download sizes:**
+
+  | Component | Size |
+  |---|---|
+  | Labels | 111 MB |
+  | Pitch-shifted videos | 184.20 GB |
+  | Compressed videos (width 256) | 144.62 GB |
+  | Depth, hand pose, gaze, IMU, calibration | ≈ 800 GB (not needed) |
+
+- **The audio is pitch-shifted** for anonymization. Paralinguistic features are therefore measured on altered voices; record this as a caveat in every HoloAssist result.
+- **Unknown until downloaded:** the exact JSON field names; whether the instructor's voice is audible in the video's audio track; whether the official splits are participant-disjoint.
+
+**Item definition (Wave A):**
+- One item per annotated fine-grained action that carries a mistake/correct attribute.
+- `label` = 1 if correct, 0 if mistake.
+- `action_window_sec` = the action's `[start, end]`.
+- `reaction_window_sec` = `[start, end + 5.0]`, clipped to the video duration.
+- `context_text` = `"Task: <task name>. Step: <verb> <noun>."` from the annotation. **Never the mistake attribute or any utterance purpose label.**
+- `group_id` = the performer identifier if the metadata has one, else the session id.
+- `react-spoke` = 1 if any instructor utterance overlaps the reaction window. `react-full` = the concatenated text of those utterances, if the annotations carry transcripts.
+- **Sampling:** all mistake items plus an equal number of correct items (`default_rng(0)`), capped at 1,500 per class in train and 1,000 per class in test.
+
+**Independence check (Wave A item A4, before any video download):** if the annotation protocol says mistake labels were assigned *from* the instructor's interventions, reaction and label are not independent and H1 on HoloAssist would be circular. If so, stop and file it. The intervention correlating with mistakes is expected and is the signal. *Deriving the label from it* is the problem.
 
 ## Oops!: visible-outcome contrast
 
-Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Because every clip is a failure, the task is **localization**: does the reaction signal mark the moment things went wrong? The VLM judge should be strong here. That is the point: it is the condition where we *predict* reactions add little.
+Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.
 
-Limitation: spectators visible in frame cannot be fully masked from the judge. That biases the comparison toward the judge, so it is conservative for our claim.
+**Facts (checked October 8, 2026; re-verify on download):**
+- **Scale:** 20,723 clips from YouTube fail compilations, 50+ h.
+- **Labels:** failure onsets marked by 3 Mechanical Turk workers each (median standard deviation ≈ 0.5 s).
+- **Download:** a single videos + annotations bundle of **45 GB**. Optical-flow frames (1,019 GB) are not needed.
+- **License:** non-commercial research/educational use, **CC BY-NC-SA 4.0**.
+
+**Item definition (Wave A):** every clip is a failure, so the task is **localization**. Each usable clip yields two items:
+- **The failure time** `t` is the median of the annotated onsets. Skip the clip if the onsets are missing, if their standard deviation is > 1.0 s, if `t − 4.0 < 0`, or if `t + 3.0 >` the clip duration.
+- **`pre`:** window `[t − 4.0, t − 1.0]`, `label` = 1 (still going as intended).
+- **`post`:** window `[t, t + 3.0]`, `label` = 0.
+- `action_window_sec` = `reaction_window_sec` = that window.
+- `context_text` = `"A short clip from a home video."` for every item. **The dataset's natural-language descriptions are never used**; they describe the failure.
+- `group_id` = the source compilation id if it can be derived from the clip filename, else the clip id.
+- **Split:** the official train split for fitting and the official val split as `test`.
+- **Caps:** 2,000 clips (4,000 items) in train and 1,000 clips (2,000 items) in test, sampled `default_rng(0)`.
+
+The VLM judge should be strong here, because the failure is visible. That is the point: it is the condition where we *predict* reactions add little. Spectators visible in frame cannot be masked from the judge. That biases the comparison toward the judge, which is conservative for our claim.
 
 ## BAD / ERR@HRI / REACT: reactions to robots
 
-These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **Request access in Phase 0**, because data-use agreements take time.
+These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **The maintainer requests access now** (maintainer action M1 in [`ongoing_general_errors.md`](ongoing_general_errors.md)), because data-use agreements take time.
 
 ## Ego4D v0 corpus (archived; optional reuse)
 
@@ -55,5 +97,5 @@ These are the only sources where the reactions are *to a robot*. They are H2 tar
 
 - Each dataset's own license governs it.
 - Web video follows the v0 **dehydration rule**: never redistribute pixels we do not own. Releases contain video IDs, timestamps, labels and derived features only.
-- How web video may be *downloaded* for research is an open decision ([00](00_thesis.md)).
+- How web video may be *downloaded* for research is **Issue 1** in [`ongoing_general_errors.md`](ongoing_general_errors.md).
 - Raw video lives only on the external SSD under `DATA_ROOT` (`src/config.py`).

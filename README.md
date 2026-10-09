@@ -13,7 +13,7 @@
 ## Status (October 2026)
 
 - **Reoriented.** The v0 Social-Affective Filter pipeline is archived at tag [`v0-saf-final`](../../tree/v0-saf-final). Why: [`docs/LESSONS_v0.md`](docs/LESSONS_v0.md).
-- **Next:** Phase 0. Build the eval harness and request dataset access. Then Phase 1, the H1 pilot on verdict videos. See the roadmap in [`docs/00_thesis.md`](docs/00_thesis.md).
+- **Next:** Wave A: the evaluation harness, then the first H1 numbers on Oops! and HoloAssist. Built by an implementing agent from [`docs/agent_execution_guide.md`](docs/agent_execution_guide.md); agents start at [`AGENTS.md`](AGENTS.md).
 
 ## Documentation
 
@@ -24,6 +24,8 @@
 | [`02_data_sources.md`](docs/02_data_sources.md) | Verdict videos, HoloAssist, Oops!, robot-reaction sets; labeling and leakage controls |
 | [`03_eval_harness.md`](docs/03_eval_harness.md) | The automatic scorecard: conditions, metrics, splits, cadence |
 | [`LESSONS_v0.md`](docs/LESSONS_v0.md) | What the v0 pipeline taught us (negative results + operations) |
+| [`agent_execution_guide.md`](docs/agent_execution_guide.md) | The build spec: what is approved, in what order, and how each item is validated |
+| [`ongoing_general_errors.md`](docs/ongoing_general_errors.md) | Open issues, decisions awaiting your selection, deferred work, resolved index |
 
 ## Layout
 
@@ -36,7 +38,7 @@ tools/                daemonize.py + run_supervised.sh for long unattended runs
 tests/
 ```
 
-New code lands in `src/` packages as the phases need it: data loaders per source, feature extraction, `eval/`.
+Wave A adds `src/harness/`, `src/features/`, `src/judge/` and `src/sources/` ([`docs/03_eval_harness.md`](docs/03_eval_harness.md) §2).
 
 ## Setup
 

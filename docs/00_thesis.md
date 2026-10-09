@@ -66,16 +66,16 @@ That is why the VLM judge is the **central control** in H1: the thesis must beat
 ### H1: Signal
 On data with known outcomes, observer reactions predict the outcome **and add information beyond what a VLM judge infers from the action alone**.
 
-- **Conditions:**
-  - (a) **VLM judge, action only.** Reactions are masked or muted. This is the "just ask an LLM" control.
+- **Conditions** (exact definitions: [`03_eval_harness.md`](03_eval_harness.md) §6):
+  - (a) **Action only, two controls.** A zero-shot **VLM judge** (reactions masked, audio muted) is the "just ask an LLM" control. An **action probe** trained on the same labels is the fair learned control. `action_best` is whichever scores higher.
   - (b) **Reaction only.** Face, non-verbal audio and full audio are reported separately.
   - (c) **Fusion** of (a) and (b).
 - **Metric:** AUROC with 95% bootstrap CI, on group splits (no person, channel or session on both sides).
 - **Prediction:**
   - On **visible-outcome** data (Oops! failures), (a) is strong and (c) ≈ (a).
   - On **hidden-outcome** data (verdict videos, HoloAssist mistakes), (b) > (a) and (c) > (a).
-- **Pass (proposed):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 **and** fusion − judge ≥ +0.03 with the CI excluding 0.
-- **Kill:** if reactions add nothing over the judge even on hidden outcomes, the strong thesis is false. Stop, and write up the negative result.
+- **Pass (proposed):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 **and** fusion − `action_best` ≥ +0.03 with the paired CI excluding 0.
+- **Kill:** if reactions add nothing over `action_best` on the **verdict videos** (the purest hidden-outcome test), the strong thesis is false. Stop, and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
 
 ### H2: Scale and transfer
 A reaction model trained on web video transfers to held-out datasets it never saw, including **reactions to robots** (BAD, ERR@HRI) and **first-person** data (HoloAssist), and improves with more web data.
@@ -98,17 +98,18 @@ Adding reaction-derived reward to task reward improves robot learning.
 
 - **Goal:** paper-grade evidence for H1 and H2. H3 is a stretch goal.
 - **Compute:** Mac Studio (M4 Max, 64 GB) only. That means **frozen pretrained encoders + small probes**; no end-to-end video-model fine-tuning.
-- **Robot:** none yet. A microduck may come later for stage A.
+- **Robot:** none yet. A microduck (Pollen Robotics) may come later for stage A.
 
 ## Roadmap
 
-| Phase | Weeks | Deliverable | Gate |
-|---|---|---|---|
-| 0 | 1 | Eval harness skeleton (`results/scorecard.jsonl`); data-access requests sent (BAD, ERR@HRI); HoloAssist download started | — |
-| 1 | 1–3 | **H1 pilot**: ~200 verdict videos end-to-end, all three conditions | Is there *any* reaction signal beyond the judge? If none, stop or rethink |
-| 2 | 3–7 | Scale the verdict corpus; HoloAssist (first-person, hidden outcome); Oops! (visible-outcome contrast) | H1 pass/kill |
-| 3 | 7–10 | **H2**: transfer to BAD / ERR@HRI / HoloAssist; scaling curves | H2 pass |
-| 4 | 10–12 | Paper write-up; decide on H3 | — |
+The build is run by an implementing agent from [`agent_execution_guide.md`](agent_execution_guide.md). Issues and decisions live in [`ongoing_general_errors.md`](ongoing_general_errors.md).
+
+| Wave | Deliverable | Gate |
+|---|---|---|
+| **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
+| **B** (≈ weeks 4–7) | **Verdict-video H1 pilot**, ~200 videos: the purest hidden-outcome test, with face + non-verbal audio | **Issue 1** (web-video sourcing) selected; Wave A closed |
+| **C** (≈ weeks 7–10) | **H2**: transfer to BAD / ERR@HRI; scaling curves on the verdict corpus | BAD access granted (maintainer action M1) |
+| **D** (≈ weeks 10–12) | Paper write-up; decide H3 | — |
 
 ---
 
@@ -123,9 +124,12 @@ Adding reaction-derived reward to task reward improves robot learning.
 6. **Hidden-outcome data first** (verdict videos, HoloAssist mistakes), with visible-outcome data (Oops!) as the contrast.
 7. Three-month goal: **paper-grade H1 + H2**. Compute: Mac Studio only.
 
+**2026-10-08** (designer, writing the Wave A spec):
+8. **Two action-only controls, not one.** A zero-shot judge can be weak for reasons unrelated to reactions, so a probe trained on the same labels is added and the Δ is taken against the better of the two (`action_best`). This strengthens the "just ask an LLM" control the maintainer asked for.
+9. **The kill rule is decided on verdict videos only.** HoloAssist's instructor audio is pitch-shifted and Oops! is a localization task, so neither is a clean hidden-outcome test on its own.
+10. **Implementation is done by a separate agent from the execution guide.** The designer writes specs and validation and does not code (maintainer: *"Don't perform any coding … Create an agent_execution guide with clear guidelines and validation and let another agent implement"*). **Commits go straight to `main`, with no feature branches** (maintainer: *"No need to open up a new branch, just push to the repo"*).
+11. **Issue 3 → the v0 videos were deleted** (maintainer: *"clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice"*). That was the 1,083 Ego4D clips and the Charades-Ego videos, 1.336 TB in total. The manifest is `DATA_ROOT/DELETED_2026-10-08.json`.
+
 ## Open questions
 
-- **Web-video sourcing & licensing.** Option one: download public videos for research and release them dehydrated (IDs + timestamps + labels + features, as v0 did). Option two: restrict to CC-BY via the YouTube Data API. **Needs a decision before the Phase-1 harvest.**
-- **HoloAssist label independence.** If mistake annotations were derived from instructor interventions, the instructor's reaction and the label are not independent. Check before using it for H1.
-- **Oops! contains only failures.** That makes it a failure-*localization* task. A visible success/failure set (e.g. sports shots) may be needed for a clean contrast.
-- **BAD / ERR@HRI need an access request or data-use agreement.** There is lead time, so request early.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4). **Issue 3** (SSD capacity) is resolved.

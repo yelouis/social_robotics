@@ -1,6 +1,6 @@
 # Lessons from v0: the Social-Affective Filter (SAF), April–October 2026
 
-v0 is archived at git tag **`v0-saf-final`**. Everything below is recoverable with `git checkout v0-saf-final`, including the full per-layer docs with their resolved-issue histories. Data artifacts remain on the SSD at `/Volumes/Extreme SSD/social_robotics/` (`full_run_2026_06_18/`, `bench_v0/`). Per-layer datasets were published to Hugging Face under `louisye/social-robotics-*`.
+v0 is archived at git tag **`v0-saf-final`**. Everything below is recoverable with `git checkout v0-saf-final`, including the full per-layer docs with their resolved-issue histories. Derived data artifacts remain on the SSD at `/Volumes/Extreme SSD/social_robotics/` (`full_run_2026_06_18/`, `bench_v0/`). **The raw Ego4D videos were deleted on October 8, 2026.** Clip ids and re-download instructions are in `DELETED_2026-10-08.json` next to them. Per-layer datasets were published to Hugging Face under `louisye/social-robotics-*`.
 
 This file keeps what v0 *taught*, so that no one has to rediscover it.
 
@@ -67,6 +67,6 @@ At the end: 991 clips, 23,378 segments (19,053 real + controls), 15,946 QA pairs
 
 ## What v0 artifacts can still be used for
 
-- **The 991-clip Ego4D segment dataset:** a false-positive set (no evaluative reaction expected) for the new harness. See [`02_data_sources.md`](02_data_sources.md).
+- **The 991-clip Ego4D segment dataset:** a false-positive set (no evaluative reaction expected) for the new harness. Using it with the new encoders means re-downloading the chosen clips first. See [`02_data_sources.md`](02_data_sources.md).
 - **The `bench_v0` rating UI** (at the tag): a working local video + form tool, if a QA-of-our-code view is ever needed.
 - **emotion2vec+**: a working on-Mac audio encoder, reusable as an *embedding*, never as emotion categories.
