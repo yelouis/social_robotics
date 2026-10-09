@@ -1,10 +1,10 @@
 """Tier-per-host model configuration.
 
-Single source of truth for which model variant each layer should load. The
-table below maps every layer's heavy models onto a (small, medium, large) tier
-with the identifier the layer must pass to its loader plus the approximate
-resident-set cost. Layers read their model id via `get_model(layer_key)` so the
-choice is centralized and inspectable from a single file.
+Single source of truth for which local model variant each component should
+load. The table below maps every component's heavy models onto a (small,
+medium, large) tier with the identifier to pass to its loader plus the
+approximate resident-set cost. Components read their model id via
+`get_model(key)` so the choice is centralized and inspectable from one file.
 
 Host-tier auto-detection: hosts with at least 48 GB of unified memory default
 to `medium` (current Mac Studio M4 Max production target); smaller hosts (e.g.
@@ -31,81 +31,12 @@ VALID_TIERS = ("small", "medium", "large")
 # entry is excluded from the sum (e.g. shared models counted under another
 # layer).
 _MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
-    # Layer 03b: Reasonable Emotion
-    "layer_03b_ollama": {
-        # `gemma4:26b` was registered for the 64 GB host but was never installed
-        # (only `gemma4:latest`, the ~8B build, is pulled locally) — so 03b
-        # silently failed every clip on "model not found" and fell back to
-        # rule-based classification (the likely cause of its 2/50 yield). Point
-        # medium/large at the installed `gemma4:latest`; the 8B build is adequate
-        # for the JSON emotion-reasoning task. Re-pull a 26B-class tag here if a
-        # higher-fidelity reasoner is wanted (docs/03b Resolved Issue).
-        "small":  ("gemma4:e4b", "~2.5 GB", 2_500_000_000),
-        "medium": ("gemma4:latest", "~9.6 GB", 9_600_000_000),
-        "large":  ("gemma4:latest", "~9.6 GB", 9_600_000_000),
-    },
-    "layer_03b_face_emotion": {
-        "small":  ("enet_b0_8", "~30 MB", 30_000_000),
-        "medium": ("enet_b2_8", "~50 MB", 50_000_000),
-        "large":  ("enet_b2_8", "~50 MB", 50_000_000),
-    },
-    # Layer 03c: Acoustic Prosody
-    "layer_03c_ser": {
-        "small":  ("iic/emotion2vec_plus_base",  "~300 MB", 300_000_000),
-        "medium": ("iic/emotion2vec_plus_large", "~600 MB", 600_000_000),
-        "large":  ("iic/emotion2vec_plus_seed",  "~2 GB",   2_000_000_000),
-    },
-    "layer_03c_aed": {
-        "small":  ("iic/SenseVoiceSmall", "~500 MB", 500_000_000),
-        "medium": ("iic/SenseVoiceSmall", "~500 MB", 500_000_000),
-        "large":  ("iic/SenseVoiceSmall", "~500 MB", 500_000_000),
-    },
-    # Layer 03d: Proxemic Kinematics
-    "layer_03d_depth": {
-        "small":  ("depth-anything/Depth-Anything-V2-Small-hf", "~100 MB", 100_000_000),
-        "medium": ("LiheYoung/depth-anything-large-hf",         "~1.3 GB", 1_300_000_000),
-        "large":  ("LiheYoung/depth-anything-large-hf",         "~1.3 GB", 1_300_000_000),
-    },
-    "layer_03d_sam": {
-        "small":  ("facebook/sam-vit-base", "~375 MB", 375_000_000),
-        "medium": ("facebook/sam-vit-huge", "~2.5 GB", 2_500_000_000),
-        "large":  ("facebook/sam-vit-huge", "~2.5 GB", 2_500_000_000),
-    },
-    # Layer 03f: Motor Resonance
-    "layer_03f_pose": {
-        "small":  ("yolov8n-pose.pt", "~6.5 MB", 6_500_000),
-        "medium": ("yolov8x-pose.pt", "~100 MB", 100_000_000),
-        "large":  ("yolov8x-pose.pt", "~100 MB", 100_000_000),
-    },
-    # Stage-2 filtering VLM. (Formerly also the slow-task climax-refinement
-    # model; the Layer 02b bbox-kernel detector retired that path June 30.)
-    "filtering_vlm": {
+    # Local VLM judge: the "just ask a VLM" control in H1 (docs/03_eval_harness.md).
+    # Sees the ACTION only (reactions masked), answers "did this go well?".
+    "vlm_judge": {
         "small":  ("qwen2.5vl:3b", "~3 GB", 3_000_000_000),
         "medium": ("qwen2.5vl:7b", "~7 GB", 7_000_000_000),
         "large":  ("qwen2.5vl:7b", "~7 GB", 7_000_000_000),
-    },
-    # Shared social-presence YOLO-pose detector (filtering + 02 verification)
-    "social_presence_pose": {
-        "small":  ("yolov8n-pose.pt", "~6.5 MB", None),  # counted under 03f
-        "medium": ("yolov8n-pose.pt", "~6.5 MB", None),
-        "large":  ("yolov8n-pose.pt", "~6.5 MB", None),
-    },
-    # Lightweight VLM used by SocialPresenceDetector to disambiguate ambiguous
-    # bystander candidates (loaded lazily, not part of the steady-state set).
-    "social_presence_vlm_verify": {
-        "small":  ("moondream",     "~1.6 GB", 1_600_000_000),
-        "medium": ("qwen2.5vl:7b",  "~7 GB",   None),  # counted under filtering_vlm
-        "large":  ("qwen2.5vl:7b",  "~7 GB",   None),  # counted under filtering_vlm
-    },
-    # MediaPipe Tasks API hand-landmarker bundle. The path is a `.task` asset
-    # on disk (downloaded once into models/mediapipe/), not an Ollama tag.
-    # Same float16 bundle across all tiers — the model is ~7 MB and adding a
-    # larger variant offers no measurable accuracy lift for occlusion
-    # suppression at the FOV/resolutions this pipeline ingests.
-    "social_presence_hand_landmarker": {
-        "small":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
-        "medium": ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
-        "large":  ("models/mediapipe/hand_landmarker.task", "~7 MB", 8_000_000),
     },
 }
 
