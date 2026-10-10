@@ -84,19 +84,22 @@ A reaction model trained on web video transfers to held-out datasets it never sa
   - zero-shot AUROC on each target;
   - a scaling curve (AUROC vs. hours of web training data, log-x);
   - comparison to a model trained on the target's own small train split.
-- **Pass (proposed):** zero-shot ≥ the in-domain small-data baseline on at least one robot-reaction target, plus a monotone scaling curve.
+- **Pass (proposed):** zero-shot ≥ the in-domain small-data baseline on at least one held-out target (HoloAssist, AM-FED+, or BAD if granted), plus a monotone scaling curve.
 
-### H3: Learning (stretch goal, after the H1/H2 paper)
-Adding reaction-derived reward to task reward improves robot learning.
+### H3: Robot data efficiency (offline in the 3-month scope; online later)
+Reaction-labeled human task video makes a robot **success detector** (the reward model) more accurate **with fewer robot labels**. The thesis's practical promise, "robots can learn from vlogs", is exactly this.
 
-- **Offline first:** Kendall τ between reward-model scores and ground-truth success on labeled robot trajectories, against a VLM reward baseline (RoboReward/TOPReward-style).
-- **Online later:** success vs. samples in MuJoCo (Mac Studio), and live reactions to a small robot for stage A.
+- **Offline (in scope, Wave D):**
+  - **Data:** [RoboReward](https://huggingface.co/datasets/teetone/RoboReward) (CC-BY-4.0; 54,135 robot rollouts scored 1–5; a 2,831-item human-verified test split). Only real successes and failures are used; the counterfactual-instruction negatives are excluded, because our detector reads no instructions.
+  - **Measure:** a data-efficiency curve, AUROC (success vs. failure) against the number of robot training labels (e.g. 50–1,000), **with vs. without** pre-training on reaction-labeled human task video (HoloAssist-style). Reference lines: RoboReward-8B and the VLM judge. **Never framed as beating RoboReward-8B.**
+  - **Start condition:** Wave A shows a positive, CI-excluding-0 Δ (reactions over `action_best`) on at least one dataset. Otherwise there is no signal to transfer.
+- **Online (later, not in scope):** a policy trained with the improved reward learns faster in simulation (needs a cloud CUDA GPU; `microduck_rl`/mjlab need CUDA) or on hardware. This is the final link; the 3-month paper stops one step before it.
 
 ---
 
 ## Scope & resources (next ~3 months)
 
-- **Goal:** paper-grade evidence for H1 and H2. H3 is a stretch goal.
+- **Goal:** paper-grade evidence for H1 and H2, plus **offline H3** (robot data efficiency, Wave D, gated on Wave A). Online H3 (actually training a robot) is later.
 - **Compute:** Mac Studio (M4 Max, 64 GB) only. That means **frozen pretrained encoders + small probes**; no end-to-end video-model fine-tuning.
 - **Robot:** none yet. A microduck (Pollen Robotics) may come later for stage A.
 
@@ -109,7 +112,8 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
 | **B** (≈ weeks 4–7) | **Hidden-outcome H1 pilot**: a reaction followed by a verdict (AM-FED+, creator-permitted or CC taste-test videos, per Issue 1), with face + non-verbal audio. If no verdict source is granted, HoloAssist carries the hidden-outcome test | **Issue 1** selected; Wave A closed |
 | **C** (≈ weeks 7–10) | **H2**: transfer to HoloAssist / AM-FED+ (plus BAD only if the access request is granted); scaling curves | Wave B closed |
-| **D** (≈ weeks 10–12) | Paper write-up; decide H3 | — |
+| **D** (≈ weeks 7–10, alongside C) | **Robot check (offline H3)**: on RoboReward, does reaction-labeled human task video make a robot success detector more accurate with fewer robot labels? | Wave A shows reaction signal on ≥ 1 dataset; spec written by the designer after Wave A |
+| **E** (≈ weeks 11–12) | Paper write-up | — |
 
 ---
 
@@ -131,6 +135,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 11. **Issue 3 → the v0 videos were deleted** (maintainer: *"clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice"*). That was the 1,083 Ego4D clips and the Charades-Ego videos, 1.336 TB in total. The manifest is `DATA_ROOT/DELETED_2026-10-08.json`.
 12. **No self-recorded data.** The maintainer declined recording their own taste tests (*"I will not do this"*, October 9, 2026). Hidden-outcome verdict data must come from licensed datasets (AM-FED+) or creator-permitted and CC video (Issue 1).
 13. **No human-subjects studies and no academic partner** (October 9, 2026; Issue 4). A robot-reaction target exists only if BAD access is granted to an independent researcher. Otherwise H2 transfer is shown on HoloAssist and AM-FED+.
+14. **The offline robot check is in scope** (maintainer, October 9, 2026, after asking whether it is recommended). It is the only robot result feasible with no people, partner or hardware, and it is framed as data efficiency, not as beating RoboReward. **The live microduck demo stays deferred** (DW6).
 
 ## Open questions
 

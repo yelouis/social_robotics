@@ -23,7 +23,7 @@ The reaction-as-reward idea has been tested before, **in small lab studies**. Ou
 
 | Work | Relevance |
 |---|---|
-| **RoboReward** ([arXiv 2601.00675](https://arxiv.org/abs/2601.00675)) | VLM reward model fine-tuned on robot trajectories with human-provided success and progress labels. The H3 baseline |
+| **RoboReward** ([arXiv 2601.00675](https://arxiv.org/abs/2601.00675)) | VLM reward model fine-tuned on robot trajectories with human-provided success and progress labels. Its dataset ([HF](https://huggingface.co/datasets/teetone/RoboReward), CC-BY-4.0: 54,135 rollouts scored 1–5, built from Open X-Embodiment with counterfactual and clipped negatives plus RoboArena; 2,831-item human-verified test split) is **Wave D's robot data**, and RoboReward-8B is a reference line |
 | **TOPReward** ([arXiv 2602.19313](https://arxiv.org/abs/2602.19313)) | Token probabilities as zero-shot rewards for robotics. The H3 baseline, and a template for turning our VLM judge into a score |
 | **DVD**, Learning Generalizable Robotic Reward Functions from "In-The-Wild" Human Videos. RSS 2021 ([arXiv 2103.16817](https://arxiv.org/abs/2103.16817)) | The established "reward from human video" route, without reactions. Positions our "reactions as labels" route against it |
 

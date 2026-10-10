@@ -472,7 +472,7 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 - **The face encoder** (`react-face`), DW2: part of Wave B.
 - **H2 transfer** (HoloAssist / AM-FED+, BAD only if granted), DW3: needs Wave B.
 - **The Ego4D false-positive set,** DW4.
-- **H3** (robot trajectories, RL), DW5.
+- **Wave D, the robot check (offline H3; RoboReward)**, DW5: the designer writes its spec after Wave A's results. Do not start it, and do not download RoboReward in Wave A.
 - **Stage A live** (the microduck), DW6.
 - **Any web or YouTube video acquisition.**
 - **Re-downloading any Ego4D or Charades-Ego video.**
