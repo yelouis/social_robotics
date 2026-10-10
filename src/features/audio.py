@@ -40,8 +40,27 @@ class NonverbalAudioEncoder:
 
     def _ensure_loaded(self) -> None:
         if self._model is None:
-            from funasr import AutoModel
-            self._model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+            from shared import memguard
+
+            with memguard.guard("sr_e2v"):
+                if self._model is None:
+                    from funasr import AutoModel
+
+                    self._model = AutoModel(model="iic/emotion2vec_plus_large", disable_update=True)
+
+    def release(self) -> None:
+        self._model = None
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
+        gc.collect()
 
     def encode_wav(self, wav_path: Union[str, Path]) -> np.ndarray:
         self._ensure_loaded()

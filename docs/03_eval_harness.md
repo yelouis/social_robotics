@@ -196,14 +196,14 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 
 **Heavy steps and their declared peaks** (`src/shared/memguard.py`, `HEAVY_STEPS`). Declared peak = measured × 1.15, rounded up to a whole GB:
 
-| Step | Where | Measured (designer, October 10, 2026, M4 Max) | Declared peak |
-|---|---|---|---|
-| `sr_siglip` | `FrameEncoder` model load | 1.56 GB process footprint after load + one window (MPS 1.03 GB) | **2 GB** |
-| `sr_e2v` | `NonverbalAudioEncoder` model load | 4.76 GB peak RSS during load + one window; 3.0 GB steady | **6 GB** |
-| `sr_judge_load` | first `OllamaJudge` call while `qwen2.5vl:7b` is not loaded | `llama-server` 7.72 GB RSS; `/api/ps` 6.8 GiB at `num_ctx` 8192 | **9 GB** |
+| Step | Where | Measured (designer, October 10, 2026, M4 Max) | Re-measured (implementing agent, October 10, 2026) | Declared peak |
+|---|---|---|---|---|
+| `sr_siglip` | `FrameEncoder` model load | 1.56 GB process footprint after load + one window (MPS 1.03 GB) | 1.60 GB peak memory footprint on 50 items (1.60 × 1.15 = 1.84 GB) | **2 GB** |
+| `sr_e2v` | `NonverbalAudioEncoder` model load | 4.76 GB peak RSS during load + one window; 3.0 GB steady | 4.94 GB peak memory footprint on 50 items (4.94 × 1.15 = 5.68 GB) | **6 GB** |
+| `sr_judge_load` | first `OllamaJudge` call while `qwen2.5vl:7b` is not loaded | `llama-server` 7.72 GB RSS; `/api/ps` 6.8 GiB at `num_ctx` 8192 | `llama-server` 7.80 GB RSS on first call (7.80 × 1.15 = 8.97 GB) | **9 GB** |
 
 - After `release()`, the process measured 1.10 GB, against 0.14 GB before loading.
-- The implementing agent **re-measures** each step with `/usr/bin/time -l` ("peak memory footprint") on a 50-item run. If measured × 1.15 rounds up above a declared peak, the constant and this table are raised in the same commit.
+- Re-measured on 50 items with `/usr/bin/time -l` ("peak memory footprint") and `llama-server` RSS from `ps`. None exceeded the declared peaks.
 
 **The lock (shared with `animated_infographics`):**
 - **File:** `fcntl.flock(LOCK_EX)` on `<lock dir>/heavy.lock`. The lock dir is `$INFOGRAPHICS_LOCK_DIR` if set, else `~/.cache/animated_infographics/locks`, which is that project's default. **The path must equal theirs**, or the two projects stop seeing each other.

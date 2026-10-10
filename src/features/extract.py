@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 import traceback
@@ -15,6 +16,8 @@ from features.cache import FeatureCache
 from features.visual import FrameEncoder
 from harness.items import read_items
 from harness.splits import load_split
+from shared import memguard
+from shared.memguard import MemoryDeferred
 
 
 def run_extraction(
@@ -71,52 +74,71 @@ def run_extraction(
     finished_set = set(finished_ids)
     errors_path = cache.cache_dir / "errors.jsonl"
 
-    for item in items:
-        # Check cache
-        if not force and cache.has(item.item_id):
-            items_out += 1
-            if item.item_id not in finished_set:
-                finished_ids.append(item.item_id)
-                finished_set.add(item.item_id)
-            continue
+    step_name = "sr_siglip" if encoder_id == "siglip-b16-224" else "sr_e2v"
 
-        item_t0 = time.time()
-        try:
-            if encoder_id == "siglip-b16-224":
-                window = item.action_window_sec
-            else:
-                window = item.reaction_window_sec
+    try:
+        for item in items:
+            # Check cache
+            if not force and cache.has(item.item_id):
+                items_out += 1
+                if item.item_id not in finished_set:
+                    finished_ids.append(item.item_id)
+                    finished_set.add(item.item_id)
+                continue
 
-            feat = encoder.encode_window(item.video_path, window)
-            elapsed_ms = (time.time() - item_t0) * 1000.0
+            # Between-items memory watchdog (if model was loaded / processed items)
+            if items_out > 0:
+                release_fn = getattr(encoder, "release", lambda: None)
+                reload_fn = getattr(encoder, "_ensure_loaded", lambda: None)
+                memguard.check(step_name, release=release_fn, reload=reload_fn)
 
-            cache.save(item.item_id, feat, window, elapsed_ms)
-            items_out += 1
-            if item.item_id not in finished_set:
-                finished_ids.append(item.item_id)
-                finished_set.add(item.item_id)
+            item_t0 = time.time()
+            try:
+                if encoder_id == "siglip-b16-224":
+                    window = item.action_window_sec
+                else:
+                    window = item.reaction_window_sec
 
-            # Atomically update progress.json
-            with tempfile.NamedTemporaryFile("w", dir=cache.cache_dir, delete=False, encoding="utf-8") as tf:
-                temp_progress = tf.name
-                json.dump(finished_ids, tf)
-                tf.flush()
-                os.fsync(tf.fileno())
-            os.replace(temp_progress, progress_file)
+                feat = encoder.encode_window(item.video_path, window)
+                elapsed_ms = (time.time() - item_t0) * 1000.0
 
-        except Exception as exc:
-            excluded += 1
-            tb_str = traceback.format_exc()
-            err_entry = {
-                "item_id": item.item_id,
-                "error": str(exc),
-                "traceback": tb_str,
-                "ts": time.time(),
-            }
-            with open(errors_path, "a", encoding="utf-8") as ef:
-                ef.write(json.dumps(err_entry) + "\n")
-                ef.flush()
-                os.fsync(ef.fileno())
+                cache.save(item.item_id, feat, window, elapsed_ms)
+                items_out += 1
+                if item.item_id not in finished_set:
+                    finished_ids.append(item.item_id)
+                    finished_set.add(item.item_id)
+
+                # Atomically update progress.json
+                with tempfile.NamedTemporaryFile("w", dir=cache.cache_dir, delete=False, encoding="utf-8") as tf:
+                    temp_progress = tf.name
+                    json.dump(finished_ids, tf)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                os.replace(temp_progress, progress_file)
+
+            except MemoryDeferred:
+                raise
+            except Exception as exc:
+                excluded += 1
+                tb_str = traceback.format_exc()
+                err_entry = {
+                    "item_id": item.item_id,
+                    "error": str(exc),
+                    "traceback": tb_str,
+                    "ts": time.time(),
+                }
+                with open(errors_path, "a", encoding="utf-8") as ef:
+                    ef.write(json.dumps(err_entry) + "\n")
+                    ef.flush()
+                    os.fsync(ef.fileno())
+
+    except MemoryDeferred:
+        elapsed_s = time.time() - start_time
+        print(
+            f"items_in={items_in} items_out={items_out} excluded={excluded} "
+            f"elapsed_s={elapsed_s:.2f} deferred_by_memory_guard=1"
+        )
+        raise
 
     elapsed_s = time.time() - start_time
     print(f"items_in={items_in} items_out={items_out} excluded={excluded} elapsed_s={elapsed_s:.2f}")
@@ -131,13 +153,16 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Limit number of items")
     args = parser.parse_args()
 
-    run_extraction(
-        dataset=args.dataset,
-        encoder_id=args.encoder,
-        split=args.split,
-        force=args.force,
-        limit=args.limit,
-    )
+    try:
+        run_extraction(
+            dataset=args.dataset,
+            encoder_id=args.encoder,
+            split=args.split,
+            force=args.force,
+            limit=args.limit,
+        )
+    except MemoryDeferred:
+        sys.exit(75)
 
 
 if __name__ == "__main__":

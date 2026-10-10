@@ -26,6 +26,8 @@
 # Env:
 #   SR_SUPERVISE_MAX_ATTEMPTS  hard ceiling on relaunches (default 50)
 #   SR_SUPERVISE_LOG           supervisor log path (default supervise_<ts>.log)
+#   SR_MEMWAIT_SLEEP_S         sleep seconds after exit 75 memory deferral (default 600)
+#   SR_MAX_MEM_DEFERRALS       max consecutive memory deferrals before abort (default 72)
 set -uo pipefail
 
 PROGRESS_FILE="${1:-}"
@@ -37,6 +39,8 @@ shift
 
 MAX_ATTEMPTS="${SR_SUPERVISE_MAX_ATTEMPTS:-50}"
 LOG="${SR_SUPERVISE_LOG:-supervise_$(date +%Y%m%d_%H%M%S).log}"
+MEMWAIT_SLEEP_S="${SR_MEMWAIT_SLEEP_S:-600}"
+MAX_MEM_DEFERRALS="${SR_MAX_MEM_DEFERRALS:-72}"
 
 # caffeinate is macOS-only; degrade gracefully (e.g. CI/Linux) to a no-op prefix.
 if command -v caffeinate >/dev/null 2>&1; then
@@ -61,6 +65,7 @@ log() { echo "[supervise $(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG" >&2; 
 log "supervising: $* (progress=$PROGRESS_FILE, max_attempts=$MAX_ATTEMPTS, log=$LOG)"
 
 stale=0
+mem_deferrals=0
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     before="$(count_records)"
     log "attempt $attempt/$MAX_ATTEMPTS — $before records so far"
@@ -73,6 +78,18 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
         exit 0
     fi
 
+    if [ "$rc" -eq 75 ]; then
+        mem_deferrals=$((mem_deferrals + 1))
+        log "runner deferred by memory guard (exit 75, deferral $mem_deferrals/$MAX_MEM_DEFERRALS) — sleeping ${MEMWAIT_SLEEP_S}s before retry"
+        if [ "$mem_deferrals" -ge "$MAX_MEM_DEFERRALS" ]; then
+            log "ABORT: memory guard: deferred $mem_deferrals times; giving up"
+            exit 75
+        fi
+        sleep "$MEMWAIT_SLEEP_S"
+        continue
+    fi
+
+    mem_deferrals=0
     log "runner died (exit $rc) — progressed ${before} -> ${after} records this attempt."
     if [ "$after" -le "$before" ]; then
         stale=$((stale + 1))

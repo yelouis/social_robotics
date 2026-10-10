@@ -19,8 +19,8 @@
 - *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026). This is why A6b exists.
 
 **Status:** **Active Build: Wave A**, in the §2 order.
-- **A1–A6 have landed** (`651039b` … `0f16799`, October 9, 2026; agent-reported, and designer verification is pending).
-- **Next is A6b, the memory guard, inserted October 10 before A7.** On October 9 the machine ran out of memory while this project's slow tests and the other project's image-generation gates ran at once (`03_eval_harness.md` §12). **A7 must not start until A6b is closed.**
+- **A1–A6 and A6b have landed** (`651039b` … `0f16799`, October 9–10, 2026; agent-reported, and designer verification is pending).
+- **Next is A7: Oops!, end-to-end H1.** The memory guard (A6b) is closed and protects multi-hour runs.
 - One maintainer decision is pending, and it does not block you: **Issue 1** (web video) gates only Wave B, which is not in this guide.
 - **Issue 3** (SSD space) was resolved on October 8: the v0 videos were deleted and 1.5 TiB is free.
 - A4 may end by filing under **Issue 2**.
@@ -115,9 +115,9 @@
 | # | Gate | Command | Result |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **18 passed** |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **38 passed** |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · **4 passed** |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | **no slow tests yet** (A5, A6) |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (exit 75 on memory deferral) |
 
 ---
 

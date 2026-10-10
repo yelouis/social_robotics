@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 import time
 import traceback
@@ -18,6 +19,8 @@ from config import DATA_ROOT
 from harness.items import Item, read_items
 from harness.splits import load_split
 from models_config import get_model
+from shared import memguard
+from shared.memguard import MemoryDeferred
 from shared.vlm_client import ollama_chat
 
 PROMPT_TEMPLATE = (
@@ -127,15 +130,27 @@ class OllamaJudge:
             prompt = build_prompt(context_text=context_text, question=question, n=4)
             str_frame_paths = [str(p) for p in frame_paths]
 
-            # Attempt 1: temperature 0
-            raw = ollama_chat(
-                model=self.model,
-                prompt=prompt,
-                image_paths=str_frame_paths,
-                options={"temperature": 0, "num_ctx": 8192, "num_predict": 16},
-                timeout=180.0,
-                host=self.host,
-            )
+            # Attempt 1: temperature 0 (guarded if model not yet loaded in Ollama)
+            is_loaded = memguard.is_our_judge_loaded(endpoint=self.host)
+            if not is_loaded:
+                with memguard.guard("sr_judge_load"):
+                    raw = ollama_chat(
+                        model=self.model,
+                        prompt=prompt,
+                        image_paths=str_frame_paths,
+                        options={"temperature": 0, "num_ctx": 8192, "num_predict": 16},
+                        timeout=180.0,
+                        host=self.host,
+                    )
+            else:
+                raw = ollama_chat(
+                    model=self.model,
+                    prompt=prompt,
+                    image_paths=str_frame_paths,
+                    options={"temperature": 0, "num_ctx": 8192, "num_predict": 16},
+                    timeout=180.0,
+                    host=self.host,
+                )
             prob = parse_prob(raw)
             if prob is not None:
                 elapsed_ms = (time.time() - t0) * 1000.0
@@ -337,72 +352,91 @@ def run_judge(
     parse_failures = 0
     api_errors = 0
 
-    for item in items:
-        # Check cache
-        if item.item_id in cached_entries:
-            entry = cached_entries[item.item_id]
-            if entry.get("judge_prob") is not None:
-                items_out += 1
-            else:
+    try:
+        for item in items:
+            # Check cache
+            if item.item_id in cached_entries:
+                entry = cached_entries[item.item_id]
+                if entry.get("judge_prob") is not None:
+                    items_out += 1
+                else:
+                    excluded += 1
+                    parse_failures += 1
+                continue
+
+            # Between-items watchdog for local Ollama judge
+            if backend == "ollama":
+                memguard.check("sr_judge_load", memguard.unload_own_judge, lambda: None)
+
+            try:
+                # Action window only
+                prob, raw, attempts, elapsed_ms = judge.judge_item(
+                    video_path=item.video_path,
+                    window=item.action_window_sec,
+                    context_text=item.context_text,
+                    question=question,
+                )
+
+                record = {
+                    "item_id": item.item_id,
+                    "judge_prob": prob,
+                    "raw": raw,
+                    "attempts": attempts,
+                    "elapsed_ms": elapsed_ms,
+                }
+
+                with open(cache_file, "a", encoding="utf-8") as cf:
+                    cf.write(json.dumps(record) + "\n")
+                    cf.flush()
+                    os.fsync(cf.fileno())
+
+                cached_entries[item.item_id] = record
+                if item.item_id not in finished_set:
+                    finished_ids.append(item.item_id)
+                    finished_set.add(item.item_id)
+
+                if prob is not None:
+                    items_out += 1
+                else:
+                    excluded += 1
+                    parse_failures += 1
+
+                # Update progress.json
+                with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as tf:
+                    temp_progress = tf.name
+                    json.dump(finished_ids, tf)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                os.replace(temp_progress, progress_file)
+
+            except MemoryDeferred:
+                raise
+            except Exception as exc:
+                api_errors += 1
                 excluded += 1
-                parse_failures += 1
-            continue
+                tb_str = traceback.format_exc()
+                err_record = {
+                    "item_id": item.item_id,
+                    "error": str(exc),
+                    "traceback": tb_str,
+                    "ts": time.time(),
+                }
+                with open(errors_path, "a", encoding="utf-8") as ef:
+                    ef.write(json.dumps(err_record) + "\n")
+                    ef.flush()
+                    os.fsync(ef.fileno())
 
-        try:
-            # Action window only
-            prob, raw, attempts, elapsed_ms = judge.judge_item(
-                video_path=item.video_path,
-                window=item.action_window_sec,
-                context_text=item.context_text,
-                question=question,
-            )
-
-            record = {
-                "item_id": item.item_id,
-                "judge_prob": prob,
-                "raw": raw,
-                "attempts": attempts,
-                "elapsed_ms": elapsed_ms,
-            }
-
-            with open(cache_file, "a", encoding="utf-8") as cf:
-                cf.write(json.dumps(record) + "\n")
-                cf.flush()
-                os.fsync(cf.fileno())
-
-            cached_entries[item.item_id] = record
-            if item.item_id not in finished_set:
-                finished_ids.append(item.item_id)
-                finished_set.add(item.item_id)
-
-            if prob is not None:
-                items_out += 1
-            else:
-                excluded += 1
-                parse_failures += 1
-
-            # Update progress.json
-            with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as tf:
-                temp_progress = tf.name
-                json.dump(finished_ids, tf)
-                tf.flush()
-                os.fsync(tf.fileno())
-            os.replace(temp_progress, progress_file)
-
-        except Exception as exc:
-            api_errors += 1
-            excluded += 1
-            tb_str = traceback.format_exc()
-            err_record = {
-                "item_id": item.item_id,
-                "error": str(exc),
-                "traceback": tb_str,
-                "ts": time.time(),
-            }
-            with open(errors_path, "a", encoding="utf-8") as ef:
-                ef.write(json.dumps(err_record) + "\n")
-                ef.flush()
-                os.fsync(ef.fileno())
+    except MemoryDeferred:
+        elapsed_s = time.time() - start_time
+        print(
+            f"items_in={items_in} items_out={items_out} excluded={excluded} "
+            f"elapsed_s={elapsed_s:.2f} parse_failures={parse_failures} api_errors={api_errors} "
+            f"deferred_by_memory_guard=1"
+        )
+        raise
+    finally:
+        if backend == "ollama":
+            memguard.unload_own_judge()
 
     elapsed_s = time.time() - start_time
     print(
@@ -419,12 +453,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Limit number of items")
     args = parser.parse_args()
 
-    run_judge(
-        dataset=args.dataset,
-        split=args.split,
-        backend=args.backend,
-        limit=args.limit,
-    )
+    try:
+        run_judge(
+            dataset=args.dataset,
+            split=args.split,
+            backend=args.backend,
+            limit=args.limit,
+        )
+    except MemoryDeferred:
+        sys.exit(75)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,11 @@ max_exit=0
 # G1: Lint
 ./venv/bin/ruff check src tests tools
 g1_exit=$?
-echo "G1 lint: exit $g1_exit"
+if [ "$g1_exit" -eq 75 ]; then
+    echo "G1 lint: exit 75 (deferred by memory guard; not run)"
+else
+    echo "G1 lint: exit $g1_exit"
+fi
 if [ "$g1_exit" -gt "$max_exit" ]; then
     max_exit=$g1_exit
 fi
@@ -21,7 +25,11 @@ fi
 # G2: Fast tests
 SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/
 g2_exit=$?
-echo "G2 tests: exit $g2_exit"
+if [ "$g2_exit" -eq 75 ]; then
+    echo "G2 tests: exit 75 (deferred by memory guard; not run)"
+else
+    echo "G2 tests: exit $g2_exit"
+fi
 if [ "$g2_exit" -gt "$max_exit" ]; then
     max_exit=$g2_exit
 fi
@@ -33,7 +41,11 @@ if [ ! -f "src/harness/scorecard.py" ]; then
 else
     PYTHONPATH=src SR_NO_MODEL_BANNER=1 ./venv/bin/python -m harness.scorecard --selftest
     g3_exit=$?
-    echo "G3 selftest: exit $g3_exit"
+    if [ "$g3_exit" -eq 75 ]; then
+        echo "G3 selftest: exit 75 (deferred by memory guard; not run)"
+    else
+        echo "G3 selftest: exit $g3_exit"
+    fi
 fi
 if [ "$g3_exit" -gt "$max_exit" ]; then
     max_exit=$g3_exit
@@ -43,7 +55,11 @@ fi
 if [ "$SLOW" -eq 1 ]; then
     SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m slow tests/
     g4_exit=$?
-    echo "G4 slow: exit $g4_exit"
+    if [ "$g4_exit" -eq 75 ]; then
+        echo "G4 slow: exit 75 (deferred by memory guard; not run)"
+    else
+        echo "G4 slow: exit $g4_exit"
+    fi
     if [ "$g4_exit" -gt "$max_exit" ]; then
         max_exit=$g4_exit
     fi

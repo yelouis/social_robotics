@@ -52,10 +52,27 @@ class FrameEncoder:
 
     def _ensure_loaded(self) -> None:
         if self._model is None or self._processor is None:
-            model_name = "google/siglip-base-patch16-224"
-            self._processor = AutoProcessor.from_pretrained(model_name)
-            self._model = SiglipModel.from_pretrained(model_name).to(self.device)
-            self._model.eval()
+            from shared import memguard
+
+            with memguard.guard("sr_siglip"):
+                if self._model is None or self._processor is None:
+                    model_name = "google/siglip-base-patch16-224"
+                    self._processor = AutoProcessor.from_pretrained(model_name)
+                    self._model = SiglipModel.from_pretrained(model_name).to(self.device)
+                    self._model.eval()
+
+    def release(self) -> None:
+        self._model = None
+        self._processor = None
+        import gc
+
+        gc.collect()
+        if torch.backends.mps.is_available():
+            try:
+                torch.mps.empty_cache()
+            except Exception:
+                pass
+        gc.collect()
 
     def encode_frames(self, images: List[Image.Image]) -> np.ndarray:
         self._ensure_loaded()
