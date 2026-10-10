@@ -18,6 +18,8 @@ def make_group_split(
     official: Optional[Dict[str, str]] = None,
     force: bool = False,
     path_dir: Union[str, Path] = "splits",
+    source: Optional[str] = None,
+    seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     target_path = Path(path_dir) / f"{dataset}.json"
     if target_path.exists() and not force:
@@ -36,8 +38,8 @@ def make_group_split(
 
         train = [item.item_id for item in items if official.get(item.item_id) == "train"]
         test = [item.item_id for item in items if official.get(item.item_id) == "test"]
-        source = "official"
-        seed: Optional[int] = None
+        split_source = source or "official"
+        split_seed = seed
     else:
         unique_groups = sorted(list(set(item.group_id for item in items)))
         rng = np.random.default_rng(0)
@@ -50,16 +52,16 @@ def make_group_split(
 
         train = [item.item_id for item in items if item.group_id in train_groups]
         test = [item.item_id for item in items if item.group_id in test_groups]
-        source = "grouped_70_30"
-        seed = 0
+        split_source = source or "grouped_70_30"
+        split_seed = 0 if seed is None else seed
 
     canonical_content = json.dumps({"train": sorted(train), "test": sorted(test)}, sort_keys=True)
     split_sha = hashlib.sha256(canonical_content.encode("utf-8")).hexdigest()
 
     data = {
         "dataset": dataset,
-        "seed": seed,
-        "source": source,
+        "seed": split_seed,
+        "source": split_source,
         "train": sorted(train),
         "test": sorted(test),
         "sha256": split_sha,

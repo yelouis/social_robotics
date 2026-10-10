@@ -75,6 +75,7 @@ def test_memguard_b_waits_and_admits(tmp_path: Path, monkeypatch, capsys):
         return (20 * 1024**3, 1)
 
     monkeypatch.setattr("shared.memguard.read_memory", fake_read)
+    monkeypatch.setattr("shared.memguard.is_our_judge_loaded", lambda *a, **kw: False)
     # Fast sleep
     monkeypatch.setattr("time.sleep", lambda s: None)
 

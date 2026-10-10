@@ -256,6 +256,54 @@ def run_probes(
             n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
             config_hash=c_hash, notes="not run: no annotations of reactor speech in Oops!",
         ))
+    else:
+        # react-spoke: binary feature did reactor speak in reaction window
+        # Direction: silence=1.0 (correct), speech=0.0 (mistake)
+        spoke_scores = np.array([1.0 - float(it.meta.get("spoke", 0)) for it in test_items])
+        spk_res = auroc_ci(y_test, spoke_scores, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-spoke", metric="auroc",
+            value=spk_res.point, ci_low=spk_res.ci_low, ci_high=spk_res.ci_high,
+            n_items=n_total_test - spk_res.n_excluded, n_groups=n_groups_test, n_excluded=spk_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+
+        # react-full: TF-IDF (ngram_range=(1,2), min_df=2) + logistic regression on meta.transcript
+        texts_tr = [it.meta.get("transcript") or "" for it in train_items]
+        texts_te = [it.meta.get("transcript") or "" for it in test_items]
+        has_transcripts = any(t.strip() for t in texts_tr)
+
+        if has_transcripts:
+            import warnings
+            from sklearn.feature_extraction.text import TfidfVectorizer
+
+            tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=2)
+            X_text_tr = tfidf.fit_transform(texts_tr)
+            X_text_te = tfidf.transform(texts_te)
+
+            clf_text = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                clf_text.fit(X_text_tr, y_train)
+
+            text_probs = clf_text.predict_proba(X_text_te)[:, 1]
+            rf_res = auroc_ci(y_test, text_probs, groups_test)
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-full", metric="auroc",
+                value=rf_res.point, ci_low=rf_res.ci_low, ci_high=rf_res.ci_high,
+                n_items=n_total_test - rf_res.n_excluded, n_groups=n_groups_test, n_excluded=rf_res.n_excluded,
+                config_hash=c_hash, notes="",
+            ))
+        else:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-full", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+                config_hash=c_hash, notes="not run: annotations carry no transcripts",
+            ))
 
     # 6. Condition: fusion [logit(judge), action, react]
     fusion_tr_mask = valid_j_tr & valid_act_tr & valid_re_tr
