@@ -78,7 +78,7 @@
 - *Pros:* decides with numbers instead of guesses; Wave A is unaffected either way.
 - *Cons:* about a day of delay; needs a YouTube Data API key (maintainer action M3).
 
-**Option D: record our own taste tests**
+**Option D: record our own taste tests** — ❌ **Declined by the maintainer, October 9, 2026:** *"I will not do this."* Kept for the record; do not re-propose.
 - Friends and family taste things, react, and state a score out of 10.
 - *Pros:*
   - real consent;
@@ -100,16 +100,14 @@
   - fixed size (no scaling curve);
   - depends on the EULA holders accepting an independent researcher.
 
-**Recommendation (revised October 9, 2026 for an unaffiliated maintainer):** **D + E as the hidden-outcome core, with B (or creator permission) for scale.**
-- **D:** record your own taste tests. It is the only fully owned, consented verdict data, and it rehearses stage A.
-- **E:** request AM-FED+ (and the taste-liking database).
+**Recommendation (revised again October 9, 2026, after option D was declined):** **E as the hidden-outcome core, with creator permission (and non-YouTube CC) for scale.**
+- **E:** request AM-FED+ (maintainer action M4), and ask the taste-liking authors (M5).
 - **Scale:**
-  - CC videos from platforms that *allow* downloading (Internet Archive, Wikimedia Commons, Vimeo with download enabled);
-  - direct permission from taste-test creators (templates in [`maintainer_access_requests.md`](maintainer_access_requests.md));
-  - C's API count is still useful to size the CC pool.
-- **A (unauthorized public download) is no longer recommended** without institutional cover.
-
-The paper's H1 claims then rest on HoloAssist, Oops!, AM-FED+ and your own recordings, all obtained legitimately. Web video adds scale only where permission exists.
+  - email taste-test and review creators for permission (template in [`maintainer_access_requests.md`](maintainer_access_requests.md)). C's API count, if M3 is done, is the way to *find* and rank those channels;
+  - add CC videos from platforms that allow downloading (Internet Archive, Wikimedia Commons, Vimeo with downloads enabled).
+- **A (unauthorized public download)** stays not recommended.
+- **The risk this leaves:** every hidden-outcome verdict source now depends on someone else saying yes (Affectiva/Smart Eye, the paper's authors, creators). If none does, Wave B has no verdict data. The kill rule would then fall back to HoloAssist, the only hidden-outcome set already in hand, with its pitch-shift caveat. The designer will state that fallback in the Wave B spec rather than leave it implicit.
+- **Worth evaluating in the Wave B spec (not yet verified):** Ego-Exo4D's expert commentary and proficiency labels. Ego4D-style licenses were granted to the maintainer as an individual before. Before any use it needs the same independence check as HoloAssist (A4): were the proficiency labels assigned from the commentary?
 
 Your selection: _____
 
@@ -168,7 +166,7 @@ Your selection: _____
 - *Pros:* the standard route; it also adds a co-author.
 - *Cons:* depends on finding someone; the data stays with them.
 
-**Option C (recommended as the plan, with A sent in parallel): run our own BAD-style reaction study**
+**Option C: run our own BAD-style reaction study** — ⚠️ **May be ruled out:** the maintainer declined self-recorded taste tests (Issue 1 D, October 9), and this is the same kind of self-run collection. Confirm before planning on it.
 - Consenting friends and family watch short clips of a robot succeeding and failing (our own footage; later the microduck), on a webcam, with a consent form that covers research use.
 - It can share sessions with the Issue 1 option D taste tests.
 - *Pros:*
@@ -181,7 +179,7 @@ Your selection: _____
 - *Pros:* no new collection.
 - *Cons:* loses the "reactions *to robots*" claim, which is the most robotics-relevant result.
 
-**Recommendation:** send A now (free), plan on **C**, and treat a yes on A or a partner (B) as a bonus.
+**Recommendation:** send A now (free). If C is also out, the realistic routes to a robot-reaction result are **B** (an academic partner) or a yes on A. Otherwise accept **D**: H2 transfer is shown on HoloAssist and AM-FED+, and "reactions *to robots*" waits for stage A (the microduck).
 
 Your selection: _____
 

@@ -523,6 +523,7 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 
 - **Human rating rounds, golden labels, rater UIs, pre-seeded review.** The v0 benchmark failed this way (0/349 rated).
 - **Hand-built affect channels** (gaze scores, proxemics, nod/flinch detectors, categorical emotion) as the representation.
+- **Self-recorded data collection** (taste tests with friends, or similar). The maintainer declined it: *"I will not do this"* (October 9, 2026).
 - **Ego4D bystander footage as H1 data.** It has no outcome labels and rarely contains an evaluative reaction.
 - **A first-person-only data restriction.** It was considered and rejected (`00_thesis.md`, "Why first-person footage isn't required").
 - **Using Oops! descriptions or HoloAssist mistake/purpose labels as model inputs.**
