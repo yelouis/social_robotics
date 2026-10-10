@@ -63,6 +63,59 @@ An egocentric performer (HoloLens camera) completes physical tasks while a remot
 
 **Independence check (Wave A item A4, before any video download):** if the annotation protocol says mistake labels were assigned *from* the instructor's interventions, reaction and label are not independent and H1 on HoloAssist would be circular. If so, stop and file it. The intervention correlating with mistakes is expected and is the signal. *Deriving the label from it* is the problem.
 
+### Schema (as downloaded, October 9, 2026)
+
+- **Exact file names:**
+  - `data-annotation-trainval-v1_1.json` (117,011,015 bytes, sha256: `cc7898b49958a62fe021ae2ffa53a709c3fd6f45fd3f893960b8aac6d13dfe9c`): train and validation annotation events for 1,758 sessions.
+  - `data-splits-v1_2.zip` (10,554 bytes, sha256: `e10674e7ac32957386d5e88afa60acf3335251b92ba2f8cfb97a736dc85e1621`): official split session lists: `train-v1_2.txt` (1,466 sessions), `val-v1_2.txt` (207 sessions), and `test-v1_2.txt` (438 sessions).
+- **Fine-grained action fields:**
+  - `label`: `"Fine grained action"`
+  - `start`, `end`: floats in seconds (duration typically 1–2 s)
+  - `attributes["Verb"]`: action verb string (e.g. `"grab"`, `"insert"`, `"screw"`)
+  - `attributes["Noun"]`: action object string (e.g. `"handheld_grip"`, `"screw"`, `"battery"`)
+  - `attributes["Adjective"]`: adjective or `"none"`
+  - `attributes["adverbial"]`: adverbial or `"none"`
+  - Mistake/correct attribute: exact field name is `attributes["Action Correctness"]`, with values:
+    - `"Correct Action"`: 141,691
+    - `"Wrong Action, corrected by instructor verbally"`: 4,052
+    - `"Wrong Action, corrected by student"`: 3,061
+    - `"Wrong Action, not corrected"`: 92
+    - `"otherwise"`: 357 (annotator free-form mistake explanations, e.g. accidental battery door closure)
+  - `attributes["Incorrect Action Explanation"]`: human explanation text of why the action is incorrect, or `"none"`
+  - `attributes["Incorrect Action Corrected by"]`: `"none"`, `"instructor"`, or `"student"`
+- **Utterance fields:**
+  - `label`: `"Conversation"`
+  - `start`, `end`: floats in seconds
+  - Speaker role: encoded as the prefix in `attributes["Conversation Purpose"]` (`instructor-start-conversation_...`, `instructor-reply-to-student_...`, `student-start-conversation_...`)
+  - Purpose label: `attributes["Conversation Purpose"]` (e.g. `"instructor-start-conversation_correct the wrong action"`, `"instructor-start-conversation_follow-up instruction"`, `"instructor-start-conversation_confirming the previous action"`, etc.)
+  - Transcript: `attributes["Transcription"]` (text string, e.g. `"Now disassemble it."`, `"*unintelligible* it."`)
+  - Transcript confidence: `attributes["Transcription Confidence"]` (`"high-confidence-transcription"`, `"low-confidence-transcription"`)
+- **Task names:**
+  - Session-level `taskType` string (20 manipulation tasks across 16 objects, e.g. `"setup gopro"`, `"setup nintendo switch"`, `"assemble ikea stool"`, `"change dslr battery"`, etc.)
+- **Performer and instructor identifiers:**
+  - No explicit participant ID field exists in the session metadata (`batch`, `videoMetadata`, `events`, `taskId`, `taskType`, `video_name`). Session names (`video_name`) begin with recording/pair prefixes (e.g. `z114`, `R005`, `z108`).
+  - Across the 2,111 sessions in the official splits, there are 340 unique prefixes.
+- **Official split files and disjointness:**
+  - `train-v1_2.txt` (1,466 sessions), `val-v1_2.txt` (207 sessions), `test-v1_2.txt` (438 sessions).
+  - **Performer prefix straddle:** 236 out of 340 prefixes appear in more than one official split (e.g. `z108` appears in train, val, and test). The official splits are partitioned randomly per-task, **not participant-disjoint**. Therefore, A8 must use a grouped 70/30 split (`splits/holoassist.json`) rather than the official splits.
+- **Measured stats (`src/sources/holoassist.py --stats`):**
+  - Sessions: 1,758
+  - Fine-grained actions with mistake/correct attribute: 148,896 (149,253 including `"otherwise"`)
+  - Mistakes: 7,205 (**4.84%**) (or 7,562 [**5.07%**] including `"otherwise"`)
+  - Instructor utterances: 29,222
+  - Performer IDs in official splits: 340 unique prefixes, **236 present in >1 official split** (0 means participant-disjoint)
+  - `react-spoke` signal in reaction window `[start, end + 5.0]`:
+    - Mistake actions: 4,898 / 7,205 (**67.98%**) (or 5,053 / 7,562 [**66.82%**] including `"otherwise"`)
+    - Correct actions: 43,736 / 141,691 (**30.87%**)
+- **Independence verdict:**
+  - Protocol quote verbatim:
+    > *"Action Correctness: Indicate whether the action is correct or a mistake to achieve the task. The options are: Correct action, Wrong action, corrected by instructor verbally, Wrong action, corrected by performer, Wrong action, not corrected, Others"* (HoloAssist README)
+    > *"Incorrect Action Explanation: Provided by the human annotators to explain why they believe the action is wrong."* (HoloAssist README)
+    > *"Mistakes include the ones that are 'self-corrected by the task performers', are 'verbally corrected by the instructors', and 'are not corrected labeled'. Our human annotators annotate all three mistake types separately, but for benchmark evaluation, we will consolidate them into one mistake class. We defer the detailed study of differentiating whether and how the mistakes are corrected to future work. To ensure the annotation quality, we additionally ask the third-person annotators to explain why the action is a mistake and also assign a mapping to every mistake that is corrected by an instructor verbally to the conversation sentence whose type is 'instructor correcting mistakes'."* (Paper arXiv:2309.17024 §3.2)
+  - Analysis:
+    Mistakes were evaluated and annotated from third-person review of the performer's movements and whether the action achieves the task ("Indicate whether the action is correct or a mistake to achieve the task"), with annotators writing explicit explanations ("Incorrect Action Explanation"). 43.8% of mistakes (3,153 / 7,205) were corrected by the student or uncorrected, with no verbal correction by the instructor. In 32.0% of mistakes (2,307 / 7,205), no instructor utterance overlapped `[start, end + 5.0]`. The mapping from mistakes to verbal corrections was an additional linking step, not the source from which the mistake label was derived.
+  - Verdict: **Issue 2 Resolved: independent**.
+
 ## Oops!: visible-outcome contrast
 
 Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.

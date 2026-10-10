@@ -16,7 +16,7 @@
 - **Decisions pending:**
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
-  - Issue 2 is an agent check (A4) that becomes a decision only if it fails.
+  - Issue 2 was resolved October 9: independent (item A4).
   - Issue 3 (SSD space) was resolved October 8.
 
 ---
@@ -115,11 +115,21 @@ Your selection: _____
 
 ### Issue 2: HoloAssist label independence
 
-**Status:** 🔍 Open. **An agent check, Wave A item A4.** It needs no decision unless the check fails.
+**Status:** ✅ **Resolved: independent (October 9, 2026, item A4).**
 
 **The concern:** if HoloAssist's mistake labels were assigned *from* the instructor's interventions, then "the instructor's reaction predicts the mistake" is circular. The intervention correlating with mistakes is expected; it is the signal. *Deriving the label from it* is the problem.
 
-**What A4 does:** downloads the labels only (111 MB), quotes the annotation protocol, and measures how often instructors speak around mistake vs. correct actions. It resolves this issue as "independent" with that evidence, or files options here and stops. A8 (the 184 GB video download) does not start until this is resolved.
+**Resolution (item A4):**
+- **Protocol quote verbatim:**
+  > *"Action Correctness: Indicate whether the action is correct or a mistake to achieve the task. The options are: Correct action, Wrong action, corrected by instructor verbally, Wrong action, corrected by performer, Wrong action, not corrected, Others"* (HoloAssist README)
+  > *"Incorrect Action Explanation: Provided by the human annotators to explain why they believe the action is wrong."* (HoloAssist README)
+  > *"Mistakes include the ones that are 'self-corrected by the task performers', are 'verbally corrected by the instructors', and 'are not corrected labeled'. Our human annotators annotate all three mistake types separately, but for benchmark evaluation, we will consolidate them into one mistake class. We defer the detailed study of differentiating whether and how the mistakes are corrected to future work. To ensure the annotation quality, we additionally ask the third-person annotators to explain why the action is a mistake and also assign a mapping to every mistake that is corrected by an instructor verbally to the conversation sentence whose type is 'instructor correcting mistakes'."* (Paper arXiv:2309.17024 §3.2)
+- **Findings:**
+  - Mistakes were annotated from third-person video observation of whether the physical movement achieved the task, with human explanations provided per mistake.
+  - 43.8% of mistakes (3,153 / 7,205) were corrected by the student or uncorrected, with no instructor intervention. In 32.0% of mistakes (2,307 / 7,205), no instructor utterance overlapped `[start, end + 5.0]`.
+  - The `react-spoke` speech rate is **67.98% for mistakes (4,898 / 7,205)** vs. **30.87% for correct actions (43,736 / 141,691)**.
+  - The official splits are **not participant-disjoint** (236 / 340 performer prefixes straddle splits), so A8 will use a grouped 70/30 split.
+- **Verdict:** Issue 2 is resolved as independent. A8 is cleared to proceed when its prerequisites land.
 
 ---
 
@@ -225,6 +235,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A1 — Battery green and scripted — git log --grep "(a1)" — scripts/battery.sh exit 0 (G1 exit 0, G2 exit 0 [2 passed], G3 skipped).
 - A2 — Metrics, scorecard, self-test — git log --grep "(a2)" — G3 selftest passes 4/4 checks (planted AUROC=0.830 [0.807, 0.852], null CI=[0.459, 0.523], grouping width ratio=4.66, paired delta exact 0 on same scores).
 - A3 — Items and grouped splits — git log --grep "(a3)" — Item validation rejects all 5 error conditions with verbatim messages; make_group_split guarantees group-disjoint splits and sha256 tamper verification.
+- A4 — HoloAssist labels + independence check — git log --grep "(a4)" — Issue 2 resolved independent; labels downloaded (111 MB); react-spoke 67.98% mistakes (4,898/7,205) vs 30.87% correct (43,736/141,691); 236/340 performer prefixes straddle official splits.
 
 ---
 
