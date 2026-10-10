@@ -29,6 +29,7 @@
 #   SR_MEMWAIT_SLEEP_S         sleep seconds after exit 75 memory deferral (default 600)
 #   SR_MAX_MEM_DEFERRALS       max consecutive memory deferrals before abort (default 72)
 set -uo pipefail
+export PYTHONPATH="src:${PYTHONPATH:-}"
 
 PROGRESS_FILE="${1:-}"
 if [ -z "$PROGRESS_FILE" ] || [ "$#" -lt 2 ]; then

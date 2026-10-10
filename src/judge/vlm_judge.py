@@ -195,7 +195,8 @@ class GeminiJudge:
             load_dotenv()
             key = os.getenv("GOOGLE_API_KEY")
         from google import genai
-        self.client = genai.Client(api_key=key) if key else None
+        from google.genai import types
+        self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=60000)) if key else None
         self.model = "gemini-3.6-flash"
 
     def judge_item(
@@ -230,7 +231,8 @@ class GeminiJudge:
             contents = image_parts + [prompt]
             config = types.GenerateContentConfig(
                 temperature=0,
-                max_output_tokens=16,
+                max_output_tokens=32,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             )
 
             # Retry loop on HTTP 429 or 5xx: up to 5 tries with 30s sleep
@@ -243,6 +245,11 @@ class GeminiJudge:
                         config=config,
                     )
                     raw = resp.text or ""
+                    if not raw and getattr(resp, "candidates", None):
+                        for part in getattr(resp.candidates[0].content, "parts", []):
+                            if getattr(part, "text", None):
+                                raw = part.text
+                                break
                     prob = parse_prob(raw)
                     elapsed_ms = (time.time() - t0) * 1000.0
                     return prob, raw, attempt, elapsed_ms
@@ -331,6 +338,7 @@ def run_judge(
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"{p_hash}.jsonl"
     progress_file = cache_dir / "progress.json"
+    split_progress_file = cache_dir / f"progress_{split}.json"
     errors_path = cache_dir / "errors.jsonl"
 
     cached_entries: Dict[str, Dict[str, Any]] = {}
@@ -401,13 +409,21 @@ def run_judge(
                     excluded += 1
                     parse_failures += 1
 
-                # Update progress.json
+                # Update progress.json and progress_{split}.json
                 with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as tf:
                     temp_progress = tf.name
                     json.dump(finished_ids, tf)
                     tf.flush()
                     os.fsync(tf.fileno())
                 os.replace(temp_progress, progress_file)
+
+                split_finished = [x for x in finished_ids if x in allowed_ids]
+                with tempfile.NamedTemporaryFile("w", dir=cache_dir, delete=False, encoding="utf-8") as tf:
+                    temp_split = tf.name
+                    json.dump(split_finished, tf)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                os.replace(temp_split, split_progress_file)
 
             except MemoryDeferred:
                 raise

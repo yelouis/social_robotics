@@ -138,6 +138,31 @@ Web "fail" videos with a marked failure onset. The reaction is mostly the filmer
 
 The VLM judge should be strong here, because the failure is visible. That is the point: it is the condition where we *predict* reactions add little. Spectators visible in frame cannot be masked from the judge. That biases the comparison toward the judge, which is conservative for our claim.
 
+### Schema (as downloaded, October 10, 2026)
+
+- **Exact file names:**
+  - `annotations.tar.gz` (1,113,937 bytes, packaged inside `video_and_anns.tar.gz`):
+    - `transition_times.json` (2,804,116 bytes): timing annotations for 10,961 clips.
+    - `heldout_transition_times.json` (601,411 bytes): 4,791 challenge test evaluation clips (`t: [-1.0]`).
+    - `train.txt` (1,400,823 bytes, 23,201 clips) and `val.txt` (400,835 bytes, 6,739 clips): official train/validation split partition.
+    - `train_filtered.txt` (967,790 bytes, 16,012 clips) and `val_filtered.txt` (281,327 bytes, 4,711 clips): subset filtered for consensus.
+    - `filtered_vids.txt` (1,249,118 bytes, 20,724 clips): total compilation video clip list.
+- **Per-worker failure onset fields:**
+  - Key in `transition_times.json` is the clip name (without `.mp4` extension).
+  - `t`: list of 3 float timestamps in seconds marked by MTurk annotators. `-1.0` denotes that the annotator found no failure transition.
+  - `len`: float duration of the video clip in seconds.
+  - `stdev`: standard deviation across worker timestamps.
+  - `rel_t`: relative transition timestamps (`t / len`).
+  - `rel_stdev`: relative standard deviation (`stdev / len`).
+  - `n_notfound`: count of workers (0 to 3) who marked `-1.0`.
+- **Train / validation membership:**
+  - `train.txt` and `val.txt` are mutually disjoint (0 shared clips).
+  - Of the 10,961 clips in `transition_times.json`, exactly 6,170 belong to `train.txt` and 4,791 belong to `val.txt` (100% split coverage).
+- **Source compilation ID derivation:**
+  - Derived from clip filename: clip names are constructed from YouTube compilation titles followed by a clip index (e.g., `"FailFactory - No Pain, No Gain (Workout Fails)12"`).
+  - Derivation rule: `re.sub(r"\d+$", "", clip_id).strip()`. If the stripped string is non-empty, use it; otherwise use `clip_id`.
+  - Result: 469 unique compilation groups across the 10,961 annotated clips.
+
 ## BAD / ERR@HRI / REACT: reactions to robots
 
 **If BAD access is granted, these commitments from the access request bind the project:**

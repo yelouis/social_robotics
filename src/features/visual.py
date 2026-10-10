@@ -24,19 +24,20 @@ def get_sample_times(s: float, e: float) -> List[float]:
 
 
 def extract_frame(video_path: Union[str, Path], t: float) -> Image.Image:
-    cmd = [
-        "ffmpeg",
-        "-ss", f"{t:.4f}",
-        "-i", str(video_path),
-        "-frames:v", "1",
-        "-f", "image2pipe",
-        "-vcodec", "png",
-        "-",
-    ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    if not proc.stdout:
-        raise RuntimeError(f"ffmpeg extracted 0 bytes for frame at {t:.4f} in {video_path}")
-    return Image.open(io.BytesIO(proc.stdout)).convert("RGB")
+    for seek_t in [t, max(0.0, t - 0.05), max(0.0, t - 0.1), max(0.0, t - 0.2), max(0.0, t - 0.3)]:
+        cmd = [
+            "ffmpeg",
+            "-ss", f"{seek_t:.4f}",
+            "-i", str(video_path),
+            "-frames:v", "1",
+            "-f", "image2pipe",
+            "-vcodec", "png",
+            "-",
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        if proc.stdout:
+            return Image.open(io.BytesIO(proc.stdout)).convert("RGB")
+    raise RuntimeError(f"ffmpeg extracted 0 bytes for frame at {t:.4f} in {video_path}")
 
 
 class FrameEncoder:

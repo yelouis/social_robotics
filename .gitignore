@@ -12,6 +12,7 @@ vlm_env/
 
 # Data & Results
 *.json
+!splits/*.json
 *.csv
 *.wav
 *.tar
