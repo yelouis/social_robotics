@@ -108,7 +108,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 |---|---|---|
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
 | **B** (≈ weeks 4–7) | **Hidden-outcome H1 pilot**: a reaction followed by a verdict (AM-FED+, creator-permitted or CC taste-test videos, per Issue 1), with face + non-verbal audio. If no verdict source is granted, HoloAssist carries the hidden-outcome test | **Issue 1** selected; Wave A closed |
-| **C** (≈ weeks 7–10) | **H2**: transfer to robot-reaction data (BAD / ERR@HRI if granted, otherwise our own consented study) plus HoloAssist / AM-FED+; scaling curves | **Issue 4** selected and the data in hand |
+| **C** (≈ weeks 7–10) | **H2**: transfer to HoloAssist / AM-FED+ (plus BAD only if the access request is granted); scaling curves | Wave B closed |
 | **D** (≈ weeks 10–12) | Paper write-up; decide H3 | — |
 
 ---
@@ -130,7 +130,8 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 10. **Implementation is done by a separate agent from the execution guide.** The designer writes specs and validation and does not code (maintainer: *"Don't perform any coding … Create an agent_execution guide with clear guidelines and validation and let another agent implement"*). **Commits go straight to `main`, with no feature branches** (maintainer: *"No need to open up a new branch, just push to the repo"*).
 11. **Issue 3 → the v0 videos were deleted** (maintainer: *"clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice"*). That was the 1,083 Ego4D clips and the Charades-Ego videos, 1.336 TB in total. The manifest is `DATA_ROOT/DELETED_2026-10-08.json`.
 12. **No self-recorded data.** The maintainer declined recording their own taste tests (*"I will not do this"*, October 9, 2026). Hidden-outcome verdict data must come from licensed datasets (AM-FED+) or creator-permitted and CC video (Issue 1).
+13. **No human-subjects studies and no academic partner** (October 9, 2026; Issue 4). A robot-reaction target exists only if BAD access is granted to an independent researcher. Otherwise H2 transfer is shown on HoloAssist and AM-FED+.
 
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4), **Issue 4** the robot-reaction H2 target (BAD needs an institutional IRB; needs your selection before Wave C). **Issue 3** (SSD capacity) is resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 3** (SSD capacity) is resolved.

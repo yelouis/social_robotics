@@ -15,7 +15,7 @@
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
   - Issue 1 blocks Wave B only.
-  - Issue 4 blocks H2 (Wave C) only.
+  - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
   - Issue 2 is an agent check (A4) that becomes a decision only if it fails.
   - Issue 3 (SSD space) was resolved October 8.
 
@@ -147,7 +147,7 @@ Your selection: _____
 
 ### Issue 4: The robot-reaction H2 target (BAD) requires an institutional ethics review
 
-**Status:** ⚠️ Awaiting selection. **Blocks H2 (Wave C) only.** Waves A and B are unaffected.
+**Status:** ✅ **Decided by elimination, October 9, 2026.** The maintainer declined option C (*"I will not do a study for people watching robot clips on a webcam"*) and option B (*"I also do not intend on partnering with an academic institution"*). **The path:** A, with the maintainer's QDR access request in progress (form answers in `maintainer_access_requests.md` M1a). **If refused → D:** H2 transfer is shown on HoloAssist and AM-FED+, with no "reactions to robots" target.
 
 **Facts (October 9, 2026, from QDR's metadata API and the dataset page):**
 - **BAD is QDR "Controlled Access."** Only 4 documentation files (0.3 MB) are public. The data (54 participant video zips + survey, 2.71 GB) is restricted.
@@ -162,11 +162,11 @@ Your selection: _____
 - *Pros:* free to ask; it keeps the published robot-reaction benchmark in play.
 - *Cons:* likely refused as written. An independent (commercial) IRB review costs money and takes weeks.
 
-**Option B: partner with an academic collaborator** who holds the data under their IRB, and runs or co-authors the BAD evaluation.
+**Option B: partner with an academic collaborator** — ❌ declined October 9. who holds the data under their IRB, and runs or co-authors the BAD evaluation.
 - *Pros:* the standard route; it also adds a co-author.
 - *Cons:* depends on finding someone; the data stays with them.
 
-**Option C: run our own BAD-style reaction study** — ⚠️ **May be ruled out:** the maintainer declined self-recorded taste tests (Issue 1 D, October 9), and this is the same kind of self-run collection. Confirm before planning on it.
+**Option C: run our own BAD-style reaction study** — ❌ **Declined October 9.** Originally flagged as possibly ruled out: the maintainer declined self-recorded taste tests (Issue 1 D, October 9), and this is the same kind of self-run collection. Confirm before planning on it.
 - Consenting friends and family watch short clips of a robot succeeding and failing (our own footage; later the microduck), on a webcam, with a consent form that covers research use.
 - It can share sessions with the Issue 1 option D taste tests.
 - *Pros:*
@@ -231,7 +231,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 |---|---|---|
 | DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec |
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
-| DW3 | **H2 transfer** to robot-reaction data (BAD / ERR@HRI, or our own study per Issue 4); scaling curves | Issue 4 selected **and** the data in hand **and** Wave B closed |
+| DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
 | DW5 | **H3** offline: reward-model ranking of labeled robot trajectories vs. RoboReward/TOPReward-style baselines | H1 + H2 paper drafted |
 | DW6 | **Stage A live**: reactions to a small robot (microduck) | Hardware acquired **and** H2 done |
