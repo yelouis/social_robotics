@@ -1,29 +1,37 @@
-# Agent Execution Guide: Active Build: Wave A (evaluation harness + first H1 numbers, 10 items), October 10, 2026
+# Agent Execution Guide: Active Build: Wave A, remaining items (A6c → A7b → A8 → A9), October 10, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented. The v0 pipeline (six hand-built affect layers over Ego4D, plus a human-rated benchmark) is archived at git tag `v0-saf-final` and removed from the tree, because it could not be validated ([`LESSONS_v0.md`](LESSONS_v0.md)).
-- **What exists:** the grounding docs, `src/shared/vlm_client.py`, `src/models_config.py`, `src/config.py`, `tools/` and two tests.
-- **What you build:** **Wave A**. It is the evaluation harness that tells us automatically whether human reactions carry reward information, and its first H1 numbers on two licensed datasets (Oops! and HoloAssist).
+- **What exists:** Wave A items **A1–A7 and A6b have landed** on `main` (`651039b` … `6d72492`, October 9–10):
+  - the harness (items, splits, metrics, scorecard);
+  - the encoders and the feature cache;
+  - the VLM judge;
+  - the memory guard;
+  - the first H1 numbers, on Oops!.
+
+  The designer verified them on October 10 by reading every item's code against its contract and re-running the battery (§1).
+- **What you build:** the rest of Wave A, in the §2 order:
+  - **A6c:** fix three memory-guard defects found in verification;
+  - **A7b:** correct the Oops! report, and give the frontier judge the same parse retries as the local one;
+  - **A8:** finish HoloAssist, resuming an uncommitted draft, with corrections;
+  - **A9:** close out Wave A.
 
 **Read before anything else, in this order:**
-1. [`00_thesis.md`](00_thesis.md): the thesis, H1–H3, the pass and kill criteria, and the decision log.
-2. [`03_eval_harness.md`](03_eval_harness.md): **the contract** for every path, schema, constant and prompt you implement.
-3. [`02_data_sources.md`](02_data_sources.md): the item definitions for Oops! and HoloAssist.
-4. [`LESSONS_v0.md`](LESSONS_v0.md) and [`ongoing_general_errors.md`](ongoing_general_errors.md) §2: the traps.
+1. [`00_thesis.md`](00_thesis.md): the thesis, H1–H3, the pass and kill criteria, and the decision log (entries 15–17 are this verification).
+2. [`03_eval_harness.md`](03_eval_harness.md): **the contract** for every path, schema, constant and prompt. §4–§6, §8 and §12 were amended on October 10; each amendment is marked *(added/clarified October 10, 2026)*.
+3. [`02_data_sources.md`](02_data_sources.md): Oops! "As built" and HoloAssist "Item construction: pinned details" (both October 10).
+4. [`ongoing_general_errors.md`](ongoing_general_errors.md): §1 (the verification summary), **Issue 5**, and §2 (the lessons, especially L10 and L11).
 
 **The maintainer's words:**
 - *"The fundamental core of this project is to use human emotion as a policy for robot learning in addition to the traditional RL stack for robots. We want to add this additional reward signal and investigate if this additional reward signal helped the robot learn a task better and perhaps allow robots to train on much more data like vlogs or any POV youtube video."*
 - *"Ideally we should avoid human in the loop ratings because that is not scalable and we want to be able to somehow measure whether our thesis is working often."*
-- *"How is this any different from asking an LLM model what is socially appropriate…?"* This is why every H1 result is measured against action-only controls.
+- *"How is this any different from asking an LLM model what is socially appropriate…?"* This is why every H1 result is measured against action-only controls, and why Issue 5 matters.
 - *"No need to open up a new branch, just push to the repo."*
-- *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026). This is why A6b exists.
+- *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026)
 
-**Status:** **Active Build: Wave A**, in the §2 order.
-- **A1–A6 and A6b have landed** (`651039b` … `0f16799`, October 9–10, 2026; agent-reported, and designer verification is pending).
-- **Next is A7: Oops!, end-to-end H1.** The memory guard (A6b) is closed and protects multi-hour runs.
-- One maintainer decision is pending, and it does not block you: **Issue 1** (web video) gates only Wave B, which is not in this guide.
-- **Issue 3** (SSD space) was resolved on October 8: the v0 videos were deleted and 1.5 TiB is free.
-- A4 may end by filing under **Issue 2**.
+**Status:** **Active Build: Wave A, remaining items.** Next is **A6c**.
+- **One maintainer decision is open: Issue 5** (the frontier judge). It blocks no item. A8 and A9 write honest `not run`/`partial` rows if it is not selected, and A9 has a conditional step if it is.
+- **Issue 1** gates only Wave B, which is not in this guide.
 
 **Every path, number, field name and literal string in this guide and in `03_eval_harness.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
 
@@ -31,7 +39,9 @@
 
 ## 0. Standing constraints (apply to every item)
 
-1. **The battery is the regression bar.** After A1, run `scripts/battery.sh` bare after every item and update §1.4. Read every exit code bare; never pipe a gate through something that swallows its code.
+1. **The battery is the regression bar.**
+   - Run `scripts/battery.sh` bare after every item (`--slow` when the item touches models), and update §1.4.
+   - Read every exit code bare; never pipe a gate through something that swallows its code.
 2. **Environment.**
    - Run from the repo root with `./venv/bin/python` (Python **3.9.6**) and `PYTHONPATH=src`.
    - **Python 3.9 syntax only:** no `match`; no `X | Y` unions evaluated at runtime (use `typing.Optional`/`Union`, or `from __future__ import annotations`).
@@ -42,82 +52,130 @@
      export SR_NO_MODEL_BANNER=1
      ```
 3. **Dependencies are frozen.**
-   - **Install no new pip packages.** Everything Wave A needs is in `venv` (§1.1).
-   - **The only model downloads allowed:** `google/siglip-base-patch16-224` (Hugging Face) and `iic/emotion2vec_plus_large` (via `funasr`; it may already be cached).
-   - **Pull no Ollama models.** `qwen2.5vl:7b` is installed.
+   - **Install no new pip packages.** Everything is in `venv` (§1.1).
+   - **No new model downloads.** `google/siglip-base-patch16-224` and `iic/emotion2vec_plus_large` are cached.
+   - **Pull no Ollama models.**
 4. **Data placement and disk.**
-   - All data lives under `DATA_ROOT` (`src/config.py`, default `/Volumes/Extreme SSD/social_robotics`): `raw/<dataset>/`, `items/`, `features/`, `judge/`, `runs/`. **No video or audio on the internal disk, ever.**
-   - **Before any download, check the disk rule:** free space *after* the download and any extraction must stay **≥ 50 GiB**. If it would not, STOP and file it as a new issue with the measurement.
-5. **Authorized downloads, and nothing else:**
-   - the Oops! videos + annotations bundle (45 GB) from `https://oops.cs.columbia.edu/data`;
-   - HoloAssist **labels** (111 MB) from the official data links (`https://holoassist.github.io/`);
-   - HoloAssist **pitch-shifted videos** (184.20 GB), **only** after A4 resolves Issue 2 as "independent" (and the disk rule holds).
-   - **No YouTube or other web-video downloading in Wave A.**
-   - **Never circumvent a login wall, CAPTCHA or bot check** (no cookies, tokens, proxies or client spoofing).
-6. **Never delete anything you did not create.** The remaining v0 artifacts, caches and environments stay. You may delete a downloaded archive *after* you have verified its extraction.
-7. **Long runs (> 30 min) run detached:** `./venv/bin/python tools/daemonize.py <log> bash tools/run_supervised.sh <progress.json> <runner…>`, then confirm `PPID 1` (`tools/README.md`). Never use your own background-task feature: it is reaped after ~1–2 h.
-   - **Every long runner is resumable.** It skips finished `item_id`s.
-   - **It maintains `<out_dir>/progress.json`**: a JSON **list** of finished `item_id`s, rewritten atomically (temp file + `os.replace`). That is what the supervisor counts.
+   - All data lives under `DATA_ROOT` (`src/config.py`, default `/Volumes/Extreme SSD/social_robotics`). **No video or audio on the internal disk, ever.**
+   - The free space *after* any download and extraction must stay **≥ 50 GiB**.
+5. **Authorized downloads:** only the HoloAssist pitch-shifted videos, which are **already downloading** (§1.6). **No other download of any kind. No YouTube or web video. Never circumvent a login wall, CAPTCHA or bot check.**
+6. **Never delete anything you did not create.** You may delete a downloaded archive only after you have verified its extraction.
+7. **Long runs (> 30 min) run detached:**
+   ```bash
+   ./venv/bin/python tools/daemonize.py <log> bash tools/run_supervised.sh <progress.json> <runner…>
+   ```
+   - Then confirm `PPID 1` (`tools/README.md`). Never use your own background-task feature: it is reaped after ~1–2 h.
+   - Every long runner is resumable and maintains `<out_dir>/progress.json`, a JSON list of finished `item_id`s, rewritten atomically.
 8. **Determinism.** Seeds: `numpy.random.default_rng(0)` and `torch.manual_seed(0)`. Iterate inputs in sorted `item_id` order.
 9. **No outcome leakage.**
    - The judge never receives audio, the reaction window outside the action window, labels, Oops! descriptions, or HoloAssist mistake/purpose labels.
    - Probes never see test labels at fit time.
-   - **Nothing is tuned on the test split.** The hyperparameters in `03_eval_harness.md` §6 are fixed.
+   - **Nothing is tuned on the test split.**
 10. **The scorecard is append-only.** Never edit or delete a row in `results/scorecard.jsonl`. A wrong row is superseded by a new row whose `notes` say why.
-11. **Honest nulls (L3).** A failed feature, judge answer or condition is `null` plus a reason, counted in `n_excluded` or in a `not run: <reason>` row. Never zeros.
-12. **Every stage logs its counts (L2).** Every CLI ends by printing one line: `items_in=<a> items_out=<b> excluded=<c> elapsed_s=<t>`. Exclusions are broken down by reason in the run's `errors.jsonl` or stats JSON.
-13. **Commits.**
-    - One item = one Conventional Commit on `main`, scope = item id: `feat(a2): …`, `fix(a1): …`.
+11. **Honest nulls (L3).**
+    - A failure is `null` plus a reason, never a zero and never a sentinel such as `-100`.
+    - **A "not run" reason is derived from the run's evidence, never hard-coded** (`03_eval_harness.md` §6).
+12. **Every stage logs its counts (L2).** Every CLI ends by printing one line: `items_in=<a> items_out=<b> excluded=<c> elapsed_s=<t>`. Exclusions are broken down by reason.
+13. **Reports are generated from the rows, clause by clause (L10).** A sentence that states a result is computed from the scorecard row it describes, and a prediction check gives every clause of the prediction its own measured line. Template prose that does not depend on the data is not a description.
+14. **Commits.**
+    - One item = one Conventional Commit on `main`, scope = item id (`fix(a6c): …`, `fix(a7b): …`, `feat(a8): …`).
     - The body states the WHY, the red run and the green run.
-    - Push after every item with **`/usr/bin/git push origin main`**. (`~/.local/bin/git` shadows the system git and lacks the https helper.)
-    - **No branches, no PRs. Never amend a pushed commit.**
-14. **Record the resolution in the same commit:** one line under **"Wave A"** in `ongoing_general_errors.md` §3: `A<n> — <title> — git log --grep "(a<n>)" — <measured result>`.
-15. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 5**), with options.
-16. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
-17. **Memory (from A6b onward).** This Mac is shared with other programs, including the `animated_infographics` agent, browsers and editors, that start and stop at will.
+    - Push after every item with **`/usr/bin/git push origin main`**. **No branches, no PRs. Never amend a pushed commit.**
+    - **Stage by explicit path only** (`/usr/bin/git add <path> <path> …`). Never `git add -A`, `git add .` or `git commit -a`. Until A8's commit, the tree holds the uncommitted A8 draft (§1.3), and it must not leak into A6c's or A7b's commit.
+15. **Record the resolution in the same commit:** one line under **"Wave A"** in `ongoing_general_errors.md` §3: `A<n> — <title> — git log --grep "(a<n>)" — <measured result>`.
+16. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 6**), with options.
+17. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
+18. **Memory.** This Mac is shared with other programs, including the `animated_infographics` agent, browsers and editors, that start and stop at will.
     - Every model load goes through `shared.memguard.guard()`, and every long loop calls `memguard.check()` between items (`03_eval_harness.md` §12).
-    - **Never run two of this project's model-loading jobs at once.** Chain them in one supervised script, or run them one after another.
-    - Run `python -m shared.memguard --status` before launching any long job, and record its output in the run log.
-    - **A memory deferral (exit 75) is never a pass.** Never raise `FLOOR`, a declared peak, or a wait limit to make a run go through. File it instead.
-    - **Never stop, signal or unload anything this project did not start.**
+    - **Never run two of this project's model-loading jobs at once.**
+    - Run `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` before any long job, and record its output in the run log.
+    - **A memory deferral (exit 75) is never a pass.** Never raise `FLOOR`, a declared peak or a wait limit to make a run go through.
+    - **Never stop, signal or unload anything this project did not start.** `gemma4:26b` in Ollama is another program's.
+19. **Running jobs are not yours to stop** (§1.6). Leave the HoloAssist download and the Gemini job running.
+    - **Never edit `tools/run_supervised.sh` in place while a supervisor is running it.** Bash reads a script from its open file as it executes. Write the new version to a temp file and `mv` it over the original: the rename gives a new inode, and the running shells keep the old one.
 
 ---
 
-## 1. Verified baseline (October 8, 2026; designer, this session)
+## 1. Verified baseline (October 10, 2026; designer, this session)
 
 ### 1.1 Environment
 
-- **Host:** Mac Studio M4 Max, 64 GB; macOS (Darwin 25.6); ffmpeg 8.1 (`/opt/homebrew/bin/ffmpeg`).
-- **Ollama:** `qwen2.5vl:7b` (also as `:latest`), `gemma4:26b`, `gemma4:latest`, `glm4:latest`, `moondream:latest`, `tinyllama:latest`.
+- **Host:** Mac Studio M4 Max, 64 GB; macOS (Darwin 25.6); ffmpeg 8.1 (`/opt/homebrew/bin/ffmpeg`); `/usr/bin/footprint` available.
+- **Ollama:** `qwen2.5vl:7b` (ours: `get_model("vlm_judge")`). Also installed: `gemma4:26b`, `gemma4:latest`, `glm4:latest`, `moondream:latest`, `tinyllama:latest`.
 - **`venv`, Python 3.9.6:**
   - ML: torch 2.8.0 · torchaudio 2.8.0 · transformers 4.46.3 · funasr 1.3.1 · scikit-learn 1.6.1 · scipy 1.13.1;
-  - data: numpy 2.0.2 · pandas 2.3.3 · pyarrow 21.0.0;
-  - clients: google-genai 1.47.0 · httpx 0.28.1 · ollama 0.6.1 · huggingface_hub 0.36.2;
-  - tooling: ruff 0.15.11 · pytest 8.4.2;
-  - other: opencv-python 4.10.0.84 · librosa 0.11.0 · mediapipe 0.10.35 · hsemotion-onnx 0.3.1.
-- **Not installed and not needed in Wave A:** yt-dlp, mlx-whisper.
-- **`.env`** defines `GOOGLE_API_KEY` and `HF_TOKEN` (names checked, values not read), plus unused v0 keys.
+  - data: numpy 2.0.2 · pandas 2.3.3 · pyarrow 21.0.0 · soundfile;
+  - clients: google-genai 1.47.0 · httpx 0.28.1 · huggingface_hub 0.36.2;
+  - tooling: ruff 0.15.11 · pytest 8.4.2 · psutil.
+- **`.env`** defines `GOOGLE_API_KEY` (**free tier: 20 requests/day for `gemini-3.6-flash`**, Issue 5) and `HF_TOKEN`.
 
 ### 1.2 Storage (Extreme SSD)
 
-- 1.8 TiB total, **1.5 TiB free** (after the October 8 cleanup).
-- **Deleted on October 8 (Issue 3):** the v0 videos: 1,083 Ego4D clips (1.2 TB) and the Charades-Ego videos and archives. The manifest, with every path and all Ego4D clip ids for re-download, is `DATA_ROOT/DELETED_2026-10-08.json`.
-- **Still in place; do not touch:** `huggingface_cache/` 106 GB · `ego4d_data/` 82 GB (annotations + precomputed features, no videos) · `saf_env/` 19 GB · `social_robotics/full_run_2026_06_18/` 13 GB · `social_robotics/bench_v0/` 4.5 GB.
+- 1.8 TiB total, **1.4 TiB free** (October 10, 11:09).
+- **Oops!:** `raw/oops/oops_dataset/` holds 29,940 extracted videos. The archive was deleted after verification (`raw/oops/DOWNLOAD.json`).
+- **HoloAssist:**
+  - `raw/holoassist/labels/`: hashes re-verified October 10 against `DOWNLOAD.json`;
+  - `raw/holoassist/video_pitch_shifted.tar`: downloading (§1.6).
+- **Still in place; do not touch:** `huggingface_cache/`, `ego4d_data/`, `saf_env/`, `social_robotics/full_run_2026_06_18/`, `social_robotics/bench_v0/`, `DELETED_2026-10-08.json`.
 
-### 1.3 Repository
+### 1.3 Repository and working tree at hand-off
 
-- `main` contains the reorientation (`454b40d`) and this spec.
-- v0 is at tag `v0-saf-final` (`886bd71`).
-- `src/` holds `config.py`, `models_config.py` (one key: `vlm_judge` → `qwen2.5vl:7b` on this host) and `shared/vlm_client.py`.
+- `HEAD` = `6d72492` (`feat(a7)`), pushed. v0 is at tag `v0-saf-final`.
+- **The uncommitted A8 draft, written by a previous agent.** It is not yours to discard; A8 resumes it:
 
-### 1.4 Gates (run bare October 8, 2026; the regression bar)
+  | State | Path | What it is |
+  |---|---|---|
+  | modified | `src/sources/holoassist.py` | `--build`: the item builder, group split and balanced sampling (+294 lines) |
+  | modified | `src/harness/probes.py` | HoloAssist `react-spoke` and `react-full` branches |
+  | modified | `src/harness/splits.py` | `make_group_split(…, source=, seed=)` |
+  | modified | `tests/test_probes.py` | `test_run_probes_holoassist_synthetic` |
+  | modified | `tests/test_memguard.py` | one line patching `is_our_judge_loaded` in test (b). **This hunk belongs to A6c**; commit it there |
+  | new | `splits/holoassist.json` | 3,000 train / 2,000 test. Its item ids are in the **wrong format**, so A8 regenerates it |
+  | new | `tests/test_sources_holoassist.py` | 6 tests; 3 read SSD data in the fast suite |
+  | new | `tools/download_holoassist.py` | the running download (§1.6) |
+  | new | `tools/check_audio_presence.py` | A8 step 2 (needs corrections) |
+  | new | `tools/report_holoassist.py` | A8 report generator (not yet run) |
 
-| # | Gate | Command | Result |
-|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **38 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · **4 passed** |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (exit 75 on memory deferral) |
+- **If any draft file's modification time is later than 2026-10-10 11:30,** another session may still be working in this tree. **STOP and ask the maintainer** before editing.
+
+### 1.4 Gates (run bare October 10, 2026; the regression bar)
+
+| # | Gate | Command | `HEAD` (clean export) | Working tree (with the A8 draft) |
+|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **41 passed** | exit 0 · **48 passed** |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | not run on the export | exit 0 · **5 passed** (82 s) |
+
+- `memguard --status` before G4: 40.3 GB available, pressure 1, heavy lock free, `gemma4:26b` loaded (not ours).
+- **What the battery does not catch** (it is green, and these were found by reading the code; they are A6c's and A7b's gaps):
+  - the nested-guard lockout;
+  - the fail-open memory read;
+  - the supervisor's attempt accounting;
+  - the Oops! report's errors.
+
+### 1.5 Data, caches and results on the SSD
+
+| What | Where | State |
+|---|---|---|
+| Oops! items | `items/oops/items.jsonl`, `stats.json` | 2,710 items (1,355 clips); 1,638 train / 1,072 test; 90 test groups |
+| Oops! split | `splits/oops.json` (tracked) | `source: official`, hash-verified |
+| Oops! features | `features/oops/{siglip-b16-224,e2v-plus-large}/` | 2,708 `.npy` each. 1 undecodable clip (2 items, train) is in `errors.jsonl` |
+| Oops! local judge | `judge/oops/qwen2.5vl_7b/2409b2876016.jsonl` | 2,708 answers, **0 null**. 2 ffmpeg errors (the same clip) in `errors.jsonl` |
+| Oops! frontier judge | `judge/oops/gemini-3.6-flash/2409b2876016.jsonl` | 11 of 1,072 scored. `errors.jsonl` holds 429s (Issue 5) |
+| Oops! rows | `results/scorecard.jsonl` | 11 rows, `2026-10-10T17:33:22Z`–`…26Z`. Judge **0.472** [0.440, 0.498]; action-probe 0.779; react-nonverbal 0.711; fusion 0.793; Δ +0.015 [−0.002, 0.029]; shuffled controls 0.510 / 0.468 / 0.513 |
+| HoloAssist items (draft) | `items/holoassist/items.jsonl`, `stats.json` | 5,000 items (2,500 per class), built with the draft. **Rebuilt in A8** (item-id format) |
+| Memory-guard log | `runs/memguard.log` | No real `pause` or `stop` yet (the only `stop`/`deferred` lines are fake-reading drills). No jetsam report since October 9 |
+
+### 1.6 Processes running at hand-off (October 10, 11:09)
+
+| PID | What | Note |
+|---|---|---|
+| 40612 (PPID 1) → 40623 → curl 40626 | `run_supervised.sh raw/holoassist/progress.json ./venv/bin/python tools/download_holoassist.py` | 62.1 of 184.2 GB at 11:09 (~37 MB/s). It then hashes, extracts into `raw/holoassist/videos/`, counts `.mp4` (deleting the archive only if ≥ 1,000) and sets `progress.json` to `["verified"]` |
+| 37143 (PPID 1) → 37154 | `run_supervised.sh …/judge/oops/gemini-3.6-flash/progress.json ./venv/bin/python -m judge.vlm_judge --dataset oops --split test --backend gemini --limit 2000` | Retrying 429s. It is futile until Issue 5 is decided, but harmless (network only), and its cache is valid. **Leave it** |
+| 38143 | Ollama `llama-server` with `gemma4:26b` | Another program's. Never unload it |
+
+Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_holoassist|vlm_judge" | grep -v grep`.
 
 ---
 
@@ -125,428 +183,257 @@
 
 | # | Item | Why this position |
 |---|---|---|
-| A1 | Battery green and scripted | Every later item is validated against it |
-| A2 | Metrics, scorecard, self-test | The ruler. Everything downstream writes scorecard rows through it |
-| A3 | Items and grouped splits | The schema every adapter writes and every metric resamples by |
-| A4 | HoloAssist labels + independence check | Cheap (111 MB, no video). **Its verdict gates A8's 184 GB download,** so start that clock early |
-| A5 | Encoders + feature cache | Needs A3's items. Feeds the probes in A7/A8 |
-| A6 | VLM judge (local + frontier) | Needs A3's items. Feeds the `judge` and `fusion` conditions |
-| A6b | Memory guard (admission, the shared heavy lock, the between-item watchdog) | **Inserted October 10 after the October 9 out-of-memory.** It wraps A5's and A6's model loads and loops, and must exist before A7's multi-hour runs |
-| A7 | Oops!: end-to-end H1 | The smaller dataset (45 GB). It proves the whole pipeline before the big download, and is the visible-outcome contrast |
-| A8 | HoloAssist: end-to-end H1 | Needs A4 = independent and A7's proven pipeline |
-| A9 | Re-measure; close out Wave A | Measures the finished system and writes the summary the designer uses to spec Wave B |
+| A6c | Memory-guard fixes: a re-entrant guard, a fail-closed memory read, supervisor accounting, and no live HTTP in fast tests | **A8's feature extraction is the longest model run of Wave A** (5,000 items × 2 encoders, then 5,000 judge calls at ~9 s each), and it runs under contention. Today the first `warning` reading would make extraction hold the machine-wide lock for 30 min and then exit 75. It lands while the download finishes, and touches no A8 draft file except `tests/test_memguard.py`, whose draft hunk belongs here |
+| A7b | Oops! report corrections; frontier parse parity | A8's report must not copy A7's defects, so the corrected generator is A8's template. The Gemini fix must land before any Gemini run on HoloAssist (Issue 5 = A). It touches no A8 draft file |
+| A8 | HoloAssist: end-to-end H1, resuming the draft with corrections | Needs A6c (extraction), A7b (the report pattern) and the download marked `["verified"]` (§1.6) |
+| A9 | Re-measure; close out Wave A | Measures the finished system, and writes the summary the designer uses to spec Wave B |
 
 ---
 
 ## 3. The items
 
-### A1: Battery green and scripted
+### A6c: Memory-guard fixes
 
-**What this means for the maintainer:** one command answers "is the code healthy?", so a regression is visible the moment it lands.
+**What this means for the maintainer:** today, the first time memory gets tight during a feature run, our job grabs the lock it shares with the other project and sits on it for 30 minutes doing nothing. That also stops the other project from starting anything heavy. If macOS ever fails to report memory, the guard assumes 64 GB is free.
 
-**The gap:** G1 exits 1 with the 3 errors listed in §1.4. There is no battery script, no pytest config, and no `slow` marker.
+**The gap** (read at `6d72492`; contract `03_eval_harness.md` §12, amended October 10):
+1. **A nested `guard()` locks itself out.**
+   - `memguard.check()` (`src/shared/memguard.py:298`) runs `with guard(step): reload()`, and the encoders' `reload` is `_ensure_loaded`, which enters `guard()` again (`src/features/visual.py:58`, `src/features/audio.py:45`).
+   - The inner call's `get_heavy_lock_holder()` (`memguard.py:202`) sees the lock held by its own pid and waits `SR_MEM_WAIT_S`.
+   - **Reproduced by the designer** with fakes: 40 GB available, pressure 1, a 4 s wait: `deferred ['release'] 4.0s`.
+   - Test (e) missed it because it stubs `reload` with a function that never takes the lock (L11).
+2. **`read_memory()` fails open:** `memguard.py:77` returns `64 GB, pressure 1` on any error.
+3. **Memory deferrals consume the supervisor's attempts:** `tools/run_supervised.sh:70` (`for attempt in $(seq 1 "$MAX_ATTEMPTS")`) also counts 75 exits. The `SR_MAX_MEM_DEFERRALS=72` rule is therefore unreachable: the run ends at 50 deferrals with exit 1 and the wrong message.
+4. **Fast tests reach the live Ollama server.**
+   - Test (c) (`tests/test_memguard.py`, `guard("sr_e2v")` with 5 GB) calls the real `/api/ps`, and if `qwen2.5vl:7b` is loaded it really unloads it.
+   - The draft hunk on test (b) patches one instance; the rest remain.
+5. **The slow release test measures RSS (`psutil`), not the footprint** that §12 names (`footprint -p <pid>`). On Apple silicon, Metal allocations are in the footprint and not reliably in RSS.
 
 **Implementation:**
-1. Fix the 3 lint errors **without behavior change**:
-   - delete the unused `auto = _auto_tier()` in `_format_banner` (`src/models_config.py:179`);
-   - split the semicolon statement (`tests/test_vlm_timeout.py:25`) onto two lines;
-   - split `import os, sys` (`tools/daemonize.py:6`) into two imports.
-2. Create `pytest.ini`:
-   ```ini
-   [pytest]
-   testpaths = tests
-   markers =
-       slow: loads models, needs network, or needs data on the SSD
-   ```
-3. Create `scripts/battery.sh` (bash, `set -u`, **not** `set -e`), executable. It runs, in order, each gate with its exit code captured bare, and prints exactly `G<n> <name>: exit <code>`:
-   - **G1:** `./venv/bin/ruff check src tests tools`
-   - **G2:** `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/`
-   - **G3:** `PYTHONPATH=src SR_NO_MODEL_BANNER=1 ./venv/bin/python -m harness.scorecard --selftest`. Until A2 lands, this prints `G3 selftest: skipped (harness not built)` and contributes 0.
-   - **G4**, only when called with `--slow`: `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m slow tests/`
-
-   The script exits with the **maximum** of the gate codes.
-4. In `README.md` → Setup, replace the Tests line with `- **Battery:** \`scripts/battery.sh\` (add \`--slow\` for model/data tests)`.
+1. **Make `guard()` re-entrant** (`src/shared/memguard.py`):
+   - Add a module-level `_HELD_DEPTH: int = 0`.
+   - **Outer path** (`_HELD_DEPTH == 0`): unchanged, except that you set `_HELD_DEPTH += 1` immediately after `flock` succeeds and the memory re-check admits. Decrement it in `finally` **before** unlocking.
+   - **Nested path** (`_HELD_DEPTH > 0`):
+     - Never open, `flock`, truncate or write the lock file.
+     - Loop until the timeout:
+       - `available, pressure = read_memory()`;
+       - if `available − peak ≥ FLOOR`: `log_event(step, "admit", …)`, `_HELD_DEPTH += 1`, `yield`, then decrement in `finally`;
+       - else apply step 3 (unload only our judge, if `step != "sr_judge_load"`), print the §12 waiting line at most every 30 s with `heavy lock held by pid <own pid>`, and sleep 5 s.
+     - On timeout, `log_event(step, "deferred", …)` and raise `MemoryDeferred`, exactly as the outer path does.
+   - Factor the shared memory-wait into one private helper. Do not duplicate it.
+2. **Make `read_memory()` fail closed:** on any exception, or on fewer than 3 parsed fields, write `memory guard: READ FAILED (<error>)` to stderr and return `(0, 4)`. The fake-reading override is unchanged.
+3. **Supervisor accounting** (`tools/run_supervised.sh`; **write to a temp file, then `mv`**, per §0.19):
+   - Replace the `for` loop with `attempt=0; while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do …`.
+   - Increment `attempt` only for exits other than 75.
+   - The 75 branch is unchanged: it logs, checks `SR_MAX_MEM_DEFERRALS`, sleeps and continues. At the limit it logs `ABORT: memory guard: deferred <n> times; giving up` and exits **75**.
+   - Update the header comment and `tools/README.md`: *"memory deferrals do not count toward SR_SUPERVISE_MAX_ATTEMPTS"*.
+4. **`tests/test_memguard.py`:**
+   - **The autouse fixture `_no_live_http`:** unless the test carries the `slow` marker:
+     - `monkeypatch` `httpx.get` and `httpx.post` with a recorder that appends the URL to a list and raises `httpx.ConnectError("blocked in fast test")`;
+     - **at teardown, assert the list is empty**, with the message `live HTTP in a fast memguard test: <urls>`.
+     - The assertion must live at teardown because `is_our_judge_loaded()` and `unload_own_judge()` swallow every exception, so an exception raised inside the call would pass silently.
+     - Tests (d) and any others that need HTTP install their own fakes after it. Keep the draft hunk on test (b).
+     - **Red first:** add the fixture alone. Test (c) as written at `6d72492` must go red at teardown, because it reaches `/api/ps`; record it. Then give (c) its own `is_our_judge_loaded` fake → green. That red run is also the fixture's falsification.
+   - **New test (i), the nested guard:**
+     - Set `SR_MEM_WAIT_S=2` and `INFOGRAPHICS_LOCK_DIR=<tmp>`, and use a fake reader that returns `(7 GB, 2)` once and then `(40 GB, 1)`.
+     - Call `check("sr_siglip", release, reload)`, where `reload` is `lambda: <enter guard("sr_siglip") and record "reload-admitted">`.
+     - **Assert:** it returns in **< 1.5 s**; the calls are `["release", "reload-admitted"]`; and afterwards a child process can take `flock(LOCK_EX | LOCK_NB)` on `<tmp>/heavy.lock`.
+   - **New test (j), the real callables (L11):**
+     - Build `FrameEncoder()` with `features.visual.AutoProcessor.from_pretrained` and `features.visual.SiglipModel.from_pretrained` monkeypatched to return a dummy, whose `.to()` returns itself and which has `.eval()`.
+     - Use the same fake reader as (i), and call `check("sr_siglip", enc.release, enc._ensure_loaded)`.
+     - **Assert:** it returns in < 1.5 s, and `enc._model` is the dummy.
+   - **New test (k), fail-closed:** with `subprocess.check_output` monkeypatched to raise `OSError`, `read_memory()` returns `(0, 4)`, and stderr contains `memory guard: READ FAILED`.
+   - **New supervisor test:**
+     - With `SR_SUPERVISE_MAX_ATTEMPTS=3`, `SR_MEMWAIT_SLEEP_S=0` and `SR_MAX_MEM_DEFERRALS=100`, a runner that exits 75 **five** times and then 0 must finish with exit 0 and `DONE`.
+     - With `SR_MAX_MEM_DEFERRALS=4`, a runner that always exits 75 must exit **75** with `deferred 4 times; giving up` in stderr.
+   - **The slow release test:** measure with `footprint -p <pid>`. Parse the `Footprint: <n> <KB|MB|GB>` line; the bar is still < 1.5 GB above pre-load.
 
 **Validation:**
-- `scripts/battery.sh` → `G1 lint: exit 0`, `G2 tests: exit 0` (2 passed), `G3 selftest: skipped…`; overall exit 0.
-- **Falsifying check:** temporarily add `import json` (unused) at the top of `src/config.py` → G1 exits 1 **and** `battery.sh` exits 1 → revert → both 0. Record both runs in the commit body.
+- **Red first:** run new tests (i), (j), (k) and the supervisor test against the current code. (i) and (j) **must fail** (timeout → `MemoryDeferred`), (k) must fail (it returns 64 GB), and the supervisor test must fail (exit 1 at 3 attempts). Record all four in the commit body.
+- **Green:** all four pass.
+- **Falsify:** delete the `_HELD_DEPTH > 0` branch → (i) and (j) go red → restore → green.
+- **Drills (unchanged, they must still hold):**
+  - `SR_MEMGUARD_FAKE_AVAILABLE_GB=1 SR_MEM_WAIT_S=5 python -m features.extract --dataset test_ds --encoder e2v-plus-large --limit 2` exits **75** in under 15 s, and `memguard.log` gains `action=deferred`.
+  - `SR_MEMGUARD_FAKE_AVAILABLE_GB=1 scripts/battery.sh --slow` prints `G4 slow: exit 75 (deferred by memory guard; not run)`.
+- **No live HTTP:** the fast suite is green with the fixture in place, and the fixture's falsification (above) is recorded red.
+- G1–G4 green.
 
-**Blast radius:** `README.md` (Setup), §1.4 of this guide.
+**Blast radius:** `src/shared/memguard.py`, `tools/run_supervised.sh`, `tools/README.md`, `tests/test_memguard.py`; `ongoing_general_errors.md` §3; this guide's §1.4. **Do not** touch the A8 draft files.
 
 ---
 
-### A2: Metrics, scorecard and self-test
+### A7b: Oops! report corrections and frontier-judge parse parity
 
-**What this means for the maintainer:** this is the ruler. If it is wrong, every later number is wrong. The self-test proves it can tell signal from noise *and* that its confidence intervals respect groups.
+**What this means for the maintainer:** today the Oops! report says the prediction came true, when half of it (a strong judge) did not. Its judge-error counts are mislabeled, and its "example descriptions" are the same two sentences for every clip. Anyone reading only the report would be misled.
 
-**The gap:** nothing exists. The contract is `03_eval_harness.md` §4 (row schema) and §7 (metrics).
+**The gap** (read at `6d72492`):
+- **`tools/report_oops.py:119`** writes "The prediction **holds**" from the Δ row alone. The judge's AUROC (0.472 [0.440, 0.498]), the first clause of the prediction, is never checked.
+- **`tools/report_oops.py:53` and `:91`** glob `*.jsonl`, which includes `errors.jsonl`, and count every error row as a "parse failure". The real numbers:
+  - local judge: **0 parse failures** and 2 ffmpeg errors (one undecodable clip);
+  - Gemini: **11 scored**; the "202 parse failures" are HTTP 429 rows.
+- **`tools/report_oops.py:191`:** no wall-clock times, although A7 required them.
+- **`tools/report_oops.py:211` and `:227`:** each example's "description" is one of two fixed sentences.
+- **The `react-nonverbal` caveat is absent:** the `post` audio contains the failure's own sound (`02_data_sources.md` → Oops! → "As built").
+- **`src/judge/vlm_judge.py:253–255`:** `GeminiJudge` returns after one unparsable answer. §8 gives it the local parse rule: up to 2 more attempts at `temperature` 0.3.
 
 **Implementation:**
-1. `src/harness/__init__.py` (empty) and `src/harness/metrics.py`:
-   - `auroc_ci(y, score, groups, n_boot=1000, seed=0) -> Tuple[float, float, float]`: point AUROC (`sklearn.metrics.roc_auc_score`) plus a group-bootstrap percentile CI, exactly per §7: resample `n_groups` groups with replacement, take all their items, redraw single-class resamples, and raise `RuntimeError("bootstrap: >10000 draws needed for 1000 two-class resamples")` past 10,000 draws.
-   - `delta_auroc_ci(y, score_a, score_b, groups, n_boot=1000, seed=0)`: `AUROC(b) − AUROC(a)`, with **paired** resamples (the same groups for both scores in each draw).
-   - `spearman_ci(x, y, groups, n_boot=1000, seed=0)`: `scipy.stats.spearmanr` with the same group bootstrap.
-   - Items whose score is `None`/NaN are dropped before computing, and their count is returned to the caller (the row's `n_excluded`).
-2. `src/harness/scorecard.py`:
-   - `ScorecardRow`: a dataclass with **exactly** the §4 fields, in that order.
-   - `make_row(...)` fills `ts` (UTC ISO-8601, `Z`), `git_sha` (`/usr/bin/git rev-parse --short HEAD`) and `dirty` (`/usr/bin/git status --porcelain` non-empty).
-   - `append_rows(rows, path="results/scorecard.jsonl")`: append-only, one JSON object per line, `f.flush()` + `os.fsync()`. It never opens the file in a mode that truncates.
-   - `config_hash(config: dict) -> str`: SHA-256 of `json.dumps(config, sort_keys=True, separators=(",", ":"))`, first 12 hex.
-   - **CLI** (`python -m harness.scorecard`):
-     - no arguments → a table of the latest row per `(hypothesis, dataset, split, condition, metric)`, newest first;
-     - `--history <dataset>` → every row for that dataset in time order;
-     - `--selftest` → step 3.
-3. **`--selftest`** builds synthetic data with `default_rng(0)` and writes rows only to a temp file, **never** to `results/scorecard.jsonl`. It prints `PASS`/`FAIL` per check, and exits 0 only if all pass:
-   - **(a) Planted signal:** 60 groups × 20 items, labels Bernoulli(0.5), `score = label + 0.8·N(0,1)` → AUROC ≥ 0.75 **and** `ci_low > 0.5`.
-   - **(b) Null:** same groups, `score ~ N(0,1)` independent of the label → `ci_low ≤ 0.5 ≤ ci_high`.
-   - **(c) Grouping is real:**
-     - Data: 40 groups × 25 items; a label constant within each group (Bernoulli(0.5) per group); `score = group_offset + 0.1·N(0,1)`, where `group_offset = label + N(0,1)` per group.
-     - Requirement: the grouped CI width must be **≥ 1.5×** the width from an *item*-level bootstrap of the same data. Implement the item bootstrap as a private helper used only here.
-   - **(d) Paired Δ:**
-     - `score_b = score_a + 1.5·label` → Δ `ci_low > 0`;
-     - `score_b = score_a` → Δ == 0 exactly, and the CI is (0, 0).
-4. `tests/test_harness_metrics.py`:
-   - AUROC equals `roc_auc_score` on 3 fixed arrays;
-   - each self-test check as a unit test;
-   - NaN scores are excluded and counted;
-   - `append_rows` appends (write 2 rows, then 1, read back 3);
-   - `config_hash` is order-independent across dict key orders.
+1. **`tools/report_oops.py`:**
+   - **(a) Judge diagnostics.**
+     - Read answers only from `judge/oops/<model_tag>/<prompt_hash>.jsonl`. Parse failures = rows with `judge_prob: null`.
+     - Read `errors.jsonl` separately. Count distinct `item_id`s and classify each by its `error` text: `429` if it contains `429`; `5xx` if it matches `\b5\d\d\b`; `ffmpeg` if it contains `ffmpeg`; else `other`.
+     - For Gemini, also print `scored <k> of <n> test items`.
+   - **(b) The prediction check:** a function `prediction_check(rows: Dict[str, dict]) -> List[str]` that returns exactly these three lines, filled from the rows:
+     - `- **Clause 1, "the judge is strong":** judge AUROC <v> [<lo>, <hi>] → <held|did not hold>`. It **held** iff `ci_low > 0.5` **and** the judge's AUROC ≥ the action-probe's AUROC − 0.05.
+     - `- **Clause 2, "Δ ≈ 0":** Δ <v> [<lo>, <hi>] (action_best = <name>) → <held|did not hold>`. It **held** iff `ci_low ≤ 0 ≤ ci_high`.
+     - `- **Frontier anchor:** <judge-frontier row: value and CI, or its not-run/partial note> (Issue 5)`.
+     - No other verdict sentence anywhere in the report.
+   - **(c) Wall-clock time per stage:**
+     - features: the sum of `elapsed_ms` over the **last** `index.jsonl` entry per `item_id`, for each encoder;
+     - judge: the sum of `elapsed_ms` over the cache rows, per model;
+     - download: from `raw/oops/DOWNLOAD.json` or `download.log` timestamps, else `not recorded`;
+     - probes: `not recorded (seconds)`.
+   - **(d) Examples:** keep the current selection of 10 items (`default_rng(0)`; 5 `pre`, 5 `post`).
+     - For each, extract the 4 judge frames (`judge.vlm_judge.sample_frames`) into `$TMPDIR/oops_examples/`. **Open and look at them yourself**, and write one plain sentence of what is visible into `docs/evals/2026-10-10_oops_examples.tsv` (`item_id<TAB>sentence`).
+     - The generator reads that file through `--descriptions <path>` and prints `Seen in the frames: <sentence>`; a missing sentence prints `not described`.
+     - Delete the frames afterwards. **No pixels in git.**
+   - **(e) The caveat,** verbatim under the conditions table: `react-nonverbal on Oops! is not evidence of reaction signal: the reaction window equals the action window, so the post-failure audio contains the failure's own sound and any compilation music (02_data_sources.md → Oops! → As built).`
+2. **Regenerate `docs/evals/2026-10-10_oops_h1.md` in place,** and add as its second line: `*Corrected <YYYY-MM-DD> (A7b): prediction check split by clause; judge error counts reclassified; wall-clock times and example descriptions added. The numbers are unchanged.*` **Do not rerun probes and do not touch the scorecard.**
+3. **`src/judge/vlm_judge.py` `GeminiJudge.judge_item`:**
+   - Wrap the existing per-call 429/5xx loop in an outer parse loop of up to 3 attempts: attempt 1 at `temperature` 0, attempts 2–3 at 0.3.
+   - Return `(prob, raw, attempt, ms)` on the first parsable answer, or `(None, raw, 3, ms)` after 3 unparsable ones.
+   - A 429/5xx that survives its 5 tries still **raises**, so the item is not cached (§8).
+   - The running Gemini supervisor picks up the change at its next relaunch; that is intended.
+4. **Tests:**
+   - `tests/test_judge.py`, with a fake `genai` client:
+     - replies `"none"`, `"none"`, `"42"` → `0.42`, attempts 3, and the 2nd and 3rd calls had `temperature=0.3`;
+     - `"none"` × 3 → `None`, attempts 3;
+     - five raised `429` errors → `judge_item` raises, and `run_judge` writes an `errors.jsonl` line and **no** cache line.
+   - **New `tests/test_report_oops.py`:** `prediction_check` on two fixture row sets:
+     - the real Oops! values → clause 1 `did not hold`, clause 2 `held`;
+     - `judge 0.85 [0.80, 0.90]`, `action-probe 0.78`, and Δ `0.05 [0.02, 0.08]` → clause 1 `held`, clause 2 `did not hold`.
 
 **Validation:**
-- G3 → `exit 0` with 4 PASS lines.
-- **Falsifying check:** temporarily change the bootstrap to resample *items* instead of groups → **(c) must FAIL** and G3 exit 1 → revert. This is the assertion that proves the CIs are grouped.
-- Also run with `score_b = score_a` and confirm the Δ row is exactly 0.
+- **Red first:** the new tests fail on the current code. Record them.
+- **The regenerated report shows:**
+  - clause 1 `did not hold` with `0.472 [0.440, 0.498]`, and clause 2 `held` with `0.015 [-0.002, 0.029]`;
+  - the local judge: 2,708 answers, 0 parse failures, 2 `ffmpeg` errors;
+  - Gemini: `scored 11 of 1072`, with its 429 count equal to `python3 -c "import json; print(len({json.loads(l)['item_id'] for l in open('<…>/gemini-3.6-flash/errors.jsonl') if '429' in json.loads(l)['error']}))"`;
+  - 10 example sentences, each different and each consistent with its window type.
+- `git diff results/scorecard.jsonl` is empty.
+- G1–G3 green.
 
-**Blast radius:** `scripts/battery.sh` (G3 becomes live), this guide's §1.4.
+**Blast radius:** `tools/report_oops.py`, `docs/evals/2026-10-10_oops_h1.md`, `docs/evals/2026-10-10_oops_examples.tsv` (new), `src/judge/vlm_judge.py`, `tests/test_judge.py`, `tests/test_report_oops.py` (new); `ongoing_general_errors.md` §3; this guide's §1.4.
 
 ---
 
-### A3: Items and grouped splits
+### A8: HoloAssist, end-to-end H1 (resume the draft)
 
-**What this means for the maintainer:** a person who appears in both training and test makes the numbers look better than they are. This item makes that impossible by construction.
+**What this means for the maintainer:** the first test where the outcome can be partly hidden from the camera, and where the reactor (the instructor) is watching someone else work. That is the closest Wave A gets to "a person watching a robot work".
 
-**The gap:** nothing exists. Contract: `03_eval_harness.md` §3 (items) and §5 (splits).
+**Start condition:**
+- A6c and A7b are pushed;
+- `raw/holoassist/progress.json` reads `["verified"]` and `DOWNLOAD.json` has the video entry with `extracted: true`.
 
-**Implementation:**
-1. `src/harness/items.py`:
-   - an `Item` dataclass with exactly the §3 fields;
-   - `read_items(path)`;
-   - `write_items(items, path)`: atomic, temp file + `os.replace`, items sorted by `item_id`;
-   - `validate_items(items, check_paths=True) -> List[str]`: returns error strings, empty when valid. The rejections are exactly those in §3, with messages **verbatim**:
-     - `duplicate item_id: <id>`
-     - `bad window <field> [<s>, <e>] in <id>`
-     - `label must be 0 or 1 in <id>`
-     - `empty group_id in <id>`
-     - `missing video_path for <id>: <path>`
-2. `src/harness/splits.py`:
-   - **`make_group_split(items, dataset, official=None, force=False, path_dir="splits")`:**
-     - If `official` is given (a mapping `item_id → "train"|"test"`), first verify that no `group_id` maps to both. If one does, raise `ValueError("official split is not group-disjoint: <n> groups straddle")` verbatim. Otherwise use it.
-     - Else: a grouped 70/30 split. Take the sorted unique `group_id`s, shuffle them with `default_rng(0)`, and assign the first `round(0.7·n)` to train.
-     - Write `splits/<dataset>.json` with keys `dataset, seed, source, train, test, sha256`. `sha256` is over `json.dumps({"train": sorted(train), "test": sorted(test)}, sort_keys=True)`.
-     - If the file exists and `force` is false, raise `FileExistsError("split exists: splits/<dataset>.json (use force=True and say why in the commit)")` verbatim.
-   - **`load_split(dataset)`:** re-computes `sha256` and raises if it differs from the stored one.
-3. `tests/test_harness_items.py`:
-   - each rejection, with its exact message;
-   - group-disjointness on 500 random items in 37 groups;
-   - two runs produce byte-identical split files;
-   - the overwrite refusal;
-   - the official-split straddle error;
-   - tamper detection (edit the file → `load_split` raises).
+If the download supervisor aborted, read its log, relaunch it exactly as in §1.6 (it resumes with `curl -C -`), and wait. Issue 2 is resolved ("independent").
 
-**Validation:**
-- G2 green.
-- **Falsifying check:** temporarily assign train/test per *item* instead of per group → the disjointness test must fail → revert.
+**Keep from the draft** (checked by the designer; do not rework):
+- the builder's grouped 70/30 split by session prefix, done **before** per-class sampling (`03_eval_harness.md` §5);
+- balanced sampling capped at 1,500/1,000 per class;
+- `react-spoke` = `1 − spoke`;
+- `react-full` = TF-IDF on `meta.transcript`;
+- `fix` → `repair` in task names;
+- the leakage regex and its injection test.
 
-**Blast radius:** none outside `src/harness/` and `tests/`.
+**Corrections to the draft** (each one fails a contract today):
+1. **The `item_id` format** (`src/sources/holoassist.py:276`): it must be `f"holoassist:{vname}:{idx}"`, where `idx` is the event's index in `events`. Put the annotation's own `id` in `meta.event_id`.
+2. **The forced split** (`holoassist.py:432`): pass `force=args.force_split`, with a new `--force-split` flag defaulting to off (§5).
+   - Regenerate `splits/holoassist.json` **once** with `--force-split`, because the draft file's ids are in the old format, and say so in the commit body.
+   - **Check, and report in the commit body,** that the regenerated split has the same group partition as the draft: 238 train groups and 102 test groups, from the same seeded shuffle. A different partition means the candidate set changed; find out why before going on.
+3. **The hard-coded `"straddling_groups": 0`** (`holoassist.py:375`): compute it from the split map.
+4. **The duration fallback of 10⁹ s** (`holoassist.py:210`): skip with reason `missing_duration` (expected count 0; every session has `videoMetadata.duration.seconds`).
+5. **Session coverage:** after extraction, count the annotated sessions (of 1,758) whose `get_holoassist_video_path` exists. Record the count and the directory layout under a new `02_data_sources.md` → HoloAssist subsection **"Videos (as extracted, <date>)"**. Missing videos are skipped as `missing_video`, never silently.
+6. **SSD-dependent tests in the fast suite:**
+   - mark `@pytest.mark.slow` on `test_holoassist_builder_and_group_disjointness`, `test_real_items_leakage_check` and `test_real_split_group_disjointness`;
+   - add a **fast** builder test on a 3-session synthetic annotation JSON in `tmp_path`;
+   - add `assert all(i.item_id.startswith("holoassist:") for i in items)` to both builder tests.
+7. **`tools/check_audio_presence.py`:**
+   - **No `-100.0` sentinels** (`:36`, and the means).
+   - Draw the 20 sessions (`default_rng(0)`, sessions sorted by `video_name`) **only from sessions with ≥ 1 instructor utterance and ≥ 1 no-utterance gap of ≥ 2 s**. A span with no samples is excluded and counted, not scored.
+   - Write the summary to `DATA_ROOT/runs/holoassist_audio_presence.json`, and put the temp WAV under `TMPDIR`.
+   - **Add a fast falsifying test:** synthetic 16 kHz audio with instructor spans +10 dB over the gaps → `passed: true`; flat noise → `passed: false`.
+8. **`src/harness/probes.py`:**
+   - **(a) The frontier row:** delete the hard-coded reason (`:198`) and the 50% rule (`:182`). Implement `03_eval_harness.md` §6/§8 exactly:
+     - `k = 0` → `not run: <derived reason>`: `no cache file <path>`, or `0 of <n> scored; last error: <first 80 chars> (errors.jsonl)`;
+     - `0 < k < n` → a real row with `notes: "partial: <k> of <n> scored"`;
+     - it enters `action_best` (`:347`) only if `k ≥ 0.9·n`.
+   - **(b)** Add the `react-nonverbal|spoke=1` diagnostic row (§6) for HoloAssist.
+   - **(c)** Add synthetic tests: frontier `k = 0` → a derived note containing `0 of`; `k = 10 of 100` → a `partial` row that is **not** in `action_best`; `k = 95 of 100` → it enters `action_best`.
+9. **`tools/download_holoassist.py`:** fix the disk check for the future: require `free ≥ archive bytes + 50 GiB` before extraction, and record `free_gib_before_extract` in `DOWNLOAD.json`. The running process keeps its old code; just record what happened.
+10. **`tools/report_holoassist.py`:** build it on A7b's corrected pattern: per-clause prediction check, judge diagnostics, wall-clock, and descriptions you write after looking at the frames (TSV), as in A7b.
 
----
-
-### A4: HoloAssist labels and the independence check (no video)
-
-**What this means for the maintainer:** if HoloAssist's mistake labels were written *from* the instructor's corrections, then "the instructor's reaction predicts mistakes" would be circular, and 184 GB of downloading would buy a meaningless number. This item finds out for 111 MB.
-
-**The gap:** we do not know HoloAssist's exact annotation schema, how mistakes were labeled, or whether its official splits are participant-disjoint (`02_data_sources.md`, HoloAssist "Unknown until downloaded"). Issue 2 is open.
-
-**Implementation:**
-1. Check the disk rule (§0.4). Download **only** the labels archive (111 MB) from the official data links page (`https://holoassist.github.io/`) into `DATA_ROOT/raw/holoassist/labels/`. Write `DATA_ROOT/raw/holoassist/DOWNLOAD.json` with `{url, bytes, sha256, downloaded_at}` for each file.
-2. Read the annotation sections of the paper (arXiv 2309.17024) and the dataset README. In `02_data_sources.md` → HoloAssist, add a subsection **"Schema (as downloaded, <date>)"** listing:
-   - the exact file names;
-   - the JSON fields for fine-grained actions (start, end, verb, noun, the mistake/correct attribute, and its exact field name and values);
-   - the utterance fields (start, end, speaker role, purpose label, and whether a transcript is present);
-   - task names;
-   - performer and instructor identifiers;
-   - the official split files.
-3. `src/sources/holoassist.py --stats` prints, and you record in that subsection:
-   - the number of sessions, fine-grained actions with a mistake/correct attribute, and mistakes (count and %);
-   - the number of instructor utterances;
-   - **performer ids present in more than one official split** (0 means participant-disjoint);
-   - **the share of mistake actions vs. correct actions with an instructor utterance overlapping `[start, end + 5.0]`** (the label-level `react-spoke` signal; no video needed).
-4. **Decide independence from the protocol text** and quote it verbatim in the subsection:
-   - **(a)** The protocol says mistakes were annotated from the performer's video and actions, not from instructor speech → mark **Issue 2 "Resolved: independent"** with the quote and numbers, and add a line to §3 of the tracking doc.
-   - **(b)** The protocol says mistakes were derived from, or marked using, instructor interventions → **STOP.** File under Issue 2 with these options and a `Your selection: _____` line, and **do not start A8**:
-     - A: HoloAssist as an H2 target only, with the caveat stated;
-     - B: drop HoloAssist;
-     - C: restrict to mistakes with no instructor utterance in the window (no-reaction items).
-   - **(c)** The protocol is silent or ambiguous → treat it as **(b)**. Do not decide it yourself.
+**Then run, in order** (§0.7 detached; §0.18 one model job at a time; record `memguard --status` before each):
+1. `python tools/check_audio_presence.py`.
+   - **Requirement:** a median per-session difference **≥ +3.5 dB**.
+   - If it fails, **STOP**, and file **Issue 6** (*"instructor not audible in the video audio"*) with options A (`react-spoke`/`react-full` from annotations only) and B (drop HoloAssist's audio channel), and a `Your selection: _____` line. Continue only with what does not use audio.
+2. `python -m sources.holoassist --build --force-split` (once). `validate_items` returns no errors, and `stats.json` shows every skip reason.
+3. Features, one after the other, each under its own supervisor:
+   - `python -m features.extract --dataset holoassist --encoder siglip-b16-224`;
+   - then `--encoder e2v-plus-large`.
+4. The judge: `python -m judge.vlm_judge --dataset holoassist --split train --backend ollama`, then `--split test`.
+   - Gemini on test **only if Issue 5 = A and billing is on**; otherwise do not launch it.
+5. `python -m harness.probes --dataset holoassist`.
+6. `python tools/report_holoassist.py` → `docs/evals/<YYYY-MM-DD>_holoassist_h1.md`, with:
+   - **at the top:** the pitch-shift caveat, and the group caveat (`02_data_sources.md` → HoloAssist → pinned details);
+   - the conditions table, the Δ row, the diagnostic row and the shuffled controls;
+   - the per-clause prediction check (*hidden outcome: reaction-only > action_best; fusion > action_best*);
+   - the H1 pass bar (*proposed*, `00_thesis.md`: reaction-only ≥ 0.65 **and** Δ ≥ +0.03 with the CI excluding 0), with the measured values. It is stated as reported, never as the kill decision;
+   - one plain paragraph on *"is the voice signal more than 'the instructor said something'?"*, answered from `react-spoke` and `react-nonverbal|spoke=1`;
+   - the audio-presence measurement;
+   - judge diagnostics and wall-clock time;
+   - 10 examples (5 mistakes, 5 correct; `default_rng(0)`) described after looking at their frames.
 
 **Validation:**
-- Re-hash the downloaded files: they match `DOWNLOAD.json`.
-- `--stats` run twice gives identical output.
-- The two `react-spoke` rates are reported with their denominators.
-- **The falsifying check for your reading:** the quote you cite must contain the words describing *how* mistakes were labeled. A quote that only says that mistakes *exist* does not resolve the issue.
+- **Leakage (falsifying):** no `context_text` matches `\b(mistake|correct|wrong|error|fix|instead)\b` (case-insensitive), over the real items; injecting `"mistake"` into one fixture item turns the test red.
+- Every `item_id` starts with `holoassist:`.
+- `straddling_groups` in `stats.json` is computed, and equals 0.
+- `splits/holoassist.json` is group-disjoint and hash-verified.
+- **The shuffled controls:** every `:shuffled` row's CI contains 0.5. If any `ci_low` is > 0.5, **STOP** and find the leak.
+- Every §6 condition has a row (real, `partial` or `not run` with a derived reason), and the Δ row and `react-nonverbal|spoke=1` exist.
+- The audio check's falsifying test is red on flat noise.
+- G1–G4 green.
 
-**Blast radius:** `02_data_sources.md` (the new schema subsection); `ongoing_general_errors.md` (Issue 2 and §3).
+**Commit:** `feat(a8): …`, staging explicitly:
+- the draft files of §1.3 (except `tests/test_memguard.py`, already committed in A6c);
+- `results/scorecard.jsonl`;
+- `docs/evals/<date>_holoassist_h1.md` and its TSV;
+- `docs/02_data_sources.md`, `docs/ongoing_general_errors.md`, and this guide's §1.4.
 
----
-
-### A5: Encoders and the feature cache
-
-**What this means for the maintainer:** these turn a few seconds of video or audio into numbers a probe can learn from. They are computed once and reused by every later experiment.
-
-**The gap:** nothing exists. Contract: `03_eval_harness.md` §9 (encoders, cache).
-
-**Implementation:**
-1. `src/features/cache.py`: `FeatureCache(dataset, encoder_id)` with `path(item_id)`, `has(item_id)`, `save(item_id, array, window, elapsed_ms)` and `load(item_id)`.
-   - Files go to `DATA_ROOT/features/<dataset>/<encoder_id>/`. The sanitized `item_id` replaces every character outside `[A-Za-z0-9._-]` with `_`.
-   - `index.jsonl` is append-only. `save` writes the `.npy` atomically, temp + `os.replace`.
-2. `src/features/visual.py`: `FrameEncoder` (`encoder_id = "siglip-b16-224"`), exactly per §9.
-   - **Frames:** at `t = s, s+1, s+2, …` strictly below `e`, plus `e` itself (so at least 2 frames). Each is extracted with `ffmpeg -ss <t> -i <video> -frames:v 1` to an in-memory PNG.
-   - **Model:** `SiglipModel` + `AutoProcessor`, `get_image_features`; each frame L2-normalized, then the mean → `(768,) float32`. Device: `mps` if available, else `cpu`.
-3. `src/features/audio.py`: `NonverbalAudioEncoder` (`encoder_id = "e2v-plus-large"`), exactly per §9.
-   - **Audio:** `ffmpeg -ss <s> -to <e> -i <video> -vn -ac 1 -ar 16000 -f wav` to a temp file under `TMPDIR`.
-   - **Model:** `funasr.AutoModel(model="iic/emotion2vec_plus_large")`, `generate(..., granularity="utterance", extract_embedding=True)` → `(1024,) float32`.
-   - **Never read or store its emotion-category outputs.**
-4. `src/features/extract.py`: CLI `python -m features.extract --dataset <d> --encoder <id> [--split train|test|all] [--force] [--limit N]`.
-   - Reads `DATA_ROOT/items/<d>/items.jsonl` and the split file.
-   - Skips cached items, appends failures to `errors.jsonl` (`item_id`, error, traceback), and **never writes a feature for a failed item**.
-   - Maintains `progress.json` (§0.7) and ends with the §0.12 count line.
-5. `tests/test_features.py`:
-   - **Fast:** cache round-trip; sanitization; a failed extraction writes no `.npy`; resumability (an injected exception on the 3rd of 6 items → the rerun extracts only the remaining items).
-   - **`@pytest.mark.slow`:**
-     - shapes and dtypes are exactly `(768,) float32` and `(1024,) float32`, all finite;
-     - **determinism:** the same item twice → max abs diff ≤ 1e-5;
-     - **the encoders carry information (falsifying):**
-       - Make 3 s of silence and two 3 s speech clips of the same sentence in different voices, offline: `say -v Samantha -o a.aiff "<sentence>"` and `say -v Daniel -o b.aiff …`, converted with ffmpeg.
-       - Assert `cos(speechA, speechB) > cos(speechA, silence)` for the audio encoder.
-       - Assert `cos(frames of a real video window, frames of a black-video window) < cos(same real window, itself shifted by +0.5 s)` for the visual encoder. Build the test videos with ffmpeg `testsrc`/`color=black`.
-
-**Validation:**
-- G2 green; G4 (`battery.sh --slow`) green.
-- **Falsifying check:** temporarily make the audio encoder return `np.zeros(1024)` → the information test must FAIL → revert.
-
-**Blast radius:** none.
-
----
-
-### A6: The VLM judge (local + frontier)
-
-**What this means for the maintainer:** this is the "just ask an LLM" control the maintainer asked for. If reactions cannot beat it, the thesis does not hold. It has to be implemented exactly as specified, or the comparison is not fair.
-
-**The gap:** nothing exists. Contract: `03_eval_harness.md` §8 (frames, prompt **verbatim**, questions **verbatim**, parse rule, retries, cache, the frontier anchor).
-
-**Implementation:**
-1. `src/judge/vlm_judge.py`:
-   - `build_prompt(context_text, question, n=4) -> str` renders the §8 template character-for-character.
-   - `prompt_hash(question)` per §8.
-   - `parse_prob(text) -> Optional[float]` uses the §8 regex.
-   - `sample_frames(video, window) -> List[Path]`: the 4 frames per §8, longer side 768 px, JPEG quality 90, under `TMPDIR`.
-2. **`OllamaJudge`** calls `shared.vlm_client.ollama_chat(model=get_model("vlm_judge"), prompt=…, image_paths=…, options={"temperature": 0, "num_ctx": 8192, "num_predict": 16}, timeout=180)`. Retries 2 and 3 use `temperature` 0.3. Calls are serial (concurrency 1).
-3. **`GeminiJudge`** uses `google.genai.Client()` (reads `GOOGLE_API_KEY`), model `"gemini-3.6-flash"`, with the same 4 JPEGs as inline image parts plus the same prompt text, and `temperature=0, max_output_tokens=16`. On HTTP 429 or 5xx it sleeps 30 s and retries, up to 5 tries; then `null`. **Test split only, capped at 2,000 items** (`default_rng(0)` sample, sorted).
-4. **The cache,** exactly per §8, is checked before any call. CLI: `python -m judge.vlm_judge --dataset <d> --split <train|test> --backend ollama|gemini [--limit N]`. It maintains `progress.json` and ends with the §0.12 count line, plus `parse_failures=<n> api_errors=<m>`.
-5. `tests/test_judge.py`:
-   - **Fast:**
-     - `parse_prob`: `"73"`→0.73, `"I think 85."`→0.85, `"100"`→1.0, `"0"`→0.0, `"probability: 7%"`→0.07, `"none"`→None, `"250"`→None;
-     - the rendered prompt for an Oops! item equals a literal expected string (copied from §8 with `context_text = "A short clip from a home video."`);
-     - `prompt_hash` changes when the question changes;
-     - with `ollama_chat` monkeypatched, the payload contains **only** the prompt string and 4 image paths, with no audio file and no label;
-     - a second call on a cached item makes **0** requests;
-     - 3 unparsable replies → `null` and attempts = 3.
-   - **`@pytest.mark.slow`:** the live local judge on 4 synthetic `ffmpeg testsrc` items returns non-null probabilities. That is a liveness check, not an accuracy bar.
-
-**Validation:**
-- G2 and G4 green.
-- **Falsifying check:** temporarily append the item's `label` to `context_text` inside the judge → the payload test must FAIL → revert.
-
-**Blast radius:** `src/models_config.py` only if the `vlm_judge` key is missing (it is not; do not change its values).
-
----
-
-### A6b: Memory guard (inserted October 10, 2026)
-
-**What this means for the maintainer:** on October 9 the Mac ran out of memory and macOS started killing its own services. Without a guard, A7's multi-hour runs would hit the same wall whenever another program (or the other project's agent) starts a big job. With the guard, our jobs wait their turn, step aside when memory gets tight, and pick up where they left off.
-
-**The gap** (read at `0f16799`):
-- **`src/features/visual.py`** `FrameEncoder._ensure_loaded` and **`src/features/audio.py`** `NonverbalAudioEncoder._ensure_loaded` load models with no memory check, and neither class can release its model.
-- **`src/features/extract.py`** `run_extraction` loops over items with no memory check.
-- **`src/judge/vlm_judge.py`** `OllamaJudge` loads `qwen2.5vl:7b` implicitly on its first call. It never checks memory and never unloads the model when a run ends.
-- **`tools/run_supervised.sh`** treats every non-zero exit as a crash. **`scripts/battery.sh`** has no notion of a deferred gate.
-- **Nothing here takes the machine-wide heavy lock** that `animated_infographics` takes (`~/.cache/animated_infographics/locks/heavy.lock`), so the two projects cannot see each other.
-
-The contract is `03_eval_harness.md` §12 (constants, formula, lock path, exit code and log format, all verbatim).
-
-**Implementation:**
-1. **`src/shared/memguard.py`:**
-   - `FLOOR = 8 GB`; `HEAVY_STEPS = {"sr_siglip": 2 GB, "sr_e2v": 6 GB, "sr_judge_load": 9 GB}`, each with its measurement date in a comment;
-   - `read_memory()` per §12, by `sysctl -n hw.memsize kern.memorystatus_level kern.memorystatus_vm_pressure_level`;
-   - `lock_dir()`: `$INFOGRAPHICS_LOCK_DIR`, else `~/.cache/animated_infographics/locks`, created if missing;
-   - `class MemoryDeferred(Exception)`;
-   - `guard(step)`: a context manager implementing §12 "Admission" steps 1–6;
-   - `check(step, release, reload)`: §12 "Between items";
-   - `unload_own_judge()`: unloads only `get_model("vlm_judge")`;
-   - `log_event(...)`: appends to `DATA_ROOT/runs/memguard.log`;
-   - `main()` for `--status`.
-   - Python 3.9 syntax. **No new dependencies** (`fcntl`, `subprocess`, `httpx`, `psutil` only).
-2. **The encoders:**
-   - Wrap the model load in `_ensure_loaded` with `with memguard.guard(<step>):`, using `sr_siglip` and `sr_e2v`.
-   - Add `release()`: drop the model and processor references, `gc.collect()`, `torch.mps.empty_cache()`.
-3. **`features/extract.py`:**
-   - Before each item, call `memguard.check(<step>, encoder.release, encoder._ensure_loaded)`.
-   - `main()` catches `MemoryDeferred`: it writes progress, prints the §0.12 count line plus `deferred_by_memory_guard=1`, and calls `sys.exit(75)`.
-4. **`judge/vlm_judge.py`:**
-   - Before the first `OllamaJudge` call, if `/api/ps` does not list our model, wrap that call in `guard("sr_judge_load")`.
-   - Call `memguard.check("sr_judge_load", memguard.unload_own_judge, lambda: None)` before each item. The next call reloads the model, through `guard()` again.
-   - `run_judge` unloads our model in a `finally:` block when it ends.
-   - Exit 75 on `MemoryDeferred`, exactly as in step 3.
-   - **`GeminiJudge` is not guarded.** It makes network calls only.
-5. **`tools/run_supervised.sh`:** handle exit 75 per §12 "The supervisor". Add `SR_MEMWAIT_SLEEP_S` and `SR_MAX_MEM_DEFERRALS`, and document both in its header and in `tools/README.md`.
-6. **`tests/conftest.py`** (new): the `MemoryDeferred` → `pytest.exit(..., returncode=75)` hook. **`scripts/battery.sh`:** print the 75 line verbatim per §12.
-7. **Re-measure** each declared peak with `/usr/bin/time -l` on a 50-item run, with the judge read from `ps` RSS of `llama-server` after its first call. Record the measurements in §12's table. If measured × 1.15, rounded up, exceeds a declared peak, raise the constant in this commit. **Never lower one below the measurement.**
-
-**Validation** (fakes for `read_memory` and HTTP in unit tests; the lock dir pointed at a temp dir via `INFOGRAPHICS_LOCK_DIR`):
-- **Admission:**
-  - (a) Admits at once when `available − peak ≥ 8 GB`.
-  - (b) With a fake reader that rises from 10 → 20 GB, waits and then admits `sr_e2v`. The waiting log line matches §12 verbatim.
-  - (c) With `SR_MEM_WAIT_S=1` and memory never sufficient, raises `MemoryDeferred` within about 1–2 s.
-- **Unloading only our own model:**
-  - (d) If `/api/ps` lists both `qwen2.5vl:7b` and `gemma4:26b`, admission for `sr_e2v` unloads **only** `qwen2.5vl:7b`.
-  - **Falsify:** make the code unload every listed model, and the test must FAIL (it asserts `gemma4:26b` was never posted). Then revert.
-- **Between items:**
-  - (e) A warning reading calls `release()`, re-admits, then calls `reload()`.
-  - (f) A critical reading calls `release()` and raises `MemoryDeferred`.
-- **The lock is shared:**
-  - (g) A child process holds `<lock dir>/heavy.lock` through plain `fcntl.flock` (as `animated_infographics` does). `guard()` blocks until the child exits.
-  - (h) Assert the lock-path string with `INFOGRAPHICS_LOCK_DIR` unset equals `os.path.expanduser("~/.cache/animated_infographics/locks/heavy.lock")`.
-  - **Falsify (g):** point our lock at a different file, and the test must FAIL. Then revert.
-- **Release is real (slow):** after `FrameEncoder` + `NonverbalAudioEncoder` load, encode and `release()`, the process footprint (`footprint -p <pid>`) is within 1.5 GB of its pre-load value.
-- **A deferral drill on the real CLI (safe; no memory is consumed):** `SR_MEM_WAIT_S=5` plus a fake-low reading injected through the env override `SR_MEMGUARD_FAKE_AVAILABLE_GB=1` (**test-only**, and it must log `FAKE MEMORY READING` loudly).
-  - `python -m features.extract --dataset test_ds --encoder e2v-plus-large --limit 2` must exit **75** in under 15 s, without loading the model.
-  - `memguard.log` must gain an `action=deferred` line.
-  - Without the override, the same command exits 0.
-- **The supervisor drill:**
-  - A fake runner that exits 75 three times and then 0 must finish `DONE` with 3 deferrals logged and no stale abort, using `SR_MEMWAIT_SLEEP_S=1`.
-  - A runner that exits 1 twice with no progress must still abort as before.
-- **The battery:**
-  - With `SR_MEMGUARD_FAKE_AVAILABLE_GB=1`, `scripts/battery.sh --slow` prints `G4 slow: exit 75 (deferred by memory guard; not run)` and exits 75.
-  - Without it, all of G1–G4 exit 0.
-
-**Blast radius:**
-- code: `src/features/visual.py`, `src/features/audio.py`, `src/features/extract.py`, `src/judge/vlm_judge.py`, `tools/run_supervised.sh`, `tools/README.md`, `scripts/battery.sh`;
-- tests: `tests/test_features.py`, `tests/test_judge.py` (slow tests now go through the guard);
-- new files: `tests/conftest.py`, `tests/test_memguard.py`;
-- docs: `03_eval_harness.md` §12 (re-measured peaks), this guide's §1.4.
-
----
-
-### A7: Oops!, end-to-end H1 (the visible-outcome contrast)
-
-**What this means for the maintainer:** the first real number. Failures in fail videos are *visible*, so we predict the judge does well and reactions add little. If the pipeline cannot reproduce that unglamorous prediction, nothing it says about hidden outcomes can be trusted.
-
-**The gap:** no data, no adapter, no probe code. Contracts:
-- `02_data_sources.md` → Oops! (item definition);
-- `03_eval_harness.md` §5–§7 (splits, conditions, metrics).
-
-**Implementation:**
-1. **Download.**
-   - Check the disk rule (bundle + extraction; ≈ 90 GB transient). Download the videos + annotations bundle from `https://oops.cs.columbia.edu/data` into `DATA_ROOT/raw/oops/`, and write `DOWNLOAD.json` (`url, bytes, sha256, downloaded_at`).
-   - Extract. Verify that the number of video files matches the clip count implied by the annotation files. **Only then** delete the archive, and note it in `DOWNLOAD.json`.
-   - Read the CC BY-NC-SA 4.0 terms on the page. Commit no Oops! pixels or frames to git, ever.
-2. **Schema.** Add **"Schema (as downloaded, <date>)"** under Oops! in `02_data_sources.md`: the annotation file names, the field holding the per-worker failure onsets, the train/val membership, and whether a source-compilation id can be derived from filenames (and how).
-3. **The adapter.** `src/sources/oops.py` builds items exactly per `02_data_sources.md` → Oops! (median onset `t`; the skip rules; `pre`/`post` windows; labels pre = 1, post = 0; the constant `context_text`; `group_id`; caps). It writes `DATA_ROOT/items/oops/items.jsonl` and `DATA_ROOT/items/oops/stats.json`: clips seen, kept, and skipped **per reason**, plus items per split.
-4. **The split.** `make_group_split(items, "oops", official=<train→train, val→test>)` → `splits/oops.json`.
-5. **Features:** `siglip-b16-224` and `e2v-plus-large` over both splits (detached run, §0.7).
-6. **The judge:** `ollama` on **both** splits (fusion needs train-split judge scores); `gemini` on test (≤ 2,000).
-7. **The probes.** `src/harness/probes.py` → `python -m harness.probes --dataset oops`:
-   - fits and scores every condition in `03_eval_harness.md` §6 with the fixed hyperparameters;
-   - appends rows for `judge`, `judge-frontier`, `action-probe`, `react-nonverbal` and `fusion`, plus a `not run` row for `react-spoke` and for `react-full` (`notes: "not run: no annotations of reactor speech in Oops!"`);
-   - appends the `fusion_minus_action_best` Δ row.
-   - **It also runs the shuffled-label control:** train labels permuted with `default_rng(0)`, `action-probe`, `react-nonverbal` and `fusion` refit, and rows written with condition names suffixed `:shuffled` and `notes: "shuffled-label control"`.
-8. **The report,** `docs/evals/<YYYY-MM-DD>_oops_h1.md`:
-   - the conditions table (value, CI, n, `n_excluded`) and the Δ row;
-   - the shuffled controls;
-   - judge parse failures and API errors;
-   - wall-clock time per stage;
-   - **the prediction check**, stated plainly whichever way it came out: *predicted: judge strong, Δ ≈ 0*;
-   - 10 example items (5 pre, 5 post, `default_rng(0)`), **described in words**, with their judge and `react-nonverbal` probabilities. No images.
-
-**Validation:**
-- `validate_items` returns no errors. The skip counts in `stats.json` sum to the clips seen.
-- **Leakage check:** every item's `context_text` equals the constant string.
-- **The falsifying control:** every `:shuffled` row's CI contains 0.5. If any `:shuffled` row's `ci_low` is > 0.5, something leaks. STOP and find it before anything else.
-- Every §6 condition has a row (real or `not run`), and the Δ row exists.
-- G1–G3 are green.
-
-**Blast radius:** `02_data_sources.md` (schema subsection); `results/scorecard.jsonl`; `splits/oops.json`; `docs/evals/`.
-
----
-
-### A8: HoloAssist, end-to-end H1 (first-person, hidden outcome)
-
-**What this means for the maintainer:** the first test where the outcome can be partly hidden from the camera, and where the reactor (the instructor) is watching the actor's first-person view. That is the closest Wave A gets to "a person watching a robot work".
-
-**Start condition:** both of:
-- Issue 2 is resolved "independent" (A4);
-- A7 is closed.
-
-The disk rule (§0.4) still applies to the 184.20 GB download.
-
-If any is missing, skip to A9 and record A8 as "blocked on <issue>".
-
-**The gap:** no videos, no adapter. Contract: `02_data_sources.md` → HoloAssist (item definition, sampling) and A4's schema subsection.
-
-**Implementation:**
-1. **Download** the pitch-shifted videos (184.20 GB) from the official links into `DATA_ROOT/raw/holoassist/videos/`, with `DOWNLOAD.json` entries. Extract and verify as in A7.1.
-2. **The instructor-audio presence check** (automatic; no listening):
-   - For 20 sessions (`default_rng(0)`), compute the mean RMS (dBFS) of the audio inside instructor-utterance spans, and inside spans of ≥ 2 s with **no** annotated utterance from anyone.
-   - **Requirement:** the median per-session difference must be **≥ +3.5 dB**.
-   - If it fails, STOP and file under Issue 2 (*instructor not audible in the video audio*), with these options and a `Your selection: _____` line:
-     - A: `react-spoke`/`react-full` from annotations only;
-     - B: drop HoloAssist's audio channel.
-3. **The adapter.** `src/sources/holoassist.py` builds items exactly per `02_data_sources.md` → HoloAssist: one per fine-grained action with an attribute; the windows; `context_text` from task + verb + noun only; `group_id`; sampling caps. It also records `meta.spoke` (0/1) and `meta.transcript` (the overlapping instructor text, or null).
-4. **The split.** Use the official split if A4 found it participant-disjoint (0 straddling performers); otherwise a grouped 70/30 split.
-5. **Features, judge and probes** exactly as A7.5–A7.7, plus:
-   - `react-spoke`: the `meta.spoke` value as the score;
-   - `react-full`: TF-IDF + logistic regression on `meta.transcript` (an empty string when no speech), **only if** the annotations carry transcripts; otherwise a `not run` row.
-   - The shuffled-label controls as in A7.
-6. **The report,** `docs/evals/<YYYY-MM-DD>_holoassist_h1.md`: the same sections as A7's, plus:
-   - **the pitch-shift caveat**, stated at the top;
-   - the `react-spoke` vs. `react-nonverbal` comparison, answering *"is the voice signal more than 'the instructor said something'?"* in one plain paragraph;
-   - the audio-presence measurement from step 2.
-
-**Validation:**
-- **Leakage check (falsifying):** no `context_text` contains `mistake`, `correct`, `wrong`, `error`, `fix` or `instead` (case-insensitive). Assert it in a test over the real `items.jsonl`, then demonstrate it bites by injecting `"mistake"` into one fixture item.
-- The shuffled-control CIs contain 0.5.
-- Group disjointness holds in `splits/holoassist.json`.
-- Every §6 condition has a row; the Δ row exists. G1–G3 are green.
-
-**Blast radius:** `results/scorecard.jsonl`; `splits/holoassist.json`; `docs/evals/`; `ongoing_general_errors.md` (Issue 2, if filed).
+**Blast radius:** all of the above; `splits/holoassist.json` (forced once, named in the body).
 
 ---
 
 ### A9: Re-measure; close out Wave A
 
-**What this means for the maintainer:** one page that says whether Wave A found reaction signal beyond the action-only controls, and what the designer needs to know to write Wave B.
+**What this means for the maintainer:** one page that says whether Wave A found reaction signal beyond the action-only controls, what it could not measure, and what the designer needs to know to write Wave B.
 
 **Implementation:**
-1. Run `scripts/battery.sh --slow` bare and update §1.4 with the real numbers.
-2. Write `docs/evals/<YYYY-MM-DD>_wave_a_summary.md`:
-   - the headline table (dataset × condition, with CIs and n), the Δ rows, and the shuffled controls;
-   - which predictions held and which did not, stated plainly;
-   - **anything suspicious** (an excluded share > 5%, a judge parse-failure rate > 2%, a condition that could not run);
-   - compute times per stage;
-   - **observations for Wave B:** encoder failures, the judge's behavior, and the observed speed of data handling;
-   - A8's status if it was blocked.
-3. Add a line per item to `ongoing_general_errors.md` §3 (if not already done), and add Wave A to §5.1 below.
-4. **Rewrite this guide's title and status** to **"Queue Complete: waiting on Issue 1 and the Wave B spec"**, or **"Queue Complete: waiting on Issue <n>"** if A8 is blocked. **Then stop. Do not invent work.**
+1. **Conditional, only if Issue 5 = A was selected and billing is enabled:**
+   - Let the Gemini runs finish on both test splits; check the cache coverage.
+   - Re-run `python -m harness.probes --dataset oops` and `--dataset holoassist`. This appends superseding rows; put `rerun: judge-frontier scored <k>/<n> (Issue 5 A)` in each new row's `notes` by passing it through a new `--notes` CLI argument.
+   - Regenerate both reports.
+2. Run `scripts/battery.sh --slow` bare and update §1.4.
+3. Write `docs/evals/<YYYY-MM-DD>_wave_a_summary.md`:
+   - **the headline table:** dataset × condition, with CIs, n and `n_excluded`; the Δ rows; the diagnostic row; the shuffled controls;
+   - **the per-clause prediction checks** for both datasets;
+   - **the caveats,** stated in full:
+     - Oops! `react-nonverbal` is not evidence of reaction signal;
+     - HoloAssist audio is pitch-shifted, and its groups are pairs, not persons;
+     - **the state of the "just ask an LLM" control** (Issue 5);
+   - **anything suspicious:** an excluded share > 5%, a judge parse-failure rate > 2%, a condition that could not run;
+   - compute time per stage;
+   - **observations for Wave B:** encoder failures, the judge's behavior (the 90/100 answer pattern), and the observed speed of data handling.
+4. Make sure each item has its line in `ongoing_general_errors.md` §3, and add A6c, A7b, A8 and A9 to §5.1 below.
+5. **Rewrite this guide's title and status** to **"Queue Complete: waiting on Issue 1 and the Wave B spec"**, adding **"and Issue 5"** if it is still unselected. **Then stop. Do not invent work.**
 
 **Validation:** every number in the summary matches a row in `results/scorecard.jsonl` (cite its `ts`); G1–G4 green.
 
@@ -558,63 +445,76 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 - **The face encoder** (`react-face`), DW2: part of Wave B.
 - **H2 transfer** (HoloAssist / AM-FED+, BAD only if granted), DW3: needs Wave B.
 - **The Ego4D false-positive set,** DW4.
-- **Wave D, the robot check (offline H3; RoboReward)**, DW5: the designer writes its spec after Wave A's results. Do not start it, and do not download RoboReward in Wave A.
+- **Wave D, the robot check (offline H3; RoboReward)**, DW5: the designer writes its spec after Wave A's results. Do not download RoboReward.
 - **Stage A live** (the microduck), DW6.
-- **Any web or YouTube video acquisition.**
-- **Re-downloading any Ego4D or Charades-Ego video.**
-- **Anything from tag `v0-saf-final`** (layers, bench, visualizer): read it for reference, never restore it.
+- **A larger local judge** (`gemma4:26b`): only if the maintainer selects Issue 5 option B **and** the designer specs it.
+- **Any judge prompt or question change** (Issue 5 option D is not recommended).
+- **Any web or YouTube video acquisition. Re-downloading any Ego4D or Charades-Ego video. Anything from tag `v0-saf-final`.**
 
 ---
 
 ## 5. Do NOT change
 
-### 5.1 Already delivered
+### 5.1 Already delivered (verified by the designer, October 10, 2026)
 
-- **R0, the reorientation** (`454b40d`): v0 removed from the tree, the grounding docs, and the kept utilities (`vlm_client.py`, `models_config.py`, `config.py`, `tools/`).
-- **R1, this spec:** the guide, `03_eval_harness.md` (the contract), `02_data_sources.md` (item definitions), the tracking doc and `AGENTS.md`.
-- `shared/vlm_client.ollama_chat`'s enforced timeout is load-bearing (`LESSONS_v0.md`, "Operations"). Use it; do not replace it with the `ollama` Python client.
+- **R0, the reorientation** (`454b40d`). **R1, the Wave A spec.** **R3, the A6b spec.** **R4, this verification.**
+- **A1** `651039b`: `scripts/battery.sh` (G1–G4, maximum-exit rule, the exit-75 line) and `pytest.ini`.
+- **A2** `d9de9d3`: `harness.metrics` (`auroc_ci`, `delta_auroc_ci`, `spearman_ci`, the group bootstrap, the 10,000-draw guard), and `harness.scorecard` (`ScorecardRow` in §4 order, `append_rows` with fsync, `config_hash`, the CLI with `--history` and `--selftest`).
+- **A3** `dd7fa0f`: `harness.items` (5 verbatim rejections) and `harness.splits` (seeded group shuffle, straddle error, overwrite refusal, tamper check).
+- **A4** `11df49f`: the HoloAssist labels (hashes re-verified), `--stats`, and the independence verdict.
+- **A5** `5983241`: `FeatureCache`, `FrameEncoder` (768-d), `NonverbalAudioEncoder` (1024-d) and `features.extract`.
+- **A6** `0f16799`: `build_prompt` (verbatim), `prompt_hash`, `parse_prob`, `sample_frames`, `OllamaJudge`, `GeminiJudge` and the cache. A7b changes only Gemini's parse retries.
+- **A6b** `76e71cc`: `shared.memguard` (the floor, peaks re-measured at 1.60 / 4.94 / 7.80 GB, the shared lock path, unloading only our model, `--status`, the fake-reading override), plus exit 75 in the CLIs, the supervisor and the battery. A6c changes only what §3 lists.
+- **A7** `6d72492`: the Oops! download, schema, adapter, split, features, judge, probes and 11 scorecard rows. A7b corrects only the report.
+- `shared/vlm_client.ollama_chat`'s enforced timeout is load-bearing (`LESSONS_v0.md`, "Operations"). Do not replace it with the `ollama` Python client.
 
-### 5.2 Accepted equivalents (checked; do not "fix" these back)
+### 5.2 Accepted equivalents (checked October 10; do not "fix" these back)
 
-- None yet. The designer adds entries here after verifying Wave A.
+- **Oops! "onsets missing" skips a clip if any worker marked no failure** (`n_notfound > 0`), rather than taking the median of the rest. It is stricter, and the caps were never binding (`02_data_sources.md` → Oops! → As built).
+- **`features.visual.extract_frame` retries a seek at `t − 0.05 … t − 0.3 s`** when ffmpeg returns no frame at a clip's final timestamp. The frame is within 0.3 s of `e`.
+- **`GeminiJudge` uses `max_output_tokens=32` and `thinking_budget=0`, and does not cache an item after 5 failed 429/5xx tries** (now written into §8).
+- **`guard()` holds the heavy lock through the model load only, not through the first item** (§12 step 6). The first-window increment is small next to the load peak (`sr_e2v`: 4.76 GB peak during load vs. 3.0 GB steady).
+- **An item's scorecard rows carry its parent commit's `git_sha` with `dirty: true`,** because rows are written before the item's one commit. The code of record is the item's own commit: the next commit that touches `results/scorecard.jsonl`.
+- **`metrics.MetricResult`** is a 3-tuple subclass carrying `n_excluded`. It unpacks as `(point, low, high)`, as specified.
+- **`make_group_split(…, source=, seed=)`**, and HoloAssist's group pre-assignment before sampling (written into §5).
+- **HoloAssist task `fix motorcycle` → `repair motorcycle`** in `context_text` (`02_data_sources.md`, pinned details).
+- **`extract.py` skips `memguard.check()` before the first item.** The first item loads through `guard()` itself.
 
 ### 5.3 Maintainer decisions
 
 **October 8, 2026:**
-- **The thesis and its framing:** human reactions as an additional reward signal for robot learning, learnable from web-scale video. **No human-in-the-loop rating.** Measure whether the thesis works, often and automatically.
-- **SAF v0 retired.** Tag, then remove from main.
+- **The thesis:** human reactions as an additional reward signal for robot learning, learnable from web-scale video. **No human-in-the-loop rating.** Measure whether the thesis works, often and automatically.
+- **SAF v0 retired.**
 - **Both deployment stages,** in order: web reactions as free labels (B) first, then live reactions (A).
 - **Any footage for training;** results reported on both robot-reaction (BAD) and first-person (HoloAssist) data.
-- **"Just ask an LLM" is the control to beat** (the maintainer's challenge).
+- **"Just ask an LLM" is the control to beat.**
 - **Hidden-outcome data first.**
 - **Three-month goal: a paper-grade H1 + H2. Compute: the Mac Studio only.**
-- **The designer does not code; an implementing agent builds from this guide.**
-- **Commit straight to `main`, with no branches.**
-- **Issue 3 → delete the v0 videos:** *"clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice."* The designer deleted the Ego4D raw videos and the Charades-Ego videos (manifest in §1.2).
+- **The designer does not code; an implementing agent builds from this guide. Commit straight to `main`.**
+- **Issue 3 → the v0 videos were deleted.**
+
+**October 9, 2026:**
+- **No self-recorded data, no human-subjects study, no academic partner** (Issues 1D, 4B, 4C).
+- **The offline robot check (Wave D) is in scope; the microduck demo is deferred.**
 
 ### 5.4 Invariants and intentional design decisions
 
-- **Supervise on outcomes, never on emotion.** No emotion categories as features or targets, from any model (including HSEmotion classes and emotion2vec categories). Embeddings are allowed.
-- **`label = 1` always means a good outcome.**
+- **Supervise on outcomes, never on emotion.** No emotion categories as features or targets, from any model. Embeddings are allowed.
+- **`label = 1` always means a good outcome.** Hence `react-spoke` = `1 − spoke`.
 - **The judge never hears audio** and never sees anything outside the action window.
-- **Two action-only controls:** the Δ is taken against `action_best`.
-- **Grouped splits and grouped CIs only.** Split files are written once.
-- **The scorecard is append-only.**
-- **H2 targets are never training data.**
-- **Fixed probe hyperparameters;** nothing is tuned on test.
-- **Nulls with reasons, never zeros.**
-- **Pixels from licensed datasets are never committed to git.**
+- **Two action-only controls:** the Δ is taken against `action_best`. `judge-frontier` joins `action_best` only at ≥ 90% coverage.
+- **Grouped splits and grouped CIs only.** Split files are written once; a forced rewrite is named in the commit.
+- **The scorecard is append-only. H2 targets are never training data. Fixed probe hyperparameters. Nulls with reasons, never zeros or sentinels. No licensed-dataset pixels in git.**
+- **`guard()` is re-entrant within a process; `read_memory()` fails closed; memory deferrals never consume supervisor attempts** (§12, from A6c onward).
 
 ### 5.5 Assessed and rejected: do NOT re-propose
 
 - **Human rating rounds, golden labels, rater UIs, pre-seeded review.** The v0 benchmark failed this way (0/349 rated).
-- **Hand-built affect channels** (gaze scores, proxemics, nod/flinch detectors, categorical emotion) as the representation.
-- **Self-recorded data collection or any human-subjects study** (taste tests with friends; people watching robot clips on a webcam). The maintainer declined both (October 9, 2026).
-- **Partnering with an academic institution.** The maintainer declined it (October 9, 2026).
-- **Ego4D bystander footage as H1 data.** It has no outcome labels and rarely contains an evaluative reaction.
-- **A first-person-only data restriction.** It was considered and rejected (`00_thesis.md`, "Why first-person footage isn't required").
+- **Hand-built affect channels** as the representation.
+- **Self-recorded data collection, any human-subjects study, or an academic partnership** (declined October 9, 2026).
+- **Ego4D bystander footage as H1 data. A first-person-only data restriction.**
 - **Using Oops! descriptions or HoloAssist mistake/purpose labels as model inputs.**
-- **Tuning prompts, hyperparameters, windows or caps on test results.** If a number looks wrong, file it.
+- **Tuning prompts, hyperparameters, windows or caps on test results,** including rewriting the judge question because it scored 0.472 on Oops!. That is Issue 5 option D, and it is the maintainer's call.
 - **Circumventing YouTube or any site's bot checks.**
 
 ---
@@ -624,31 +524,31 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 | What | Where |
 |---|---|
 | The thesis, H1–H3, pass/kill, the decision log | `00_thesis.md` |
-| Items, splits, the scorecard schema, conditions, metrics, the judge prompt, encoders | `03_eval_harness.md` §3–§9 |
-| The memory guard: floor, peaks, the shared heavy lock, exit 75, supervisor and battery behavior | `03_eval_harness.md` §12 |
-| Oops! and HoloAssist item definitions, facts, leakage rules | `02_data_sources.md` |
-| Prior work and baselines | `01_prior_work.md` |
-| Issues 1–3, maintainer actions, deferred work, lessons, the resolved index | `ongoing_general_errors.md` |
+| Items, splits, the scorecard schema, conditions (incl. the diagnostic row and the not-run/partial rules), metrics, the judge, encoders | `03_eval_harness.md` §3–§9 |
+| The memory guard: floor, peaks, the shared lock, re-entrancy, fail-closed reads, exit 75, supervisor and battery behavior | `03_eval_harness.md` §12 |
+| Oops! and HoloAssist item definitions, schemas, as-built details and caveats | `02_data_sources.md` |
+| Issues 1, 4, 5 (open); Issues 2, 3 (resolved); maintainer actions; lessons L1–L11; the resolved index | `ongoing_general_errors.md` |
 | Operations (detached runs, ollama, decoding, storage) | `LESSONS_v0.md` "Operations"; `tools/README.md` |
 
 ---
 
 ## 7. Validation standard
 
-- **Red first.** Before building an item, run its falsifying check against the current code (or against an absent module) and record the failure.
-- **Every gate must be able to fail.** Each item names the change that turns its key test red. Show it red, then green.
+- **Red first.** Before building an item, run its falsifying check against the current code and record the failure.
+- **Every gate must be able to fail.** Show it red, then green.
+- **Test the composed path (L11).** When a fix is about how two pieces call each other, at least one test uses the real callables, not a stub that cannot reproduce the bug.
 - **Falsify the pipeline, not just the code:** the shuffled-label controls must sit at chance.
 - **Report denominators** (`n_items`, `n_groups`, `n_excluded`) with every number.
 - **Never loosen a bar or a threshold to pass it.** File it with the measurement and options.
-- **Read your own outputs.** Open `stats.json`, the reports and a sample of judge `raw` answers, and describe what you saw in the commit body.
+- **Read your own outputs.** Open `stats.json`, the reports, a sample of judge `raw` answers and the example frames, and describe what you saw in the commit body. A report sentence that would be the same for every dataset is not a reading.
 
 ---
 
 ## 8. THE LOOP
 
 ```
-(1) Is there an approved item? A1–A9 plus A6b, in §2 order. If all are done or
-    blocked, STOP. Never start §4 work. Never fill in a `Your selection:`
+(1) Is there an approved item? A6c, A7b, A8, A9, in §2 order. If all are done
+    or blocked, STOP. Never start §4 work. Never fill in a `Your selection:`
     line.
 (2) Read the item and EVERY contract section it names. Copy paths,
     constants, prompts and error strings VERBATIM.
@@ -658,26 +558,23 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 (6) Open every artefact you produced and describe it.
 (7) scripts/battery.sh bare (add --slow when the item touched models).
     Update §1.4.
-(8) ONE commit on main, scope = item id (`feat(a3): …`). WHY + red/green
-    in the body. ONE line under "Wave A" in ongoing_general_errors.md §3.
-    Never amend after pushing.
+(8) ONE commit on main, scope = item id, staging EXPLICIT PATHS ONLY.
+    WHY + red/green in the body. ONE line under "Wave A" in
+    ongoing_general_errors.md §3. Never amend after pushing.
 (9) /usr/bin/git push origin main
 (10) Next item. A failed bar, an impossible rule or a missing input:
-     file it, then continue only with items that do not depend on it.
+     file it (next: Issue 6), then continue only with items that do not
+     depend on it.
 ```
 
 ---
 
 ## 9. Definition of Done: Wave A
 
-- [ ] A1–A9 and A6b each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
-- [ ] The memory guard holds: every model load is admitted through the heavy lock shared with `animated_infographics`; the deferral drills exit 75; `memguard.log` shows no `action=stop` that was not followed by a clean resume; and no jetsam report during a Wave A run names one of our processes.
-- [ ] `scripts/battery.sh` exits 0, and `--slow` exits 0.
-- [ ] G3's self-test passes all 4 checks; check (c) was shown to fail with item-level resampling.
-- [ ] Split files exist for each dataset run, are group-disjoint, and are hash-verified.
-- [ ] Issue 2 is resolved with a verbatim protocol quote, or filed with options.
-- [ ] Oops!: every §6 condition has a row (real or `not run`), the Δ row exists, the shuffled controls sit at chance, and the report is written.
-- [ ] HoloAssist: the same as Oops!, **or** A8 is recorded as blocked with its issue named.
+- [ ] A6c, A7b, A8 and A9 each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
+- [ ] The memory guard: tests (i) and (j) pass with the real nesting and were shown red without the depth branch; `read_memory()` fails closed; the supervisor finishes after more deferrals than `SR_SUPERVISE_MAX_ATTEMPTS`; fast tests never reach live Ollama; no jetsam report during a Wave A run names one of our processes.
+- [ ] The Oops! report carries the per-clause prediction check (judge clause: did not hold), correct judge diagnostics, wall-clock times, real example descriptions and the `react-nonverbal` caveat, with the scorecard untouched.
+- [ ] HoloAssist: items in the `holoassist:` id format; the audio-presence check run (or Issue 6 filed); every §6 condition has a row (real, partial or derived not-run), the Δ row and the `spoke=1` diagnostic exist; the shuffled controls sit at chance; the report is written with both caveats at the top.
 - [ ] `docs/evals/<date>_wave_a_summary.md` is written, and every number in it is traceable to a scorecard row.
-- [ ] §1.4 is re-measured bare.
+- [ ] `scripts/battery.sh` exits 0 and `--slow` exits 0; §1.4 is re-measured bare.
 - [ ] This guide is rewritten to **Queue Complete** (naming what it waits on). **Then stop. Do not invent work.**

@@ -137,6 +137,15 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 13. **No human-subjects studies and no academic partner** (October 9, 2026; Issue 4). A robot-reaction target exists only if BAD access is granted to an independent researcher. Otherwise H2 transfer is shown on HoloAssist and AM-FED+.
 14. **The offline robot check is in scope** (maintainer, October 9, 2026, after asking whether it is recommended). It is the only robot result feasible with no people, partner or hardware, and it is framed as data efficiency, not as beating RoboReward. **The live microduck demo stays deferred** (DW6).
 
+**2026-10-10** (designer, verification of A1–A7):
+15. **`react-spoke` scores `1 − spoke`.** Silence means P(good) is higher, because `label = 1` is a correct action. The direction is fixed a priori from A4's label-level rates and is never chosen on test (`03_eval_harness.md` §6).
+16. **A partial frontier run is reported as partial.** It enters `action_best` only at ≥ 90% coverage of the test split (`03_eval_harness.md` §6, §8).
+17. **First Oops! result** (`docs/evals/2026-10-10_oops_h1.md`):
+    - **Δ ≈ 0, as predicted:** Δ = +0.015 [−0.002, 0.029].
+    - **The local judge, predicted to be strong, was at chance:** 0.472.
+    - **Oops! `react-nonverbal` (0.711) is not evidence of reaction signal,** because its audio window contains the failure's own sound (`02_data_sources.md` → Oops! → "As built").
+    - **Whether a frontier judge is run is Issue 5.**
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 3** (SSD capacity) is resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge: enable billing, use a larger local judge, or report without one) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

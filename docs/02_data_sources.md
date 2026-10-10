@@ -49,7 +49,10 @@ An egocentric performer (HoloLens camera) completes physical tasks while a remot
   | Depth, hand pose, gaze, IMU, calibration | ≈ 800 GB (not needed) |
 
 - **The audio is pitch-shifted** for anonymization. Paralinguistic features are therefore measured on altered voices; record this as a caveat in every HoloAssist result.
-- **Unknown until downloaded:** the exact JSON field names; whether the instructor's voice is audible in the video's audio track; whether the official splits are participant-disjoint.
+- **Unknown until downloaded** *(status October 10, 2026)*:
+  - the exact JSON field names: **answered** by A4 (below);
+  - whether the official splits are participant-disjoint: **answered** by A4: they are not;
+  - whether the instructor's voice is audible in the video's audio track: **still open**. A8 step 2 measures it.
 
 **Item definition (Wave A):**
 - One item per annotated fine-grained action that carries a mistake/correct attribute.
@@ -116,6 +119,17 @@ An egocentric performer (HoloLens camera) completes physical tasks while a remot
     Mistakes were evaluated and annotated from third-person review of the performer's movements and whether the action achieves the task ("Indicate whether the action is correct or a mistake to achieve the task"), with annotators writing explicit explanations ("Incorrect Action Explanation"). 43.8% of mistakes (3,153 / 7,205) were corrected by the student or uncorrected, with no verbal correction by the instructor. In 32.0% of mistakes (2,307 / 7,205), no instructor utterance overlapped `[start, end + 5.0]`. The mapping from mistakes to verbal corrections was an additional linking step, not the source from which the mistake label was derived.
   - Verdict: **Issue 2 Resolved: independent**.
 
+### Item construction: pinned details (designer, October 10, 2026)
+
+These were left open by the item definition above. The A8 draft adapter chose them; they are now decisions.
+- **`item_id` = `"holoassist:<video_name>:<event index>"`**, where `<event index>` is the action's position in that session's `events` list. This is the §3 format; the draft's `<video_name>_<id>_<idx>` lacked the dataset prefix.
+- **`"otherwise"` is a mistake** (`label = 0`). A4 found these 357 values carry annotator explanations of wrong actions. With it, a session's mistakes are 7,562 (5.07%).
+- **`group_id` = the session-name prefix before the first `-`** (e.g. `R0027` from `R0027-12-GoPro`).
+  - There is no performer id in the metadata. The 340 prefixes match the paper's ~350 instructor–performer pairs, so a prefix is most likely a **pair**, not a person.
+  - **Caveat for every HoloAssist result:** if a person (performer or instructor) took part in more than one pair, they can appear on both sides of the split. The data cannot rule this out. State it next to the pitch-shift caveat.
+- **Task name `fix motorcycle` is rendered `repair motorcycle`** in `context_text`. It is a task name, not an outcome, but the leakage test bans the word `fix`. Verbs and nouns are not rewritten; the real items contain no banned word (checked October 10: 0 of 5,000).
+- **`reaction_window_sec` end = `min(duration, end + 5.0)`**, where `duration` is `videoMetadata.duration.seconds`. If that field is missing, skip the action with reason `missing_duration`. The draft defaulted to 10⁹ s, which silently disables the clip.
+
 ## Oops!: visible-outcome contrast
 
 Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.
@@ -163,6 +177,17 @@ The VLM judge should be strong here, because the failure is visible. That is the
   - Derivation rule: `re.sub(r"\d+$", "", clip_id).strip()`. If the stripped string is non-empty, use it; otherwise use `clip_id`.
   - Result: 469 unique compilation groups across the 10,961 annotated clips.
 
+### As built (A7; verified October 10, 2026)
+
+- **"Onsets missing" means any worker said "no failure".** A clip is skipped if `n_notfound > 0`, fewer than 3 onsets exist, or any onset is negative. This is stricter than taking the median of the remaining onsets. It is accepted, because a worker who saw no failure makes the onset ambiguous, and the caps were never binding.
+- **Yield** (`DATA_ROOT/items/oops/stats.json`):
+  - 10,961 clips seen; **1,355 kept**.
+  - Skipped: onsets missing 4,134 · stdev > 1.0 s 1,126 · `t − 4.0 < 0` 3,571 · `t + 3.0 > len` 775 · video missing 0.
+  - Items: **1,638 train / 1,072 test** (819 / 536 clips; caps 2,000 / 1,000 not reached). Test has 90 compilation groups.
+  - The `pre` window needs `t ≥ 4 s`, which by itself removed a third of the clips.
+- **One clip is undecodable** (`Grass Is Always Greener - Get Off My Lawn! (July 2018) _ FailArmy29`, train). It has no features and no judge score, and is honestly excluded from the train fits.
+- **The "reaction" audio is not only a reaction.** `reaction_window_sec` = `action_window_sec`, so the `post` window's audio contains the failure's own sound (the crash, splash or thud) and any compilation music, as well as the filmer's laugh or gasp. **`react-nonverbal` on Oops! (AUROC 0.711) is therefore not evidence of reaction signal.** It measures how much the audio track differs before and after a failure. State this wherever the number is reported.
+
 ## BAD / ERR@HRI / REACT: reactions to robots
 
 **If BAD access is granted, these commitments from the access request bind the project:**
@@ -172,7 +197,7 @@ The VLM judge should be strong here, because the failure is visible. That is the
 - only aggregate metrics are published; never frames, face crops, embeddings or per-participant results;
 - the data and everything derived from it are destroyed at study end, or 12 months after download, whichever comes first, and QDR is notified.
 
-These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **BAD requires an IRB-reviewed protocol from an affiliated institution**, which the maintainer (unaffiliated) lacks. The access request asks whether an exception is possible, and **Issue 4** holds the fallback: our own consented BAD-style reaction study.
+These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **BAD requires an IRB-reviewed protocol from an affiliated institution**, which the maintainer (unaffiliated) lacks. The access request asks whether an exception is possible. **Issue 4** records the decision of October 9: an own reaction study and an academic partner were both declined, so if the request is refused, H2 transfer is shown on HoloAssist and AM-FED+ with no robot-reaction target.
 
 ## Ego4D v0 corpus (archived; optional reuse)
 

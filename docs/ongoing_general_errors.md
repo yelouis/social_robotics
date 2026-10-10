@@ -14,10 +14,24 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
+  - **Issue 5** (new, October 10): the "just ask an LLM" control is unmeasured. The local judge is at chance on Oops!, and the frontier judge is blocked by the free-tier quota. It blocks nothing in the queue, but it decides whether Wave A's headline has a credible LLM control.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
-  - Issue 2 was resolved October 9: independent (item A4).
-  - Issue 3 (SSD space) was resolved October 8.
+- **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4) and Issue 3 (SSD space; October 8).
+
+**October 10, 2026: designer verification of A1–A7** (battery re-run bare; every item's code read against its contract).
+- **Verified correct:** A1–A5 as specified, and A6 except one gap: the frontier judge does not retry an unparsable answer (§8). That is fixed in **A7b**.
+- **Landed with defects:**
+  - **A6b (memory guard):** guide item **A6c**, three defects:
+    - a nested `guard()` locks itself out and holds the machine-wide lock for 30 min;
+    - `read_memory()` fails open;
+    - memory deferrals use up the supervisor's attempt budget, so the 72-deferral rule can never fire.
+    - Fast tests also call the live Ollama server.
+  - **A7 (Oops!):** its numbers are sound and trace to the caches. The report is wrong in three places, all fixed by guide item **A7b**:
+    - it says the prediction "holds" although the judge, which was predicted to be strong, scored 0.472;
+    - it counts `errors.jsonl` rows (HTTP 429) as "parse failures";
+    - it has no wall-clock times, and its example descriptions are template text.
+- **In progress, uncommitted:** **A8 (HoloAssist).** The 184 GB video download was running at 62 GB on October 10, 11:09. The draft adapter needs the corrections listed in guide item A8.
 
 ---
 
@@ -113,48 +127,6 @@ Your selection: _____
 
 ---
 
-### Issue 2: HoloAssist label independence
-
-**Status:** ✅ **Resolved: independent (October 9, 2026, item A4).**
-
-**The concern:** if HoloAssist's mistake labels were assigned *from* the instructor's interventions, then "the instructor's reaction predicts the mistake" is circular. The intervention correlating with mistakes is expected; it is the signal. *Deriving the label from it* is the problem.
-
-**Resolution (item A4):**
-- **Protocol quote verbatim:**
-  > *"Action Correctness: Indicate whether the action is correct or a mistake to achieve the task. The options are: Correct action, Wrong action, corrected by instructor verbally, Wrong action, corrected by performer, Wrong action, not corrected, Others"* (HoloAssist README)
-  > *"Incorrect Action Explanation: Provided by the human annotators to explain why they believe the action is wrong."* (HoloAssist README)
-  > *"Mistakes include the ones that are 'self-corrected by the task performers', are 'verbally corrected by the instructors', and 'are not corrected labeled'. Our human annotators annotate all three mistake types separately, but for benchmark evaluation, we will consolidate them into one mistake class. We defer the detailed study of differentiating whether and how the mistakes are corrected to future work. To ensure the annotation quality, we additionally ask the third-person annotators to explain why the action is a mistake and also assign a mapping to every mistake that is corrected by an instructor verbally to the conversation sentence whose type is 'instructor correcting mistakes'."* (Paper arXiv:2309.17024 §3.2)
-- **Findings:**
-  - Mistakes were annotated from third-person video observation of whether the physical movement achieved the task, with human explanations provided per mistake.
-  - 43.8% of mistakes (3,153 / 7,205) were corrected by the student or uncorrected, with no instructor intervention. In 32.0% of mistakes (2,307 / 7,205), no instructor utterance overlapped `[start, end + 5.0]`.
-  - The `react-spoke` speech rate is **67.98% for mistakes (4,898 / 7,205)** vs. **30.87% for correct actions (43,736 / 141,691)**.
-  - The official splits are **not participant-disjoint** (236 / 340 performer prefixes straddle splits), so A8 will use a grouped 70/30 split.
-- **Verdict:** Issue 2 is resolved as independent. A8 is cleared to proceed when its prerequisites land.
-
----
-
-### Issue 3: SSD capacity for Wave A downloads
-
-**Status:** ✅ **Resolved, October 8, 2026, by the maintainer's selection:** *"Yes, clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice."*
-
-**What was done (designer):**
-- **Deleted:** the v0 **videos** only, 36,506 files, 1.336 TB.
-  - `social_robotics/raw_videos/ego4d/v2/full_scale/`: 1,083 Ego4D clips, 1.2 TB.
-  - Charades-Ego: `ego_videos/`, `tp_videos/`, `CharadesEgo_v1_480.tar` and `Charades_v1_480.zip`.
-- **Manifest:** every path plus the 1,083 Ego4D clip ids and re-download instructions, in `/Volumes/Extreme SSD/social_robotics/DELETED_2026-10-08.json`.
-- **Free space:** 311 GiB → **1.5 TiB**.
-
-**Kept, because it is not video or is small and referenced:**
-- `ego4d_data/`: annotations plus 68 GB of precomputed Omnivore features; it never held the videos.
-- The Ego4D annotations under `raw_videos/ego4d/v2/annotations/`.
-- `full_run_2026_06_18/` (13 GB of derived v0 results) and `bench_v0/` (4.5 GB).
-- The Charades-Ego annotations.
-- The Wan2.1 weights (102 GB) and `saf_env/` (19 GB) are dead weight, but they are not videos, so they were left for a separate decision.
-
-**Why Ego4D was deleted rather than pruned:** nothing in Waves A or B uses it. Its bystander footage was shown to be the wrong data for H1 (no outcome labels; rare evaluative reactions). The only possible reuse, the optional false-positive set (DW4), can re-download a chosen subset by clip id.
-
----
-
 ### Issue 4: The robot-reaction H2 target (BAD) requires an institutional ethics review
 
 **Status:** ✅ **Decided by elimination, October 9, 2026.** The maintainer declined option C (*"I will not do a study for people watching robot clips on a webcam"*) and option B (*"I also do not intend on partnering with an academic institution"*). **The path:** A, with the maintainer's QDR access request in progress (form answers in `maintainer_access_requests.md` M1a). **If refused → D:** H2 transfer is shown on HoloAssist and AM-FED+, with no "reactions to robots" target.
@@ -195,6 +167,90 @@ Your selection: _____
 
 ---
 
+### Issue 5: The "just ask an LLM" control is unmeasured: the local judge is at chance on Oops!, and the frontier judge is blocked by the free-tier quota
+
+**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification of A7, October 10, 2026. Nothing in the agent queue waits on it, but Wave A's headline does.
+
+**Facts (October 10, 2026):**
+1. **The local judge is at chance where it should be strongest.** On the Oops! test split, `qwen2.5vl:7b` scored AUROC **0.472 [0.440, 0.498]** (scorecard row `2026-10-10T17:33:22Z`, n = 1,072, 90 groups). Oops! failures are *visible*, and the spec predicted a strong judge here.
+2. **It is not a pipeline bug.** The designer checked:
+   - the 4 frames come from the action window (`judge/vlm_judge.py` `sample_frames`);
+   - the images reach Ollama (`shared/vlm_client.py` base64 `images`);
+   - the prompt is verbatim, and the cache has 2,708 non-null answers.
+3. **The model mostly answers "90" or "100", whatever it is shown.** That is 2,479 of 2,708 answers (91.5%):
+
+   | Window | 100 | 90 | 80 or below | 0 |
+   |---|---|---|---|---|
+   | `pre` (before the failure) | 374 | 965 | 5 | 10 |
+   | `post` (after the failure) | 589 | 551 | 30 | 184 |
+
+   - It does see some failures: it answers 0 on 14% of `post` windows, against 1% of `pre` windows.
+   - But it answers "100" *more* often after the failure than before. Motion reads as "going as intended". That ranks failures above successes and puts AUROC below 0.5.
+4. **What it changes:**
+   - On Oops!, `action_best` = `action-probe` (0.779), so the Δ row is unaffected.
+   - But the thesis's central control (`00_thesis.md`, "Why this is not just ask an LLM") is currently a 7B model at chance on visible failures. A reviewer would call that a straw man.
+5. **The frontier anchor is blocked.** The frontier judge (`gemini-3.6-flash`, `03_eval_harness.md` §8) is the control that can answer the challenge.
+   - The project's `GOOGLE_API_KEY` is on the free tier: **20 requests/day** for this model (429 body: `generate_content_free_tier_requests, limit: 20`).
+   - 11 of 1,072 Oops! test items are scored. At 20 a day, the Oops! test split takes about 54 days and HoloAssist's 2,000 about 100 more.
+6. **A supervised Gemini job** (`run_supervised.sh … judge.vlm_judge --dataset oops --split test --backend gemini`) has been retrying 429s since about 10:30 on October 10. It is network-only and harmless, but it cannot progress until this is decided. Its cache stays valid either way.
+
+**Option A (recommended): Enable billing on the Google AI Studio project (M6), then run the frontier judge on both test splits** (Oops! 1,072; HoloAssist ≤ 2,000)
+- *Pros:*
+  - it is the control as specified, unchanged;
+  - about 3,100 calls, done in hours;
+  - each call is 4 JPEGs (longer side 768 px), about 100 prompt tokens and ≤ 32 output tokens: roughly 3–15 M input tokens in total, depending on how the model tokenizes images. At Flash-tier prices that should be a few dollars; **check the current price page before enabling**;
+  - BAD is unaffected: it never goes to a cloud API (`02_data_sources.md` → BAD).
+- *Cons:*
+  - it costs money and needs a paid account;
+  - Oops! and HoloAssist frames are sent to Google. Both licenses allow research use, and nothing is redistributed.
+
+**Option B: Add a larger local judge that is already installed (`gemma4:26b`) as a second local judge condition, only if it accepts images**
+- *Pros:*
+  - free;
+  - frames never leave the Mac;
+  - no account.
+- *Cons:*
+  - it is still not a frontier model, so "just ask an LLM" stays contestable;
+  - it is heavy: `llama-server` showed 29 GB resident with it loaded on October 10. It needs its own memory-guard peak and cannot run beside other jobs;
+  - it is slow: at the local judge's 8–10 s per call, about 3,100 test calls is roughly 8 h;
+  - it is a spec change: a new condition and a new cache directory, and the designer must write it.
+
+**Option C: Proceed without a frontier judge**, reporting `judge-frontier` as "not run" with its reason
+- *Pros:* no cost, no delay.
+- *Cons:* the weakest paper. The maintainer's own challenge ("how is this different from asking an LLM?") would be answered only by a model that misses visible failures.
+
+**Option D (not recommended): Rewrite the judge question or prompt and re-run the local judge**
+- *Pros:* free.
+- *Cons:* the prompt would change *after* seeing test results. That is tuning on test, which the guide rejects (§5.5). Even choosing on the train split alone, it is a post-hoc protocol change.
+
+Your selection: _____
+
+---
+
+## 🧪 Resolved Issues & Implementation Refinements
+
+Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
+
+1. **Issue 2: HoloAssist label independence (Resolved - October 9)**:
+   - **Problem**: If HoloAssist's mistake labels had been assigned *from* the instructor's interventions, "the instructor's reaction predicts the mistake" would be circular, and the 184 GB video download would have bought a meaningless number. The protocol was unknown before the labels were downloaded.
+   - **Solution**:
+     - Item A4 downloaded only the 111 MB labels, with hashes re-verified by the designer on October 10, and read the README and the paper's annotation protocol (arXiv 2309.17024 §3.2). Mistakes are annotated by third-person annotators from whether the performer's action achieves the task, each with a written explanation. The link to an instructor's correcting sentence is a separate mapping step added afterwards.
+     - 43.8% of mistakes (3,153 / 7,205) had no instructor correction at all. Instructor speech overlapped `[start, end + 5.0]` for 67.98% of mistakes (4,898 / 7,205) vs. 30.87% of correct actions (43,736 / 141,691).
+     - The official splits are **not** participant-disjoint (236 of 340 session prefixes straddle them), so A8 uses a grouped 70/30 split.
+     - Verdict: independent. The verbatim quotes, schema and counts are in `02_data_sources.md` → HoloAssist → "Schema (as downloaded, October 9, 2026)".
+2. **Issue 3: SSD capacity for Wave A downloads (Resolved - October 8)**:
+   - **Problem**: The Extreme SSD had 311 GiB free, not enough for Oops! (45 GB plus extraction) and HoloAssist's pitch-shifted videos (184 GB plus extraction) under the ≥ 50 GiB-free rule.
+   - **Solution**: The maintainer selected cleanup (*"Yes, clean up any videos you want from the v0 leftovers. Feel free to delete Ego4D if you think that is the right choice."*).
+     - **Deleted:** the designer deleted the v0 **videos** only, 36,506 files and 1.336 TB:
+       - the 1,083 Ego4D clips under `social_robotics/raw_videos/ego4d/v2/full_scale/` (1.2 TB);
+       - Charades-Ego `ego_videos/` and `tp_videos/`, `CharadesEgo_v1_480.tar` and `Charades_v1_480.zip`.
+     - **Kept:** `ego4d_data/` (annotations plus 68 GB of Omnivore features), the Ego4D and Charades-Ego annotations, `full_run_2026_06_18/` (13 GB) and `bench_v0/` (4.5 GB). The Wan2.1 weights (102 GB) and `saf_env/` (19 GB) are dead weight, but they are not video, so they were left for a separate decision.
+     - **Manifest:** every path plus the Ego4D clip ids, for re-download, is in `DATA_ROOT/DELETED_2026-10-08.json`.
+     - **Why Ego4D was deleted rather than pruned:** nothing in Waves A or B uses it, and its bystander footage is the wrong data for H1.
+     - **Result:** free space went to 1.5 TiB (1.4 TiB on October 10, with Oops! extracted and the HoloAssist archive downloading).
+
+---
+
 ## Maintainer actions (not agent work)
 
 | Id | Action | Why | Status |
@@ -204,7 +260,7 @@ Your selection: _____
 | M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional |
 | M4 | Sign and send the **AM-FED+** EULA | Issue 1 option E: reactions + self-reported liking | Open, pending the Issue 1 selection |
 | M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | Optional |
-| M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Open |
+| M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Open. This is **Issue 5, option A**: decide there first |
 
 ---
 
@@ -221,6 +277,8 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
 - **L7: Detached runs or dead runs.** Agent background tasks are reaped after ~1–2 h. Use `tools/daemonize.py` + `tools/run_supervised.sh`.
 - **L8: A green suite proves nothing about spec fidelity.** Read the code against the contract.
 - **L9: This Mac is shared, and its memory is not ours.** On October 9, 2026 (19:50–19:52) it ran out of memory: the `animated_infographics` agent ran four image-generation gates at once (two at about 27 GB each), Ollama's `llama-server` held 10.5 GB, and this project's A5/A6 slow tests loaded models in the same window. macOS killed its own services. **Every model load is now admitted through a machine-wide heavy lock shared by both projects, and every long loop backs off between items** (`03_eval_harness.md` §12; guide item A6b).
+- **L10: A report can contradict its own table.** The A7 report declared "the prediction holds" from the Δ row alone, while its own table showed that the other half of the prediction (a strong judge) had failed at AUROC 0.472. A prediction check names **every clause** of the prediction and its measured value, one line each. Report text that summarizes numbers is generated from the rows, never hard-coded, and is checked against them.
+- **L11: A lock that its own holder can re-enter needs to know it.** The memory guard's between-item path re-enters `guard()` and then calls a reload that enters `guard()` again. A non-re-entrant file lock then waits on itself for 30 min, while blocking the other project. Its unit test passed only because it stubbed `reload()` with a function that never takes the lock (L8). Test the composed path with the real callables.
 
 ---
 
@@ -243,6 +301,12 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A6 — The VLM judge (local + frontier) — git log --grep "(a6)" — OllamaJudge (qwen2.5vl:7b) + GeminiJudge (gemini-3.6-flash); build_prompt verbatim; prompt_hash; regex parser with retry logic; payload isolation verified (no audio, no label leakage); G4 live synthetic inference pass.
 - A6b — Memory guard (admission, heavy lock, between-item watchdog) — git log --grep "(a6b)" — shared.memguard admission guard with FLOOR=8 GB, shared heavy lock with animated_infographics, between-item check, exit 75 handling in CLI, supervisor and battery, 50-item peak re-measurements confirmed (siglip 1.60 GB, e2v 4.94 GB, judge 7.80 GB).
 - A7 — Oops! end-to-end H1 (visible-outcome contrast) — git log --grep "(a7)" — 2,710 items across 1,355 clips (0 straddling groups); siglip action-probe AUROC=0.779 [0.754, 0.805], e2v react-nonverbal AUROC=0.711 [0.684, 0.740], fusion AUROC=0.793 [0.771, 0.816], fusion_minus_action_best delta=+0.015 [-0.002, 0.029] (prediction holds: zero in CI); all 3 shuffled controls cover 0.50; report at docs/evals/2026-10-10_oops_h1.md.
+  - *Designer correction (October 10):* the numbers stand. "Prediction holds" covers only the Δ ≈ 0 clause; the "judge strong" clause **failed** (judge AUROC 0.472 [0.440, 0.498]). The report is corrected by A7b, and the judge question is Issue 5.
+- R4 — Designer verification of A1–A7 (October 10, 2026), with the battery run bare:
+  - **HEAD `6d72492`:** G1 exit 0, G2 exit 0 (41 passed).
+  - **Working tree** (with the uncommitted A8 draft): G1–G4 exit 0 (48 passed, self-test 4/4, 5 slow passed).
+  - **Findings:** the guide items A6c (memory-guard defects), A7b (report corrections and frontier parse parity), corrections to the A8 draft, and Issue 5.
+  - **Design updated:** `03_eval_harness.md` §4–§6, §8 and §12, and `02_data_sources.md` (Oops! "As built"; HoloAssist "pinned details").
 
 ---
 

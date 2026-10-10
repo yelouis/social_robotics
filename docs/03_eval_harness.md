@@ -77,7 +77,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 - **`n_excluded`:** items dropped from this condition (missing feature, judge parse failure), always reported.
 - **The Δ row:**
   - `condition` = `"fusion_minus_action_best"`, `metric` = `"delta_auroc"`.
-  - `action_best` is whichever of `judge` / `action-probe` has the higher test AUROC. That is conservative for our claim.
+  - `action_best` is whichever of `judge` / `action-probe` (and `judge-frontier`, per §8) has the higher test AUROC. That is conservative for our claim. Its `notes` are exactly `action_best=<condition>`.
   - Its CI is computed on paired group-bootstrap resamples (§7), over the test items where **both** scores are non-null. Its `n_items` is that intersection.
 - `python -m harness.scorecard` with no arguments prints the **latest** row per `(hypothesis, dataset, split, condition, metric)` as a table, with the newest first. `--history <dataset>` prints every row for one dataset in time order.
 
@@ -87,6 +87,8 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 - **If the dataset ships an official split** that is already group-disjoint (verify; never assume), use it: `train` for fitting, the official held-out split as `test`. Otherwise: a grouped 70/30 split, `numpy.random.default_rng(0)`, shuffling sorted unique `group_id`s, the first 70% to train.
 - **Written once** to `splits/<dataset>.json`: `{"dataset", "seed", "source": "official"|"grouped_70_30", "train": [item_ids], "test": [item_ids], "sha256": <hash of the sorted item lists>}`.
 - `make_group_split` **refuses to overwrite** an existing split file unless called with `force=True`, and a forced rewrite must be named in the commit body.
+- **No CLI passes `force=True` by default.** An adapter that writes a split exposes an explicit `--force-split` flag, off by default. *(Added October 10, 2026, after the HoloAssist adapter draft hard-coded `force=True`.)*
+- **An adapter may pre-assign groups before sampling** (HoloAssist must, because its per-class caps apply per split). It then passes the result as `official=<item_id → split>` with `source="grouped_70_30"`, and the group shuffle must be exactly the one above: sorted unique `group_id`s, `default_rng(0)`, the first `round(0.7·n)` to train. `make_group_split` still runs its straddle check on it.
 
 ## 6. Conditions (H1)
 
@@ -95,9 +97,14 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | `judge` | Action-window frames + `context_text`; **no audio, no reaction window** | Zero-shot VLM (§8). Score = P(good) |
 | `action-probe` | SigLIP features of the action window | Logistic regression |
 | `react-nonverbal` | emotion2vec+ embedding of the reaction-window audio; **no transcript** | Logistic regression |
-| `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | The feature itself as the score. *HoloAssist only.* It answers "is the emotion signal more than 'they said something'?" |
+| `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | **Score = `1 − spoke`**: silence scores higher P(good), because `label = 1` means correct. The direction is fixed a priori from A4's label-level rates (an instructor spoke after 67.98% of mistakes vs. 30.87% of correct actions), never chosen on test. *HoloAssist only.* It answers "is the emotion signal more than 'they said something'?" |
 | `react-full` | Transcript text in the reaction window | TF-IDF (`ngram_range=(1,2)`, `min_df=2`) + logistic regression. *Only where the dataset provides transcripts* |
 | `fusion` | `[logit(judge), action-probe features, react-nonverbal features]` | Logistic regression |
+
+**HoloAssist-only diagnostic** *(added October 10, 2026)*: **`react-nonverbal|spoke=1`**.
+- It is the same fitted `react-nonverbal` probe, scored only on the test items with `meta.spoke = 1` (the instructor said *something*). Its `notes` are exactly `diagnostic: test items with spoke=1`.
+- **Why:** `react-spoke` already separates mistakes from correct actions, through whether the instructor talked at all. Inside the spoke-only subset, that cue is constant, so an AUROC above 0.5 there is the voice carrying information *beyond* "they said something". The comparison of `react-nonverbal` with `react-spoke` cannot show this on its own.
+- It is a diagnostic row: it never enters `fusion` or `action_best`.
 
 **Probe hyperparameters (fixed; never tuned on test):**
 - `sklearn.linear_model.LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")`.
@@ -105,6 +112,8 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 - `logit(judge)` clips P to [0.01, 0.99] first.
 
 A condition that cannot run on a dataset is written as **one row with `value: null` and `notes: "not run: <reason>"`**, never silently absent.
+- **The reason is derived from the run's own evidence, never a hard-coded string.** For example, `not run: no cache file <path>`, or `not run: 0 of 1072 items scored; last error: 429 RESOURCE_EXHAUSTED (errors.jsonl)`. *(Added October 10, 2026: the A7 code wrote a fixed "daily quota exhausted" reason that would have been stamped on every later dataset.)*
+- **A partially run condition is a real row, not a "not run" row.** If `k` of the `n` test items have a score, compute the metric on those `k`. Count `n − k` in `n_excluded`, and write `notes: "partial: <k> of <n> scored"`. Only `k = 0` is "not run".
 
 ## 7. Metrics
 
@@ -143,8 +152,11 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 - **Model:** Gemini `gemini-3.6-flash` (the model used for v0 pre-seeding) via `google-genai`, with `GOOGLE_API_KEY` from `.env`.
 - **Inputs:** the same 4 frames, prompt and parse rule.
 - **Cap:** at most 2,000 items per dataset; if the test split is larger, sample with `default_rng(0)`.
-- **Errors:** on HTTP 429 or 5xx, sleep 30 s and retry, up to 5 tries; then `null`.
-- **Rows:** written as condition `judge-frontier`. It does not enter `fusion` (it has no train-split scores) but **does** enter `action_best` for the Δ row.
+- **Errors:** on HTTP 429 or 5xx, sleep 30 s and retry, up to 5 tries. After the 5th failure the item is **not cached**: the error goes to `errors.jsonl`, and the next run retries the item. A quota or server failure is not a judge answer, so caching it as `null` would exclude the item for good. *(Clarified October 10, 2026, matching the A6 code.)*
+- **Generation config:** `temperature=0`, `max_output_tokens=32`, `thinking_config=ThinkingConfig(thinking_budget=0)`. The 16-token budget of the local judge is too tight once the model's thinking is disabled through the config. Parse retries follow the local rule: up to 2 more attempts at `temperature` 0.3; after 3 unparsable answers, cache `null`.
+- **Rows:** written as condition `judge-frontier`. It does not enter `fusion` (it has no train-split scores).
+  - It enters `action_best` for the Δ row **only if it scored ≥ 90% of the test items.** Below that, its row is still written (`partial: …`, §6) but stays out of `action_best`. A Δ over a small intersection would measure noise.
+  - **The frontier anchor is the real "just ask an LLM" control.** On Oops! the local 7B judge scored AUROC 0.472, at chance on visible failures. Whether it runs is Issue 5.
 
 ## 9. Encoders
 
@@ -192,6 +204,7 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 - `available = hw.memsize × kern.memorystatus_level / 100`. That is the kernel's free percentage, the one jetsam acts on.
 - `pressure = kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical.
 - Both are read with `sysctl -n`, through one function `read_memory() -> (available_bytes, pressure)` that tests replace with a fake.
+- **`read_memory()` fails closed.** If `sysctl` fails or its output does not parse, it returns `(0, 4)` and writes `memory guard: READ FAILED (<error>)` to stderr. Admission then waits and defers, and the between-item check stops. *(Added October 10, 2026. The A6b code returned a made-up 64 GB at pressure 1, which admits everything exactly when the guard cannot see.)*
 - **`FLOOR = 8 GB`** must remain available after any admission.
 
 **Heavy steps and their declared peaks** (`src/shared/memguard.py`, `HEAVY_STEPS`). Declared peak = measured × 1.15, rounded up to a whole GB:
@@ -217,6 +230,10 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 4. Otherwise wait, checking every 5 s. At most every 30 s, log `memory guard: waiting for <step>: need <peak> GB + floor 8 GB, available <a> GB, pressure <p>, heavy lock <free|held by pid N>`.
 5. After `SR_MEM_WAIT_S` (default **1800 s**) in total, raise `MemoryDeferred`. CLIs turn that into **exit 75**.
 6. Hold the lock only through the load and the first item (the peak), then release it. A loaded, idle model is ordinary used memory that the other project's admission already accounts for.
+7. **`guard()` is re-entrant within one process.** A module-level depth counter records that this process already holds the heavy lock.
+   - A nested `guard()` (depth > 0) does **not** touch the lock file. It only applies the memory rule (step 2, then steps 4–5), and it logs `action=admit` with `waited_ms`.
+   - The outer `guard()` releases the lock when its own block exits.
+   - **Why:** `check()` re-enters `guard()` and then calls `reload()`, and the encoders' `reload()` is `_ensure_loaded()`, which enters `guard()` again. Without re-entrancy, the inner call sees the lock "held by" its own pid and waits `SR_MEM_WAIT_S` (30 min) **while holding the machine-wide lock**. That starves `animated_infographics` and then exits 75. Reproduced October 10, 2026 with fakes: 40 GB available, pressure 1, deferred after the full wait. *(Added October 10, 2026.)*
 
 **Between items** (`memguard.check(release, reload)`, called before every item in `features.extract` and the judge loop):
 - **Critical** (`pressure == 4` or `available < FLOOR / 2`):
@@ -234,11 +251,16 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 
 **The supervisor** (`tools/run_supervised.sh`):
 - Exit **75** means "deferred by memory guard". Sleep `SR_MEMWAIT_SLEEP_S` (default **600 s**), relaunch, and **do not** count the attempt toward the no-progress abort.
-- After `SR_MAX_MEM_DEFERRALS` (default **72**, about 12 h) consecutive deferrals, abort with `memory guard: deferred <n> times; giving up`.
+- After `SR_MAX_MEM_DEFERRALS` (default **72**, about 12 h) consecutive deferrals, abort with `memory guard: deferred <n> times; giving up`, and exit 75.
+- **A deferral does not consume an attempt.** `SR_SUPERVISE_MAX_ATTEMPTS` (default 50) counts only launches that ended in something other than 75. *(Added October 10, 2026. In the A6b script every deferral used one of the 50 attempts, so the 72-deferral limit could never be reached: the run ended at 50 deferrals with exit 1 and the wrong message.)*
 - Any other non-zero exit keeps today's behavior.
 
 **Tests and the battery:**
 - `tests/conftest.py` turns an uncaught `MemoryDeferred` into `pytest.exit("memory guard: deferred: <message>", returncode=75)`. A guarded slow test **never** skips silently and never passes.
+- **Fast tests never reach the live Ollama server.**
+  - An autouse fixture in `tests/test_memguard.py` replaces `httpx.get` and `httpx.post` with a recorder that raises `httpx.ConnectError`. At teardown it asserts that nothing was recorded.
+  - The check must be at teardown because the guard's HTTP helpers swallow every exception.
+  - Tests that need HTTP install their own fakes. *(Added October 10, 2026. Test (c) at `76e71cc` called the real `/api/ps`, and if `qwen2.5vl:7b` was loaded it really unloaded it, including in the middle of a live judge run.)*
 - `scripts/battery.sh` prints `G<n> <name>: exit 75 (deferred by memory guard; not run)` for that code. The battery's exit is the maximum code as before, so a deferral is never read as green.
 
 **Status:** `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` prints:
