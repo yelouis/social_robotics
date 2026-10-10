@@ -8,30 +8,35 @@ Tracked as maintainer actions M1, M4 and M5 in [`ongoing_general_errors.md`](ong
 
 ## M1a: BAD dataset (reactions to robot and human failures; the H2 target)
 
-**Where:**
-1. Create a free account at the Qualitative Data Repository.
-2. Open the dataset page: `https://data.qdr.syr.edu/dataset.xhtml?persistentId=doi:10.5064/F6TAWBGS`. Read its **Terms** tab first, since it says which download agreement applies.
-3. Click **"Contact Owner"**. The lab recommends Google Chrome for this site.
-4. Questions go to the first author, listed on the [project page](https://irl.tech.cornell.edu/bad-dataset/).
+**What "Download Data Project" gets you:** only the 4 public documentation files (0.3 MB): the consent form, the data narrative, stimulus details and a README. Those are worth reading.
+- **The data itself is locked.** 54 per-participant video zips plus the survey data, 2.71 GB, are under **QDR Controlled Access** (checked October 9, 2026 via QDR's metadata API; the padlocks in the Files tab).
+- **The Terms tab asks for three things:**
+  1. a short description of your use and your human-subjects protections;
+  2. **"a protocol for your research study that has been reviewed by an IRB or ethics approval committee at your affiliated institution"**;
+  3. a signed special download agreement: no redistribution, use only for the described study **within human-interaction research**, and no use that could identify or harm participants.
+- **So yes, you must request access, and as an unaffiliated researcher you do not meet item 2 as written.** Asking costs nothing, but expect a no unless you can offer an independent ethics review (see Issue 4 in [`ongoing_general_errors.md`](ongoing_general_errors.md)).
 
-**Subject:** Access request: Bystander Affect Detection (BAD) dataset
+**How:**
+1. Register a free QDR account.
+2. Open the dataset page: `https://data.qdr.syr.edu/dataset.xhtml?persistentId=doi:10.5064/F6TAWBGS`.
+3. Use **Request Access** on the files, or **Contact Owner**.
+
+**Subject:** Access request: BAD dataset (independent researcher; question about the IRB requirement)
 
 > Hello,
 >
-> I am an independent researcher (not university-affiliated) studying whether people's spontaneous reactions can serve as a reward signal for robot learning. Project: https://github.com/yelouis/social_robotics
+> I would like to request access to the BAD dataset, and to ask a question about the requirements first.
 >
-> I would like to use the BAD dataset **only as a held-out evaluation set**. Models trained on other data would be tested, without any training on BAD, on whether viewers' reactions predict that a task failed.
+> I am an independent researcher, not affiliated with a university, studying whether people's spontaneous reactions can serve as a reward signal for robot learning (https://github.com/yelouis/social_robotics). I would use BAD **only as a held-out evaluation set** for human-robot interaction research: models trained on other data would be tested, without any training on BAD, on whether viewers' reactions predict that a task failed.
 >
-> How I would handle the data:
-> - non-commercial research only;
-> - no redistribution of any video or frame;
-> - no attempt to identify participants;
-> - stored on a single drive that only I can access, and deleted at the end of the project or on request;
-> - only aggregate metrics (e.g. AUROC) are published, never face images or face embeddings.
+> Your terms ask for a protocol reviewed by an IRB at an affiliated institution, which I do not have. Would either of these be acceptable instead?
+> 1. a protocol reviewed by an independent (commercial) IRB; or
+> 2. my signed special download agreement plus a written data-protection plan.
 >
-> I am glad to sign a data use agreement, follow any protocol you require, and cite the IROS 2023 paper. Please let me know what you need from me.
+> The plan would be: non-commercial use only; no redistribution of any video or frame; no attempt to identify participants; data kept on a single drive only I can access and deleted when the study ends or on request; only aggregate metrics (e.g. AUROC) published, never face images or embeddings.
 >
-> Thank you,
+> If neither is possible, I understand. Thank you for releasing the documentation openly.
+>
 > [Your name] · [email] · [location]
 
 ---

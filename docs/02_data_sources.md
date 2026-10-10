@@ -7,7 +7,7 @@ Every source must provide three things: an **action**, a **reaction** from someo
 | **Verdict videos** (web) | **Hidden** | Taster's face + voice before the verdict | Spoken verdict ("7 out of 10"), parsed from ASR | H1 core; H2 training corpus and scaling curve | Web; sourcing decision pending (Issue 1) |
 | **HoloAssist** | **Hidden / partly visible** | Remote instructor's voice | Mistake annotations per action segment | H1 first-person; H2 target | Public download ([site](https://holoassist.github.io)) |
 | **Oops!** | **Visible** | Filmer's audio (laughs, gasps), visible spectators | Failure-onset timestamp | H1 visible-outcome contrast | Public download ([site](https://oops.cs.columbia.edu/data)) |
-| **BAD** / **ERR@HRI 3.0** | Visible (stimulus video) | Webcam face of the viewer | Failure vs. control stimulus | H2 target: reactions *to robots* | Request + data-use agreement |
+| **BAD** / **ERR@HRI 3.0** | Visible (stimulus video) | Webcam face of the viewer | Failure vs. control stimulus | H2 target: reactions *to robots* | Controlled access: an IRB-reviewed protocol from an affiliated institution (Issue 4) |
 | **REACT** | — | Reactions to robots + explicit feedback | Explicit evaluative feedback | H2 target candidate | Check availability |
 | **Ego4D v0 corpus** (archived) | — | Bystanders | **None** | Optional: false-positive rate on steady-state co-activity | Derived data on the SSD; raw videos deleted October 8 (re-download by id) |
 
@@ -87,7 +87,7 @@ The VLM judge should be strong here, because the failure is visible. That is the
 
 ## BAD / ERR@HRI / REACT: reactions to robots
 
-These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **The maintainer requests access now** (maintainer action M1 in [`ongoing_general_errors.md`](ongoing_general_errors.md)), because data-use agreements take time.
+These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **BAD requires an IRB-reviewed protocol from an affiliated institution**, which the maintainer (unaffiliated) lacks. The access request asks whether an exception is possible, and **Issue 4** holds the fallback: our own consented BAD-style reaction study.
 
 ## Ego4D v0 corpus (archived; optional reuse)
 

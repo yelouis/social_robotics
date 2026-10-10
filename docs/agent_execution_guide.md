@@ -69,7 +69,7 @@
     - Push after every item with **`/usr/bin/git push origin main`**. (`~/.local/bin/git` shadows the system git and lacks the https helper.)
     - **No branches, no PRs. Never amend a pushed commit.**
 14. **Record the resolution in the same commit:** one line under **"Wave A"** in `ongoing_general_errors.md` §3: `A<n> — <title> — git log --grep "(a<n>)" — <measured result>`.
-15. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 4**), with options.
+15. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 5**), with options.
 16. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
 
 ---
@@ -470,7 +470,7 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 
 - **Wave B (hidden-outcome verdict data), DW1.** Needs Issue 1's selection **and** a Wave B spec from the designer. Do not write it yourself.
 - **The face encoder** (`react-face`), DW2: part of Wave B.
-- **H2 transfer** to BAD / ERR@HRI, DW3: needs maintainer action M1 (access) and Wave B.
+- **H2 transfer** to robot-reaction data, DW3: needs Issue 4's selection, the data, and Wave B.
 - **The Ego4D false-positive set,** DW4.
 - **H3** (robot trajectories, RL), DW5.
 - **Stage A live** (the microduck), DW6.

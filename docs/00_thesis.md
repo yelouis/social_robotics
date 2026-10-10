@@ -108,7 +108,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 |---|---|---|
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
 | **B** (≈ weeks 4–7) | **Hidden-outcome H1 pilot**: a reaction followed by a verdict (your own taste-test recordings, AM-FED+, permitted web video, per Issue 1), with face + non-verbal audio | **Issue 1** selected; Wave A closed |
-| **C** (≈ weeks 7–10) | **H2**: transfer to BAD / ERR@HRI; scaling curves on the verdict corpus | BAD access granted (maintainer action M1) |
+| **C** (≈ weeks 7–10) | **H2**: transfer to robot-reaction data (BAD / ERR@HRI if granted, otherwise our own consented study) plus HoloAssist / AM-FED+; scaling curves | **Issue 4** selected and the data in hand |
 | **D** (≈ weeks 10–12) | Paper write-up; decide H3 | — |
 
 ---
@@ -132,4 +132,4 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4). **Issue 3** (SSD capacity) is resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 2** HoloAssist label independence (an agent check, A4), **Issue 4** the robot-reaction H2 target (BAD needs an institutional IRB; needs your selection before Wave C). **Issue 3** (SSD capacity) is resolved.
