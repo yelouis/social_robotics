@@ -21,6 +21,25 @@ Tracked as maintainer actions M1, M4 and M5 in [`ongoing_general_errors.md`](ong
 2. Open the dataset page: `https://data.qdr.syr.edu/dataset.xhtml?persistentId=doi:10.5064/F6TAWBGS`.
 3. Use **Request Access** on the files, or **Contact Owner**.
 
+**The QDR "Request Access" form** (fields as of October 9, 2026). These answers were given to the maintainer to paste; keep any follow-up consistent with them.
+
+| Field | Answer |
+|---|---|
+| Name | Louis Ye |
+| Email | chengluye@gmail.com |
+| Institution | `None (independent researcher)` |
+| Position | `Independent researcher. I am employed at Google, but this request is a personal, non-commercial project and is not made on Google's behalf.` |
+
+- **Research plan, data security plan, ethics protocol:** the three texts are in the maintainer chat of October 9, 2026, and summarized below. The data security plan's commitments then bind the project (`02_data_sources.md` → BAD):
+  - BAD is a held-out evaluation set only;
+  - aggregate metrics only are published;
+  - encrypted local storage on personal hardware;
+  - local processing only, with **no cloud APIs**;
+  - destruction at study end or 12 months after download.
+- **The ethics-protocol field:** an honest statement that no approved protocol exists, and an ask about alternatives.
+
+The email alternative (if you prefer **Contact Owner**):
+
 **Subject:** Access request: BAD dataset (independent researcher; question about the IRB requirement)
 
 > Hello,

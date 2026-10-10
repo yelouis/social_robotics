@@ -87,6 +87,13 @@ The VLM judge should be strong here, because the failure is visible. That is the
 
 ## BAD / ERR@HRI / REACT: reactions to robots
 
+**If BAD access is granted, these commitments from the access request bind the project:**
+- BAD is a held-out evaluation set only, with no training on it;
+- it is stored only in an encrypted volume on the maintainer's personal hardware (never employer devices, never cloud sync);
+- it is processed **locally only**. Frames are never sent to any cloud service or API, **including the Gemini frontier judge**;
+- only aggregate metrics are published; never frames, face crops, embeddings or per-participant results;
+- the data and everything derived from it are destroyed at study end, or 12 months after download, whichever comes first, and QDR is notified.
+
 These are the only sources where the reactions are *to a robot*. They are H2 targets, never training data, so that "trained on web video, transferred to robots" stays a clean zero-shot claim. **BAD requires an IRB-reviewed protocol from an affiliated institution**, which the maintainer (unaffiliated) lacks. The access request asks whether an exception is possible, and **Issue 4** holds the fallback: our own consented BAD-style reaction study.
 
 ## Ego4D v0 corpus (archived; optional reuse)
