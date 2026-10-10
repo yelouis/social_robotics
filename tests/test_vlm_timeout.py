@@ -22,7 +22,8 @@ def test_ollama_chat_posts_to_api_chat_with_enforced_timeout(monkeypatch, tmp_pa
         return FakeResp()
 
     monkeypatch.setattr(vc.httpx, "post", fake_post)
-    img = tmp_path / "f.jpg"; img.write_bytes(b"\xff\xd8\xffabc")
+    img = tmp_path / "f.jpg"
+    img.write_bytes(b"\xff\xd8\xffabc")
     out = vc.ollama_chat("qwen", "hi", image_paths=[str(img)],
                          options={"num_ctx": 4096}, fmt="json", timeout=180)
     assert out == "YES"

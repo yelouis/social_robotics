@@ -222,6 +222,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - R2 — Issue 3: v0 videos deleted (1.336 TB; Ego4D + Charades-Ego); manifest `DATA_ROOT/DELETED_2026-10-08.json`; 1.5 TiB free — same commit as R1.
 
 **Wave A:** *(the implementing agent adds one line per item here, in the item's own commit)*
+- A1 — Battery green and scripted — git log --grep "(a1)" — scripts/battery.sh exit 0 (G1 exit 0, G2 exit 0 [2 passed], G3 skipped).
 
 ---
 

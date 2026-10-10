@@ -45,7 +45,7 @@ Wave A adds `src/harness/`, `src/features/`, `src/judge/` and `src/sources/` ([`
 
 - **Host:** Mac Studio (M4 Max, 64 GB). Raw video lives only on the external SSD (`DATA_ROOT`, see `.env.example`).
 - **Environment:** `venv` (Python 3.9). [Ollama](https://ollama.com/) for the local VLM judge. Optional Gemini API key for the frontier judge.
-- **Tests:** `./venv/bin/python -m pytest tests/`
+- **Battery:** `scripts/battery.sh` (add `--slow` for model/data tests)
 
 ## License & Ethics
 

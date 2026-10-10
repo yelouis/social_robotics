@@ -176,7 +176,6 @@ def _format_banner(tier: str) -> str:
     host_bytes = _detect_host_total_bytes()
     host_str = _human_bytes(host_bytes) if host_bytes else "unknown (no psutil)"
     resident = _estimated_resident_bytes(tier)
-    auto = _auto_tier()
     override = os.getenv("SR_MODEL_TIER", "").strip().lower()
     source = f"env override SR_MODEL_TIER={override}" if override in VALID_TIERS else f"auto-detected (host: {host_str})"
     lines = [

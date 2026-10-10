@@ -105,8 +105,8 @@
 
 | # | Gate | Command | Result |
 |---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | **exit 1** · 3 errors: F841 `src/models_config.py:179` · E702 `tests/test_vlm_timeout.py:25` · E401 `tools/daemonize.py:6` (A1 fixes) |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q tests/` | exit 0 · **2 passed** |
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **2 passed** |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | **does not exist yet** (A2) |
 | G4 | Slow tests | `… -m pytest -q -m slow tests/` | **no slow tests yet** (A5, A6) |
 

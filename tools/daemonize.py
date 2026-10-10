@@ -3,7 +3,8 @@ reaping its background tasks. Double-fork + setsid -> new session, reparented to
 launchd (PPID 1); stdout/stderr appended to a log. Usage:
     daemonize.py <logfile> <cmd> [args...]
 """
-import os, sys
+import os
+import sys
 
 logfile = sys.argv[1]
 cmd = sys.argv[2:]
