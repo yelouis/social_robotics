@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: Wave A (evaluation harness + first H1 numbers, 9 items), October 8, 2026
+# Agent Execution Guide: Active Build: Wave A (evaluation harness + first H1 numbers, 10 items), October 10, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented. The v0 pipeline (six hand-built affect layers over Ego4D, plus a human-rated benchmark) is archived at git tag `v0-saf-final` and removed from the tree, because it could not be validated ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -16,8 +16,11 @@
 - *"Ideally we should avoid human in the loop ratings because that is not scalable and we want to be able to somehow measure whether our thesis is working often."*
 - *"How is this any different from asking an LLM model what is socially appropriate…?"* This is why every H1 result is measured against action-only controls.
 - *"No need to open up a new branch, just push to the repo."*
+- *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026). This is why A6b exists.
 
-**Status:** **Active Build: Wave A** (A1–A9), in the §2 order.
+**Status:** **Active Build: Wave A**, in the §2 order.
+- **A1–A6 have landed** (`651039b` … `0f16799`, October 9, 2026; agent-reported, and designer verification is pending).
+- **Next is A6b, the memory guard, inserted October 10 before A7.** On October 9 the machine ran out of memory while this project's slow tests and the other project's image-generation gates ran at once (`03_eval_harness.md` §12). **A7 must not start until A6b is closed.**
 - One maintainer decision is pending, and it does not block you: **Issue 1** (web video) gates only Wave B, which is not in this guide.
 - **Issue 3** (SSD space) was resolved on October 8: the v0 videos were deleted and 1.5 TiB is free.
 - A4 may end by filing under **Issue 2**.
@@ -71,6 +74,12 @@
 14. **Record the resolution in the same commit:** one line under **"Wave A"** in `ongoing_general_errors.md` §3: `A<n> — <title> — git log --grep "(a<n>)" — <measured result>`.
 15. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 5**), with options.
 16. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
+17. **Memory (from A6b onward).** This Mac is shared with other programs, including the `animated_infographics` agent, browsers and editors, that start and stop at will.
+    - Every model load goes through `shared.memguard.guard()`, and every long loop calls `memguard.check()` between items (`03_eval_harness.md` §12).
+    - **Never run two of this project's model-loading jobs at once.** Chain them in one supervised script, or run them one after another.
+    - Run `python -m shared.memguard --status` before launching any long job, and record its output in the run log.
+    - **A memory deferral (exit 75) is never a pass.** Never raise `FLOOR`, a declared peak, or a wait limit to make a run go through. File it instead.
+    - **Never stop, signal or unload anything this project did not start.**
 
 ---
 
@@ -122,6 +131,7 @@
 | A4 | HoloAssist labels + independence check | Cheap (111 MB, no video). **Its verdict gates A8's 184 GB download,** so start that clock early |
 | A5 | Encoders + feature cache | Needs A3's items. Feeds the probes in A7/A8 |
 | A6 | VLM judge (local + frontier) | Needs A3's items. Feeds the `judge` and `fusion` conditions |
+| A6b | Memory guard (admission, the shared heavy lock, the between-item watchdog) | **Inserted October 10 after the October 9 out-of-memory.** It wraps A5's and A6's model loads and loops, and must exist before A7's multi-hour runs |
 | A7 | Oops!: end-to-end H1 | The smaller dataset (45 GB). It proves the whole pipeline before the big download, and is the visible-outcome contrast |
 | A8 | HoloAssist: end-to-end H1 | Needs A4 = independent and A7's proven pipeline |
 | A9 | Re-measure; close out Wave A | Measures the finished system and writes the summary the designer uses to spec Wave B |
@@ -361,6 +371,82 @@
 
 ---
 
+### A6b: Memory guard (inserted October 10, 2026)
+
+**What this means for the maintainer:** on October 9 the Mac ran out of memory and macOS started killing its own services. Without a guard, A7's multi-hour runs would hit the same wall whenever another program (or the other project's agent) starts a big job. With the guard, our jobs wait their turn, step aside when memory gets tight, and pick up where they left off.
+
+**The gap** (read at `0f16799`):
+- **`src/features/visual.py`** `FrameEncoder._ensure_loaded` and **`src/features/audio.py`** `NonverbalAudioEncoder._ensure_loaded` load models with no memory check, and neither class can release its model.
+- **`src/features/extract.py`** `run_extraction` loops over items with no memory check.
+- **`src/judge/vlm_judge.py`** `OllamaJudge` loads `qwen2.5vl:7b` implicitly on its first call. It never checks memory and never unloads the model when a run ends.
+- **`tools/run_supervised.sh`** treats every non-zero exit as a crash. **`scripts/battery.sh`** has no notion of a deferred gate.
+- **Nothing here takes the machine-wide heavy lock** that `animated_infographics` takes (`~/.cache/animated_infographics/locks/heavy.lock`), so the two projects cannot see each other.
+
+The contract is `03_eval_harness.md` §12 (constants, formula, lock path, exit code and log format, all verbatim).
+
+**Implementation:**
+1. **`src/shared/memguard.py`:**
+   - `FLOOR = 8 GB`; `HEAVY_STEPS = {"sr_siglip": 2 GB, "sr_e2v": 6 GB, "sr_judge_load": 9 GB}`, each with its measurement date in a comment;
+   - `read_memory()` per §12, by `sysctl -n hw.memsize kern.memorystatus_level kern.memorystatus_vm_pressure_level`;
+   - `lock_dir()`: `$INFOGRAPHICS_LOCK_DIR`, else `~/.cache/animated_infographics/locks`, created if missing;
+   - `class MemoryDeferred(Exception)`;
+   - `guard(step)`: a context manager implementing §12 "Admission" steps 1–6;
+   - `check(step, release, reload)`: §12 "Between items";
+   - `unload_own_judge()`: unloads only `get_model("vlm_judge")`;
+   - `log_event(...)`: appends to `DATA_ROOT/runs/memguard.log`;
+   - `main()` for `--status`.
+   - Python 3.9 syntax. **No new dependencies** (`fcntl`, `subprocess`, `httpx`, `psutil` only).
+2. **The encoders:**
+   - Wrap the model load in `_ensure_loaded` with `with memguard.guard(<step>):`, using `sr_siglip` and `sr_e2v`.
+   - Add `release()`: drop the model and processor references, `gc.collect()`, `torch.mps.empty_cache()`.
+3. **`features/extract.py`:**
+   - Before each item, call `memguard.check(<step>, encoder.release, encoder._ensure_loaded)`.
+   - `main()` catches `MemoryDeferred`: it writes progress, prints the §0.12 count line plus `deferred_by_memory_guard=1`, and calls `sys.exit(75)`.
+4. **`judge/vlm_judge.py`:**
+   - Before the first `OllamaJudge` call, if `/api/ps` does not list our model, wrap that call in `guard("sr_judge_load")`.
+   - Call `memguard.check("sr_judge_load", memguard.unload_own_judge, lambda: None)` before each item. The next call reloads the model, through `guard()` again.
+   - `run_judge` unloads our model in a `finally:` block when it ends.
+   - Exit 75 on `MemoryDeferred`, exactly as in step 3.
+   - **`GeminiJudge` is not guarded.** It makes network calls only.
+5. **`tools/run_supervised.sh`:** handle exit 75 per §12 "The supervisor". Add `SR_MEMWAIT_SLEEP_S` and `SR_MAX_MEM_DEFERRALS`, and document both in its header and in `tools/README.md`.
+6. **`tests/conftest.py`** (new): the `MemoryDeferred` → `pytest.exit(..., returncode=75)` hook. **`scripts/battery.sh`:** print the 75 line verbatim per §12.
+7. **Re-measure** each declared peak with `/usr/bin/time -l` on a 50-item run, with the judge read from `ps` RSS of `llama-server` after its first call. Record the measurements in §12's table. If measured × 1.15, rounded up, exceeds a declared peak, raise the constant in this commit. **Never lower one below the measurement.**
+
+**Validation** (fakes for `read_memory` and HTTP in unit tests; the lock dir pointed at a temp dir via `INFOGRAPHICS_LOCK_DIR`):
+- **Admission:**
+  - (a) Admits at once when `available − peak ≥ 8 GB`.
+  - (b) With a fake reader that rises from 10 → 20 GB, waits and then admits `sr_e2v`. The waiting log line matches §12 verbatim.
+  - (c) With `SR_MEM_WAIT_S=1` and memory never sufficient, raises `MemoryDeferred` within about 1–2 s.
+- **Unloading only our own model:**
+  - (d) If `/api/ps` lists both `qwen2.5vl:7b` and `gemma4:26b`, admission for `sr_e2v` unloads **only** `qwen2.5vl:7b`.
+  - **Falsify:** make the code unload every listed model, and the test must FAIL (it asserts `gemma4:26b` was never posted). Then revert.
+- **Between items:**
+  - (e) A warning reading calls `release()`, re-admits, then calls `reload()`.
+  - (f) A critical reading calls `release()` and raises `MemoryDeferred`.
+- **The lock is shared:**
+  - (g) A child process holds `<lock dir>/heavy.lock` through plain `fcntl.flock` (as `animated_infographics` does). `guard()` blocks until the child exits.
+  - (h) Assert the lock-path string with `INFOGRAPHICS_LOCK_DIR` unset equals `os.path.expanduser("~/.cache/animated_infographics/locks/heavy.lock")`.
+  - **Falsify (g):** point our lock at a different file, and the test must FAIL. Then revert.
+- **Release is real (slow):** after `FrameEncoder` + `NonverbalAudioEncoder` load, encode and `release()`, the process footprint (`footprint -p <pid>`) is within 1.5 GB of its pre-load value.
+- **A deferral drill on the real CLI (safe; no memory is consumed):** `SR_MEM_WAIT_S=5` plus a fake-low reading injected through the env override `SR_MEMGUARD_FAKE_AVAILABLE_GB=1` (**test-only**, and it must log `FAKE MEMORY READING` loudly).
+  - `python -m features.extract --dataset test_ds --encoder e2v-plus-large --limit 2` must exit **75** in under 15 s, without loading the model.
+  - `memguard.log` must gain an `action=deferred` line.
+  - Without the override, the same command exits 0.
+- **The supervisor drill:**
+  - A fake runner that exits 75 three times and then 0 must finish `DONE` with 3 deferrals logged and no stale abort, using `SR_MEMWAIT_SLEEP_S=1`.
+  - A runner that exits 1 twice with no progress must still abort as before.
+- **The battery:**
+  - With `SR_MEMGUARD_FAKE_AVAILABLE_GB=1`, `scripts/battery.sh --slow` prints `G4 slow: exit 75 (deferred by memory guard; not run)` and exits 75.
+  - Without it, all of G1–G4 exit 0.
+
+**Blast radius:**
+- code: `src/features/visual.py`, `src/features/audio.py`, `src/features/extract.py`, `src/judge/vlm_judge.py`, `tools/run_supervised.sh`, `tools/README.md`, `scripts/battery.sh`;
+- tests: `tests/test_features.py`, `tests/test_judge.py` (slow tests now go through the guard);
+- new files: `tests/conftest.py`, `tests/test_memguard.py`;
+- docs: `03_eval_harness.md` §12 (re-measured peaks), this guide's §1.4.
+
+---
+
 ### A7: Oops!, end-to-end H1 (the visible-outcome contrast)
 
 **What this means for the maintainer:** the first real number. Failures in fail videos are *visible*, so we predict the judge does well and reactions add little. If the pipeline cannot reproduce that unglamorous prediction, nothing it says about hidden outcomes can be trusted.
@@ -539,6 +625,7 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 |---|---|
 | The thesis, H1–H3, pass/kill, the decision log | `00_thesis.md` |
 | Items, splits, the scorecard schema, conditions, metrics, the judge prompt, encoders | `03_eval_harness.md` §3–§9 |
+| The memory guard: floor, peaks, the shared heavy lock, exit 75, supervisor and battery behavior | `03_eval_harness.md` §12 |
 | Oops! and HoloAssist item definitions, facts, leakage rules | `02_data_sources.md` |
 | Prior work and baselines | `01_prior_work.md` |
 | Issues 1–3, maintainer actions, deferred work, lessons, the resolved index | `ongoing_general_errors.md` |
@@ -560,7 +647,7 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 ## 8. THE LOOP
 
 ```
-(1) Is there an approved item? A1–A9, in §2 order. If all are done or
+(1) Is there an approved item? A1–A9 plus A6b, in §2 order. If all are done or
     blocked, STOP. Never start §4 work. Never fill in a `Your selection:`
     line.
 (2) Read the item and EVERY contract section it names. Copy paths,
@@ -583,7 +670,8 @@ If any is missing, skip to A9 and record A8 as "blocked on <issue>".
 
 ## 9. Definition of Done: Wave A
 
-- [ ] A1–A9 each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
+- [ ] A1–A9 and A6b each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
+- [ ] The memory guard holds: every model load is admitted through the heavy lock shared with `animated_infographics`; the deferral drills exit 75; `memguard.log` shows no `action=stop` that was not followed by a clean resume; and no jetsam report during a Wave A run names one of our processes.
 - [ ] `scripts/battery.sh` exits 0, and `--slow` exits 0.
 - [ ] G3's self-test passes all 4 checks; check (c) was shown to fail with item-level resampling.
 - [ ] Split files exist for each dataset run, are group-disjoint, and are hash-verified.

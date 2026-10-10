@@ -27,6 +27,7 @@ src/features/audio.py      NonverbalAudioEncoder (emotion2vec+)
 src/judge/vlm_judge.py     VLMJudge (local ollama + Gemini anchor)
 src/sources/oops.py        Oops! adapter      -> items.jsonl
 src/sources/holoassist.py  HoloAssist adapter -> items.jsonl
+src/shared/memguard.py     memory admission, heavy lock, between-item watchdog (§12)
 splits/<dataset>.json      tracked split files
 results/scorecard.jsonl    tracked scorecard history
 docs/evals/                dated evaluation reports
@@ -170,3 +171,83 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 4. **H2 targets are never training data** (BAD, ERR@HRI; HoloAssist when used as an H2 target).
 5. **Kill and pass criteria are written before results** ([`00_thesis.md`](00_thesis.md)). They change only through a dated decision-log entry.
 6. **`context_text` never reveals the outcome.** Each adapter's choice is stated in [`02_data_sources.md`](02_data_sources.md).
+
+## 12. Memory guard (added October 10, 2026)
+
+**Why.** On October 9, 2026 at 19:50–19:52 the 64 GB Mac ran out of memory. The macOS jetsam reports (`/Library/Logs/DiagnosticReports/JetsamEvent-2026-10-09-19505*.ips`) show:
+- two `python3.12` processes at 26.6–27.2 GB each, which were the `animated_infographics` agent running four image-generation gates at once (its `docs/design_system_architecture.md` §11);
+- Ollama's `llama-server` at 10.5 GB;
+- this project's A5/A6 slow tests, which loaded SigLIP and emotion2vec and called the Ollama judge in the same window.
+
+macOS killed its own services for lack of compressor space. Nothing in either project checked memory. **Other programs start and stop at will** (the other project, browsers, editors, other agents), so the memory free when a run starts says little about ten minutes later.
+
+**Principles** (shared with `animated_infographics`, so the two projects cooperate):
+1. **Admission, not hope.** Check the memory available *now* before loading any model.
+2. **One heavy step at a time on the whole machine.** Take the **same** machine-wide lock file as `animated_infographics`.
+3. **Re-check between items.** Back off when someone else needs the memory.
+4. **Free our own memory first; never touch another program's.** We only ever unload our own Ollama model (`get_model("vlm_judge")`). Never `gemma4:26b` or any other.
+5. **Fail clean.** A job that cannot get memory waits, then exits **75** (`EX_TEMPFAIL`) with its progress saved, and the supervisor relaunches it later. The kernel never gets to kill one of ours.
+
+**Available memory and pressure** (the same formula as `animated_infographics`):
+- `available = hw.memsize × kern.memorystatus_level / 100`. That is the kernel's free percentage, the one jetsam acts on.
+- `pressure = kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical.
+- Both are read with `sysctl -n`, through one function `read_memory() -> (available_bytes, pressure)` that tests replace with a fake.
+- **`FLOOR = 8 GB`** must remain available after any admission.
+
+**Heavy steps and their declared peaks** (`src/shared/memguard.py`, `HEAVY_STEPS`). Declared peak = measured × 1.15, rounded up to a whole GB:
+
+| Step | Where | Measured (designer, October 10, 2026, M4 Max) | Declared peak |
+|---|---|---|---|
+| `sr_siglip` | `FrameEncoder` model load | 1.56 GB process footprint after load + one window (MPS 1.03 GB) | **2 GB** |
+| `sr_e2v` | `NonverbalAudioEncoder` model load | 4.76 GB peak RSS during load + one window; 3.0 GB steady | **6 GB** |
+| `sr_judge_load` | first `OllamaJudge` call while `qwen2.5vl:7b` is not loaded | `llama-server` 7.72 GB RSS; `/api/ps` 6.8 GiB at `num_ctx` 8192 | **9 GB** |
+
+- After `release()`, the process measured 1.10 GB, against 0.14 GB before loading.
+- The implementing agent **re-measures** each step with `/usr/bin/time -l` ("peak memory footprint") on a 50-item run. If measured × 1.15 rounds up above a declared peak, the constant and this table are raised in the same commit.
+
+**The lock (shared with `animated_infographics`):**
+- **File:** `fcntl.flock(LOCK_EX)` on `<lock dir>/heavy.lock`. The lock dir is `$INFOGRAPHICS_LOCK_DIR` if set, else `~/.cache/animated_infographics/locks`, which is that project's default. **The path must equal theirs**, or the two projects stop seeing each other.
+- **Contents:** while holding it, write one line, `<step> pid <pid>`, the format their `get_heavy_lock_holder()` parses.
+- The OS releases a `flock` when its process dies, so there is never a stale lock.
+
+**Admission:** `with guard("<step>"):` wraps every model load: `FrameEncoder._ensure_loaded`, `NonverbalAudioEncoder._ensure_loaded`, and `OllamaJudge` before a call while its model is absent from `GET /api/ps`. Every code path that loads a model (CLIs, the A7/A8 runs, slow tests) is therefore guarded, with no caller remembering to.
+1. Take the heavy lock, polling non-blocking every 0.5 s.
+2. Admit when `available − peak(step) ≥ FLOOR`.
+3. If not admitted, and the step is not `sr_judge_load`, and our judge model is loaded: unload **only** it (`POST /api/generate {"model": <get_model("vlm_judge")>, "keep_alive": 0}`), wait up to 30 s for `/api/ps` to drop it, then check again.
+4. Otherwise wait, checking every 5 s. At most every 30 s, log `memory guard: waiting for <step>: need <peak> GB + floor 8 GB, available <a> GB, pressure <p>, heavy lock <free|held by pid N>`.
+5. After `SR_MEM_WAIT_S` (default **1800 s**) in total, raise `MemoryDeferred`. CLIs turn that into **exit 75**.
+6. Hold the lock only through the load and the first item (the peak), then release it. A loaded, idle model is ordinary used memory that the other project's admission already accounts for.
+
+**Between items** (`memguard.check(release, reload)`, called before every item in `features.extract` and the judge loop):
+- **Critical** (`pressure == 4` or `available < FLOOR / 2`):
+  - call `release()`;
+  - save progress;
+  - log `action=stop`;
+  - raise `MemoryDeferred`, so the CLI exits **75**.
+- **Warning** (`pressure == 2` or `available < FLOOR`):
+  - call `release()`;
+  - re-enter `guard()` (which waits for room, with natural hysteresis: re-admission needs `peak + 8 GB` free);
+  - call `reload()`;
+  - continue.
+- **`release()`** drops the model references, runs `gc.collect()` and `torch.mps.empty_cache()`, and for the judge unloads only our own Ollama model. The process must return within **1.5 GB** of its pre-load footprint.
+- **The judge also releases when its run ends,** unloading only our model.
+
+**The supervisor** (`tools/run_supervised.sh`):
+- Exit **75** means "deferred by memory guard". Sleep `SR_MEMWAIT_SLEEP_S` (default **600 s**), relaunch, and **do not** count the attempt toward the no-progress abort.
+- After `SR_MAX_MEM_DEFERRALS` (default **72**, about 12 h) consecutive deferrals, abort with `memory guard: deferred <n> times; giving up`.
+- Any other non-zero exit keeps today's behavior.
+
+**Tests and the battery:**
+- `tests/conftest.py` turns an uncaught `MemoryDeferred` into `pytest.exit("memory guard: deferred: <message>", returncode=75)`. A guarded slow test **never** skips silently and never passes.
+- `scripts/battery.sh` prints `G<n> <name>: exit 75 (deferred by memory guard; not run)` for that code. The battery's exit is the maximum code as before, so a deferral is never read as green.
+
+**Status:** `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` prints:
+- the available GB and pressure level;
+- the heavy-lock holder's pid and step, if any;
+- the Ollama models loaded, with their sizes, marking ours.
+
+Agents run it before any long job.
+
+**A test-only override:** `SR_MEMGUARD_FAKE_AVAILABLE_GB=<n>` makes `read_memory()` report `n` GB at pressure 1, so the deferral path can be drilled without consuming memory. While it is set, every read logs `memory guard: FAKE MEMORY READING (<n> GB)`. No run that counts toward results may set it.
+
+**The log:** every admission, wait summary, pause, stop and unload appends one line to `DATA_ROOT/runs/memguard.log`: `ts=<iso> pid=<p> step=<s> action=<admit|pause|resume|stop|unload|deferred> waited_ms=<w> available_gb=<a> pressure=<p>`.
