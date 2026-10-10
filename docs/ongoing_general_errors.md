@@ -223,6 +223,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 
 **Wave A:** *(the implementing agent adds one line per item here, in the item's own commit)*
 - A1 — Battery green and scripted — git log --grep "(a1)" — scripts/battery.sh exit 0 (G1 exit 0, G2 exit 0 [2 passed], G3 skipped).
+- A2 — Metrics, scorecard, self-test — git log --grep "(a2)" — G3 selftest passes 4/4 checks (planted AUROC=0.830 [0.807, 0.852], null CI=[0.459, 0.523], grouping width ratio=4.66, paired delta exact 0 on same scores).
 
 ---
 

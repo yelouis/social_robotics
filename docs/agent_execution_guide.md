@@ -106,8 +106,8 @@
 | # | Gate | Command | Result |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **2 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | **does not exist yet** (A2) |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **11 passed** |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · **4 passed** |
 | G4 | Slow tests | `… -m pytest -q -m slow tests/` | **no slow tests yet** (A5, A6) |
 
 ---
