@@ -14,7 +14,7 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 5** (new, October 10): the "just ask an LLM" control is unmeasured. The local judge is at chance on Oops!, and the frontier judge is blocked by the free-tier quota. It blocks nothing in the queue, but it decides whether Wave A's headline has a credible LLM control.
+  - **Issue 5 was decided October 10: option B.** A larger local judge (`gemma4:26b`, condition `judge-large`) is added as the stronger "just ask an LLM" control; no frontier billing. The guide item **A7c** builds it.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4) and Issue 3 (SSD space; October 8).
@@ -31,7 +31,7 @@
     - it says the prediction "holds" although the judge, which was predicted to be strong, scored 0.472;
     - it counts `errors.jsonl` rows (HTTP 429) as "parse failures";
     - it has no wall-clock times, and its example descriptions are template text.
-- **In progress, uncommitted:** **A8 (HoloAssist).** The 184 GB video download was running at 62 GB on October 10, 11:09. The draft adapter needs the corrections listed in guide item A8.
+- **In progress:** **A8 (HoloAssist).** At the maintainer's request, the draft was committed as found in `949c180` (incomplete). The video download finished October 10 at 13:01: 2,111 videos, archive deleted. The draft needs the corrections listed in guide item A8.
 
 ---
 
@@ -169,7 +169,9 @@ Your selection: _____
 
 ### Issue 5: The "just ask an LLM" control is unmeasured: the local judge is at chance on Oops!, and the frontier judge is blocked by the free-tier quota
 
-**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification of A7, October 10, 2026. Nothing in the agent queue waits on it, but Wave A's headline does.
+**Status**: ✅ **Decided: option B, by the maintainer, October 10, 2026** (in chat: *"my choice of option B for Issue 5"*). Implementation: guide item **A7c**, with the contract in `03_eval_harness.md` §6, §8 ("Large local judge") and §12 (`sr_judge_large_load`). The entry moves to 🧪 Resolved once A7c has run `judge-large` on Oops!.
+
+*Found in the designer's verification of A7, October 10, 2026. The original filing follows, unchanged.*
 
 **Facts (October 10, 2026):**
 1. **The local judge is at chance where it should be strongest.** On the Oops! test split, `qwen2.5vl:7b` scored AUROC **0.472 [0.440, 0.498]** (scorecard row `2026-10-10T17:33:22Z`, n = 1,072, 90 groups). Oops! failures are *visible*, and the spec predicted a strong judge here.
@@ -223,7 +225,7 @@ Your selection: _____
 - *Pros:* free.
 - *Cons:* the prompt would change *after* seeing test results. That is tuning on test, which the guide rejects (§5.5). Even choosing on the train split alone, it is a post-hoc protocol change.
 
-Your selection: _____
+Your selection: **B** (maintainer, October 10, 2026)
 
 ---
 
@@ -260,7 +262,7 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
 | M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional |
 | M4 | Sign and send the **AM-FED+** EULA | Issue 1 option E: reactions + self-reported liking | Open, pending the Issue 1 selection |
 | M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | Optional |
-| M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Open. This is **Issue 5, option A**: decide there first |
+| M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Not needed: Issue 5 was decided as **option B** (a larger local judge) on October 10. The frontier judge stays on the free tier |
 
 ---
 

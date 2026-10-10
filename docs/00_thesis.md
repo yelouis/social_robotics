@@ -146,6 +146,9 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Oops! `react-nonverbal` (0.711) is not evidence of reaction signal,** because its audio window contains the failure's own sound (`02_data_sources.md` → Oops! → "As built").
     - **Whether a frontier judge is run is Issue 5.**
 
+**2026-10-10** (maintainer):
+18. **Issue 5 → option B: a larger local judge instead of paid frontier calls.** `gemma4:26b` (already installed, vision-capable) is added as the condition `judge-large`, on the test split only. It enters `action_best` at ≥ 90% coverage. It is shared with `animated_infographics`, so it runs with that project's runner options and is never unloaded by us (`03_eval_harness.md` §8). The frontier judge stays on the free tier.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge: enable billing, use a larger local judge, or report without one) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is decided: option B, a larger local judge (`judge-large`). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

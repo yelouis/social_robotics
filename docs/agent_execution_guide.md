@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: Wave A, remaining items (A6c → A7b → A8 → A9), October 10, 2026
+# Agent Execution Guide: Active Build: Wave A, remaining items (A6c → A7b → A7c → A8 → A9), October 10, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented. The v0 pipeline (six hand-built affect layers over Ego4D, plus a human-rated benchmark) is archived at git tag `v0-saf-final` and removed from the tree, because it could not be validated ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -13,14 +13,15 @@
 - **What you build:** the rest of Wave A, in the §2 order:
   - **A6c:** fix three memory-guard defects found in verification;
   - **A7b:** correct the Oops! report, and give the frontier judge the same parse retries as the local one;
-  - **A8:** finish HoloAssist, resuming an uncommitted draft, with corrections;
+  - **A7c:** add the larger local judge `gemma4:26b` (`judge-large`, the maintainer's Issue 5 choice), and run it on Oops!;
+  - **A8:** finish HoloAssist, resuming the draft committed in `949c180`, with corrections;
   - **A9:** close out Wave A.
 
 **Read before anything else, in this order:**
-1. [`00_thesis.md`](00_thesis.md): the thesis, H1–H3, the pass and kill criteria, and the decision log (entries 15–17 are this verification).
-2. [`03_eval_harness.md`](03_eval_harness.md): **the contract** for every path, schema, constant and prompt. §4–§6, §8 and §12 were amended on October 10; each amendment is marked *(added/clarified October 10, 2026)*.
+1. [`00_thesis.md`](00_thesis.md): the thesis, H1–H3, the pass and kill criteria, and the decision log (entries 15–17 are the verification; 18 is the maintainer's Issue 5 choice).
+2. [`03_eval_harness.md`](03_eval_harness.md): **the contract** for every path, schema, constant and prompt. §4–§6, §8 and §12 were amended on October 10; each amendment is marked *(added/clarified October 10, 2026)*. §8 "Large local judge" is A7c's contract.
 3. [`02_data_sources.md`](02_data_sources.md): Oops! "As built" and HoloAssist "Item construction: pinned details" (both October 10).
-4. [`ongoing_general_errors.md`](ongoing_general_errors.md): §1 (the verification summary), **Issue 5**, and §2 (the lessons, especially L10 and L11).
+4. [`ongoing_general_errors.md`](ongoing_general_errors.md): §1 (the verification summary), **Issue 5** (decided: option B), and §2 (the lessons, especially L10 and L11).
 
 **The maintainer's words:**
 - *"The fundamental core of this project is to use human emotion as a policy for robot learning in addition to the traditional RL stack for robots. We want to add this additional reward signal and investigate if this additional reward signal helped the robot learn a task better and perhaps allow robots to train on much more data like vlogs or any POV youtube video."*
@@ -28,10 +29,11 @@
 - *"How is this any different from asking an LLM model what is socially appropriate…?"* This is why every H1 result is measured against action-only controls, and why Issue 5 matters.
 - *"No need to open up a new branch, just push to the repo."*
 - *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026)
+- *"Update the agent_execution_guide to reflect my choice of option B for Issue 5. Make sure to commit and push the code that hasn't been committed yet"* (October 10, 2026). This is why A7c exists, and why the A8 draft is committed (`949c180`).
 
 **Status:** **Active Build: Wave A, remaining items.** Next is **A6c**.
-- **One maintainer decision is open: Issue 5** (the frontier judge). It blocks no item. A8 and A9 write honest `not run`/`partial` rows if it is not selected, and A9 has a conditional step if it is.
-- **Issue 1** gates only Wave B, which is not in this guide.
+- **Issue 5 is decided: option B.** `gemma4:26b` becomes the second local judge (`judge-large`, test split only). The frontier judge is **not** run beyond the free tier, so its rows stay `partial`/`not run` with derived reasons.
+- **No maintainer decision blocks this queue.** **Issue 1** gates only Wave B, which is not in this guide.
 
 **Every path, number, field name and literal string in this guide and in `03_eval_harness.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
 
@@ -58,7 +60,7 @@
 4. **Data placement and disk.**
    - All data lives under `DATA_ROOT` (`src/config.py`, default `/Volumes/Extreme SSD/social_robotics`). **No video or audio on the internal disk, ever.**
    - The free space *after* any download and extraction must stay **≥ 50 GiB**.
-5. **Authorized downloads:** only the HoloAssist pitch-shifted videos, which are **already downloading** (§1.6). **No other download of any kind. No YouTube or web video. Never circumvent a login wall, CAPTCHA or bot check.**
+5. **No downloads of any kind remain authorized.** The HoloAssist pitch-shifted videos finished on October 10 (§1.2). No YouTube or web video. Never circumvent a login wall, CAPTCHA or bot check.
 6. **Never delete anything you did not create.** You may delete a downloaded archive only after you have verified its extraction.
 7. **Long runs (> 30 min) run detached:**
    ```bash
@@ -81,7 +83,7 @@
     - One item = one Conventional Commit on `main`, scope = item id (`fix(a6c): …`, `fix(a7b): …`, `feat(a8): …`).
     - The body states the WHY, the red run and the green run.
     - Push after every item with **`/usr/bin/git push origin main`**. **No branches, no PRs. Never amend a pushed commit.**
-    - **Stage by explicit path only** (`/usr/bin/git add <path> <path> …`). Never `git add -A`, `git add .` or `git commit -a`. Until A8's commit, the tree holds the uncommitted A8 draft (§1.3), and it must not leak into A6c's or A7b's commit.
+    - **Stage by explicit path only** (`/usr/bin/git add <path> <path> …`). Never `git add -A`, `git add .` or `git commit -a`. If `git status` shows a change you did not make, another session may be working in this tree: **STOP and ask the maintainer.**
 15. **Record the resolution in the same commit:** one line under **"Wave A"** in `ongoing_general_errors.md` §3: `A<n> — <title> — git log --grep "(a<n>)" — <measured result>`.
 16. **When this guide and a contract doc disagree, STOP and file it** in `ongoing_general_errors.md` as a new issue (the next number is **Issue 6**), with options.
 17. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
@@ -90,8 +92,8 @@
     - **Never run two of this project's model-loading jobs at once.**
     - Run `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` before any long job, and record its output in the run log.
     - **A memory deferral (exit 75) is never a pass.** Never raise `FLOOR`, a declared peak or a wait limit to make a run go through.
-    - **Never stop, signal or unload anything this project did not start.** `gemma4:26b` in Ollama is another program's.
-19. **Running jobs are not yours to stop** (§1.6). Leave the HoloAssist download and the Gemini job running.
+    - **Never stop, signal or unload anything this project did not start.** `gemma4:26b` is **shared** with `animated_infographics`: `judge-large` calls it with that project's runner options, and **nothing here ever unloads it** (`03_eval_harness.md` §8).
+19. **Running jobs are not yours to stop** (§1.6). Leave the Gemini job running unless the maintainer says otherwise.
     - **Never edit `tools/run_supervised.sh` in place while a supervisor is running it.** Bash reads a script from its open file as it executes. Write the new version to a temp file and `mv` it over the original: the rename gives a new inode, and the running shells keep the old one.
 
 ---
@@ -111,41 +113,49 @@
 
 ### 1.2 Storage (Extreme SSD)
 
-- 1.8 TiB total, **1.4 TiB free** (October 10, 11:09).
+- 1.8 TiB total, **1.3 TiB free** (October 10, 14:40, after the HoloAssist extraction).
 - **Oops!:** `raw/oops/oops_dataset/` holds 29,940 extracted videos. The archive was deleted after verification (`raw/oops/DOWNLOAD.json`).
 - **HoloAssist:**
   - `raw/holoassist/labels/`: hashes re-verified October 10 against `DOWNLOAD.json`;
-  - `raw/holoassist/video_pitch_shifted.tar`: downloading (§1.6).
+  - **`raw/holoassist/videos/<session>/Export_py/Video_pitchshift.mp4`: 2,111 sessions,** which is every session in the official split lists (1,466 + 207 + 438).
+    - The archive (197,783,674,880 bytes, sha256 `1f4f68b9…`) was downloaded, extracted and deleted by 13:01; `raw/holoassist/progress.json` ends at `"verified"`.
+    - The 1,758 *annotated* sessions are a subset. A8 correction 5 counts their coverage.
 - **Still in place; do not touch:** `huggingface_cache/`, `ego4d_data/`, `saf_env/`, `social_robotics/full_run_2026_06_18/`, `social_robotics/bench_v0/`, `DELETED_2026-10-08.json`.
 
 ### 1.3 Repository and working tree at hand-off
 
-- `HEAD` = `6d72492` (`feat(a7)`), pushed. v0 is at tag `v0-saf-final`.
-- **The uncommitted A8 draft, written by a previous agent.** It is not yours to discard; A8 resumes it:
+- `HEAD` = **`949c180`**, pushed. **The working tree is clean.**
+  - `949c180` `chore(a8)`: the A8 draft, committed as found, at the maintainer's request;
+  - `7a30c69` `docs`: the verification;
+  - `6d72492` `feat(a7)`.
 
-  | State | Path | What it is |
+  v0 is at tag `v0-saf-final`.
+- **The A8 draft, written by a previous agent and committed as found in `949c180` (incomplete).** A8 resumes from it:
+
+  | In `949c180` | Path | What it is |
   |---|---|---|
   | modified | `src/sources/holoassist.py` | `--build`: the item builder, group split and balanced sampling (+294 lines) |
   | modified | `src/harness/probes.py` | HoloAssist `react-spoke` and `react-full` branches |
   | modified | `src/harness/splits.py` | `make_group_split(…, source=, seed=)` |
   | modified | `tests/test_probes.py` | `test_run_probes_holoassist_synthetic` |
-  | modified | `tests/test_memguard.py` | one line patching `is_our_judge_loaded` in test (b). **This hunk belongs to A6c**; commit it there |
+  | modified | `tests/test_memguard.py` | one line patching `is_our_judge_loaded` in test (b). A6c builds on it |
   | new | `splits/holoassist.json` | 3,000 train / 2,000 test. Its item ids are in the **wrong format**, so A8 regenerates it |
   | new | `tests/test_sources_holoassist.py` | 6 tests; 3 read SSD data in the fast suite |
-  | new | `tools/download_holoassist.py` | the running download (§1.6) |
+  | new | `tools/download_holoassist.py` | the video download; it ran to completion October 10, 13:01 |
   | new | `tools/check_audio_presence.py` | A8 step 2 (needs corrections) |
   | new | `tools/report_holoassist.py` | A8 report generator (not yet run) |
 
-- **If any draft file's modification time is later than 2026-10-10 11:30,** another session may still be working in this tree. **STOP and ask the maintainer** before editing.
-
 ### 1.4 Gates (run bare October 10, 2026; the regression bar)
 
-| # | Gate | Command | `HEAD` (clean export) | Working tree (with the A8 draft) |
-|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **41 passed** | exit 0 · **48 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | not run on the export | exit 0 · **5 passed** (82 s) |
+| # | Gate | Command | `HEAD` = `949c180` |
+|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) |
+
+- G1–G3 were run on `949c180`'s exact content just before it was committed. G4 was run earlier the same day on the same content.
+- For reference, `6d72492` without the draft gave 41 passed in G2.
 
 - `memguard --status` before G4: 40.3 GB available, pressure 1, heavy lock free, `gemma4:26b` loaded (not ours).
 - **What the battery does not catch** (it is green, and these were found by reading the code; they are A6c's and A7b's gaps):
@@ -162,18 +172,20 @@
 | Oops! split | `splits/oops.json` (tracked) | `source: official`, hash-verified |
 | Oops! features | `features/oops/{siglip-b16-224,e2v-plus-large}/` | 2,708 `.npy` each. 1 undecodable clip (2 items, train) is in `errors.jsonl` |
 | Oops! local judge | `judge/oops/qwen2.5vl_7b/2409b2876016.jsonl` | 2,708 answers, **0 null**. 2 ffmpeg errors (the same clip) in `errors.jsonl` |
-| Oops! frontier judge | `judge/oops/gemini-3.6-flash/2409b2876016.jsonl` | 11 of 1,072 scored. `errors.jsonl` holds 429s (Issue 5) |
+| Oops! frontier judge | `judge/oops/gemini-3.6-flash/2409b2876016.jsonl` | 13 of 1,072 scored by 14:40 (free tier, 20/day). `errors.jsonl` holds 429s. Issue 5 = B: not run further |
+| Oops! large local judge | `judge/oops/gemma4_26b/` | Does not exist yet (A7c) |
 | Oops! rows | `results/scorecard.jsonl` | 11 rows, `2026-10-10T17:33:22Z`–`…26Z`. Judge **0.472** [0.440, 0.498]; action-probe 0.779; react-nonverbal 0.711; fusion 0.793; Δ +0.015 [−0.002, 0.029]; shuffled controls 0.510 / 0.468 / 0.513 |
 | HoloAssist items (draft) | `items/holoassist/items.jsonl`, `stats.json` | 5,000 items (2,500 per class), built with the draft. **Rebuilt in A8** (item-id format) |
 | Memory-guard log | `runs/memguard.log` | No real `pause` or `stop` yet (the only `stop`/`deferred` lines are fake-reading drills). No jetsam report since October 9 |
 
-### 1.6 Processes running at hand-off (October 10, 11:09)
+### 1.6 Processes running at hand-off (October 10, 14:40)
 
 | PID | What | Note |
 |---|---|---|
-| 40612 (PPID 1) → 40623 → curl 40626 | `run_supervised.sh raw/holoassist/progress.json ./venv/bin/python tools/download_holoassist.py` | 62.1 of 184.2 GB at 11:09 (~37 MB/s). It then hashes, extracts into `raw/holoassist/videos/`, counts `.mp4` (deleting the archive only if ≥ 1,000) and sets `progress.json` to `["verified"]` |
-| 37143 (PPID 1) → 37154 | `run_supervised.sh …/judge/oops/gemini-3.6-flash/progress.json ./venv/bin/python -m judge.vlm_judge --dataset oops --split test --backend gemini --limit 2000` | Retrying 429s. It is futile until Issue 5 is decided, but harmless (network only), and its cache is valid. **Leave it** |
-| 38143 | Ollama `llama-server` with `gemma4:26b` | Another program's. Never unload it |
+| 37143 (PPID 1) → 37154 | `run_supervised.sh …/judge/oops/gemini-3.6-flash/progress.json ./venv/bin/python -m judge.vlm_judge --dataset oops --split test --backend gemini --limit 2000` | Retrying 429s, and picking up a free-tier answer now and then. Harmless (network only); its cache is valid. Issue 5 = B means it will never finish. **Leave it**: stopping it is the maintainer's call |
+
+- The HoloAssist download supervisor finished and exited at 13:01.
+- Ollama had **no** model loaded at 14:40.
 
 Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_holoassist|vlm_judge" | grep -v grep`.
 
@@ -183,9 +195,10 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
 
 | # | Item | Why this position |
 |---|---|---|
-| A6c | Memory-guard fixes: a re-entrant guard, a fail-closed memory read, supervisor accounting, and no live HTTP in fast tests | **A8's feature extraction is the longest model run of Wave A** (5,000 items × 2 encoders, then 5,000 judge calls at ~9 s each), and it runs under contention. Today the first `warning` reading would make extraction hold the machine-wide lock for 30 min and then exit 75. It lands while the download finishes, and touches no A8 draft file except `tests/test_memguard.py`, whose draft hunk belongs here |
-| A7b | Oops! report corrections; frontier parse parity | A8's report must not copy A7's defects, so the corrected generator is A8's template. The Gemini fix must land before any Gemini run on HoloAssist (Issue 5 = A). It touches no A8 draft file |
-| A8 | HoloAssist: end-to-end H1, resuming the draft with corrections | Needs A6c (extraction), A7b (the report pattern) and the download marked `["verified"]` (§1.6) |
+| A6c | Memory-guard fixes: a re-entrant guard, a fail-closed memory read, supervisor accounting, and no live HTTP in fast tests | **A8's feature extraction is the longest model run of Wave A** (5,000 items × 2 encoders, then 5,000 judge calls at ~9 s each), and it runs under contention. Today the first `warning` reading would make extraction hold the machine-wide lock for 30 min and then exit 75. A7c's shared-model check (`check_shared`) also builds on the guard this item fixes |
+| A7b | Oops! report corrections; frontier parse parity | A8's report must not copy A7's defects, so the corrected generator is A8's template. A7c regenerates the Oops! report with it |
+| A7c | The large local judge (`judge-large`, `gemma4:26b`), plus the probes' not-run/partial rules; run on Oops! | The maintainer's Issue 5 choice. It needs A6c (memory guard) and A7b (the generator it reruns). It comes **before** A8, so HoloAssist is judged by both local judges in one pass, and Oops! gets its stronger control while the HoloAssist pipeline is built |
+| A8 | HoloAssist: end-to-end H1, resuming the draft with corrections | Needs A6c (extraction), A7b (the report pattern) and A7c (the `judge-large` backend and the probes' rules). The download is done (§1.2) |
 | A9 | Re-measure; close out Wave A | Measures the finished system, and writes the summary the designer uses to spec Wave B |
 
 ---
@@ -258,7 +271,7 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
 - **No live HTTP:** the fast suite is green with the fixture in place, and the fixture's falsification (above) is recorded red.
 - G1–G4 green.
 
-**Blast radius:** `src/shared/memguard.py`, `tools/run_supervised.sh`, `tools/README.md`, `tests/test_memguard.py`; `ongoing_general_errors.md` §3; this guide's §1.4. **Do not** touch the A8 draft files.
+**Blast radius:** `src/shared/memguard.py`, `tools/run_supervised.sh`, `tools/README.md`, `tests/test_memguard.py`; `ongoing_general_errors.md` §3; this guide's §1.4.
 
 ---
 
@@ -282,11 +295,12 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
      - Read answers only from `judge/oops/<model_tag>/<prompt_hash>.jsonl`. Parse failures = rows with `judge_prob: null`.
      - Read `errors.jsonl` separately. Count distinct `item_id`s and classify each by its `error` text: `429` if it contains `429`; `5xx` if it matches `\b5\d\d\b`; `ffmpeg` if it contains `ffmpeg`; else `other`.
      - For Gemini, also print `scored <k> of <n> test items`.
-   - **(b) The prediction check:** a function `prediction_check(rows: Dict[str, dict]) -> List[str]` that returns exactly these three lines, filled from the rows:
-     - `- **Clause 1, "the judge is strong":** judge AUROC <v> [<lo>, <hi>] → <held|did not hold>`. It **held** iff `ci_low > 0.5` **and** the judge's AUROC ≥ the action-probe's AUROC − 0.05.
+   - **(b) The prediction check:** a function `prediction_check(rows: Dict[str, dict]) -> List[str]` that returns these lines, filled from the rows, in this order:
+     - **One Clause 1 line per judge condition with a non-null value,** in the order `judge`, `judge-large`, `judge-frontier`: `- **Clause 1, "the judge is strong" (<condition>):** AUROC <v> [<lo>, <hi>] (<n_items> scored) → <held|did not hold>`. It **held** iff `ci_low > 0.5` **and** that AUROC ≥ the action-probe's AUROC − 0.05.
      - `- **Clause 2, "Δ ≈ 0":** Δ <v> [<lo>, <hi>] (action_best = <name>) → <held|did not hold>`. It **held** iff `ci_low ≤ 0 ≤ ci_high`.
-     - `- **Frontier anchor:** <judge-frontier row: value and CI, or its not-run/partial note> (Issue 5)`.
+     - **For each judge condition whose value is null:** `- **<condition>:** <its notes>`.
      - No other verdict sentence anywhere in the report.
+     - Write it generically: A7c adds `judge-large` rows, and the same function must render them with no change.
    - **(c) Wall-clock time per stage:**
      - features: the sum of `elapsed_ms` over the **last** `index.jsonl` entry per `item_id`, for each encoder;
      - judge: the sum of `elapsed_ms` over the cache rows, per model;
@@ -326,15 +340,113 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
 
 ---
 
+### A7c: The large local judge (`judge-large`, `gemma4:26b`), run on Oops!
+
+**What this means for the maintainer:** on Oops! the small local judge was at chance even though the failures are plainly visible, so "reactions beat asking an AI" was being measured against a straw man. This adds the bigger model you chose (Issue 5, option B) as a stronger control that is still free and still local.
+
+**The gap** (read at `949c180`; contract `03_eval_harness.md` §6, §8 "Large local judge", §12):
+- **`src/models_config.py:36`:** `_MODEL_TIERS` has only `vlm_judge`. There is no `vlm_judge_large` key.
+- **`src/shared/vlm_client.py:42`:** the payload cannot carry the top-level `think` or `keep_alive` fields.
+- **`src/judge/vlm_judge.py`:**
+  - `OllamaJudge` hard-codes its options (`:141`, `:150`, `:165`: `num_ctx` 8192);
+  - it checks only `is_our_judge_loaded` (`:134`), which is the qwen judge;
+  - `run_judge` knows only `ollama` and `gemini` (`:309`, CLI `:468`).
+- **`src/shared/memguard.py`:** `HEAVY_STEPS` (`:24`) has no `sr_judge_large_load`; there is no generic `is_model_loaded(model)` (only `is_our_judge_loaded`, `:139`) and no `check_shared`.
+- **`src/harness/probes.py`:**
+  - it loads only the qwen and Gemini caches (`:144–:149`), so there is no `judge-large` condition;
+  - the frontier row has a hard-coded reason (`:198`) and a 50% rule (`:182`), against §6, and Oops! is about to be re-scored;
+  - there is no `--notes` option (`:432–:434`).
+
+**Implementation:**
+1. **`src/models_config.py`:** add `"vlm_judge_large"` with `("gemma4:26b", "~12 GB", None)` on all three tiers. The comment reads: *shared with animated_infographics (its planner model); None keeps it out of the banner total*. `gemma4:` is already in `_OLLAMA_TAG_PREFIXES`.
+2. **`src/shared/vlm_client.py`:** `ollama_chat(…, think: Optional[bool] = None, keep_alive: Optional[str] = None)`. When either is not `None`, set it as a **top-level** payload field. With both `None`, the payload must be byte-identical to today's (assert it in a test).
+3. **`src/shared/memguard.py`:**
+   - `HEAVY_STEPS["sr_judge_large_load"] = 35 GB`, commented `provisional: 29.7 GB RSS observed October 10 × 1.15; re-measured in A7c step 6`.
+   - `is_model_loaded(model, endpoint=None) -> bool`, which reads `/api/ps`. `is_our_judge_loaded()` becomes `is_model_loaded(get_model("vlm_judge"))`.
+   - `check_shared(step)`, exactly per §12: it never calls a release or an unload.
+   - Admission step 3 is unchanged: only `get_model("vlm_judge")` is ever unloaded.
+4. **`src/judge/vlm_judge.py`:**
+   - `OllamaJudge.__init__(self, model=None, host=None, options=None, think=None, keep_alive=None, load_step="sr_judge_load")`. The defaults reproduce today's qwen behavior exactly.
+   - `make_large_judge()` returns `OllamaJudge(model=get_model("vlm_judge_large"), options={"temperature": 0, "num_ctx": 16384, "num_predict": 16}, think=False, keep_alive="15m", load_step="sr_judge_large_load")`. Retries 2–3 replace only `temperature`, with 0.3.
+   - `judge_item` checks `memguard.is_model_loaded(self.model)` before **every** call, and wraps the call in `guard(self.load_step)` when the model is absent (`animated_infographics` may unload it between our items).
+   - `run_judge`, backend `"ollama-large"`:
+     - `split` must be `"test"`, else `ValueError("judge-large is test split only")`;
+     - `model_tag` = `gemma4_26b`;
+     - between items it calls `memguard.check_shared("sr_judge_large_load")`;
+     - the `finally:` block does **nothing** for this backend. `unload_own_judge()` still runs only for `"ollama"`.
+   - The CLI's `--backend` choices become `ollama`, `ollama-large` and `gemini`.
+5. **`src/harness/probes.py`:**
+   - **(a)** One helper builds the row for a test-only judge condition (`judge-large` and `judge-frontier`) under the §6 rules:
+     - `k = 0` → `not run: no cache file <path>`, or `not run: 0 of <n> scored; last error: <first 80 chars of the last errors.jsonl line>`;
+     - `0 < k < n` → `partial: <k> of <n> scored`, with `metric undefined: …` where it applies;
+     - `k = n` → a plain row.
+
+     Delete `:182` and `:198`.
+   - **(b)** A judge condition enters `action_best` only if `k ≥ 0.9·n`.
+   - **(c)** The `cfg` dict (`:154`) gains `"judge_large_model": "gemma4:26b"` and `"judge_large_options"` (the dict above).
+   - **(d)** `--notes <text>` is appended to every row's `notes`, joined with `"; "` when a row already has notes.
+6. **Measure `sr_judge_large_load`**, with a new `tools/measure_peaks.py --step judge_large`:
+   - **Precondition:** `/api/ps` does not list `gemma4:26b`. If it does, wait for it to expire (`animated_infographics` keeps it 15 min after its last call); **never unload it**.
+   - Record `read_memory()` before the load. Make 50 `make_large_judge()` calls on the first 50 Oops! test items (sorted). Then record the `llama-server` RSS from `ps` (the process whose `--model` blob is `gemma4:26b`'s; find the blob with `ollama show gemma4:26b --modelfile`) and `read_memory()` again.
+   - Measured = the larger of that RSS and the drop in available memory. Set the declared peak to measured × 1.15, rounded up (§12: either direction, this once). Write both numbers into the §12 table and the code comment.
+7. **Run it on Oops!:**
+   - `memguard --status` (recorded); then, detached (§0.7):
+     ```bash
+     ./venv/bin/python tools/daemonize.py <log> bash tools/run_supervised.sh "/Volumes/Extreme SSD/social_robotics/judge/oops/gemma4_26b/progress.json" ./venv/bin/python -m judge.vlm_judge --dataset oops --split test --backend ollama-large
+     ```
+   - 1,072 calls. It is a model-loading job: nothing else of ours runs beside it.
+8. **Re-score Oops!:** `python -m harness.probes --dataset oops --notes "rerun: judge-large added (Issue 5 B)"`. This appends one full row set; the scorecard stays append-only.
+9. **Regenerate `docs/evals/2026-10-10_oops_h1.md`** with A7b's generator:
+   - it now shows the `judge-large` Clause 1 line;
+   - extend the judge diagnostics with **the answer distribution by window type** (`pre`/`post` × answer value) for each local judge, as in Issue 5's table;
+   - add to its correction line: `Updated <YYYY-MM-DD> (A7c): judge-large added (Issue 5, option B).`
+10. **Close Issue 5:** move it to 🧪 Resolved in `ongoing_general_errors.md`, with the measured `judge-large` AUROC and the action_best outcome.
+
+**Validation:**
+- **Red first:** every new test below fails on `949c180`. Record them.
+- **Fast tests (fakes for HTTP and memory):**
+  - **The payload of the large judge:**
+    - `model` is `gemma4:26b`;
+    - `options` are exactly `{"temperature": 0, "num_ctx": 16384, "num_predict": 16}`;
+    - the top-level fields are `"think": false` and `"keep_alive": "15m"`;
+    - there are 4 images and no audio or label.
+
+    The **qwen judge's payload has neither `think` nor `keep_alive`**, so it is unchanged.
+  - **It never unloads the shared model (falsifying):** `run_judge(backend="ollama-large")` with a fake reader that turns `warning` before the 2nd item → raises `MemoryDeferred`. The recorded HTTP calls contain **no** `/api/generate` request and no `keep_alive: 0` for any model. **Falsify:** make `check_shared` post `keep_alive: 0` for `gemma4:26b` → red → revert.
+  - `check_shared`: a `warning` reading → `MemoryDeferred` plus a logged `action=stop`; a normal reading → returns, with no log line.
+  - `run_judge(backend="ollama-large", split="train")` → `ValueError`.
+  - **Probes (synthetic):**
+    - `judge-large` with `k = n` and the best AUROC → it is `action_best`;
+    - `k = 0.5·n` → a `partial` row, not in `action_best`;
+    - a frontier cache that does not exist → `not run: no cache file …`;
+    - a single-class partial → `value: null` with `metric undefined`;
+    - `--notes` is appended.
+  - `tests/test_vlm_timeout.py` still passes unchanged.
+- **Slow:** the live large judge on 4 synthetic `ffmpeg testsrc` items returns non-null probabilities, and afterwards `/api/ps` lists `gemma4:26b` with `context_length` **16384**. That proves our runner options match the other project's, so neither forces a reload.
+- **The real run:**
+  - **coverage ≥ 90%** of the 1,072 items. Below that, the row is `partial`; find out why in `errors.jsonl` before going on;
+  - parse failures counted;
+  - `memguard.log` has `sr_judge_large_load` admit lines and **no** `action=unload` line during the run except `sr_judge_load` ones.
+- **The re-score changed nothing it should not have:** the new `judge`, `action-probe`, `react-nonverbal`, `fusion` and three `:shuffled` rows equal the `2026-10-10T17:33` rows to 4 decimals. The Δ row may change only if `judge-large` became `action_best`, and its `notes` say which.
+- **Read the answers:** print 20 raw `gemma4:26b` answers and the pre/post answer distribution, and describe them in the commit body. Does it also say 90/100 everywhere?
+- G1–G4 green.
+
+**Blast radius:**
+- code: `src/models_config.py`, `src/shared/vlm_client.py`, `src/shared/memguard.py`, `src/judge/vlm_judge.py`, `src/harness/probes.py`, `tools/measure_peaks.py`, `tools/report_oops.py`;
+- tests: `tests/test_judge.py`, `tests/test_memguard.py`, `tests/test_probes.py`;
+- results and reports: `results/scorecard.jsonl`, `docs/evals/2026-10-10_oops_h1.md`;
+- docs: `03_eval_harness.md` §12 (the measured peak), `ongoing_general_errors.md` (§3 and Issue 5 → Resolved), this guide's §1.4.
+
+---
+
 ### A8: HoloAssist, end-to-end H1 (resume the draft)
 
 **What this means for the maintainer:** the first test where the outcome can be partly hidden from the camera, and where the reactor (the instructor) is watching someone else work. That is the closest Wave A gets to "a person watching a robot work".
 
-**Start condition:**
-- A6c and A7b are pushed;
-- `raw/holoassist/progress.json` reads `["verified"]` and `DOWNLOAD.json` has the video entry with `extracted: true`.
-
-If the download supervisor aborted, read its log, relaunch it exactly as in §1.6 (it resumes with `curl -C -`), and wait. Issue 2 is resolved ("independent").
+**Start condition:** A6c, A7b and A7c are pushed.
+- The download is already done (§1.2): 2,111 videos, and `progress.json` ends at `"verified"`.
+- Issue 2 is resolved ("independent").
+- The draft is committed in `949c180`; resume from it.
 
 **Keep from the draft** (checked by the designer; do not rework):
 - the builder's grouped 70/30 split by session prefix, done **before** per-class sampling (`03_eval_harness.md` §5);
@@ -361,15 +473,10 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
    - Draw the 20 sessions (`default_rng(0)`, sessions sorted by `video_name`) **only from sessions with ≥ 1 instructor utterance and ≥ 1 no-utterance gap of ≥ 2 s**. A span with no samples is excluded and counted, not scored.
    - Write the summary to `DATA_ROOT/runs/holoassist_audio_presence.json`, and put the temp WAV under `TMPDIR`.
    - **Add a fast falsifying test:** synthetic 16 kHz audio with instructor spans +10 dB over the gaps → `passed: true`; flat noise → `passed: false`.
-8. **`src/harness/probes.py`:**
-   - **(a) The frontier row:** delete the hard-coded reason (`:198`) and the 50% rule (`:182`). Implement `03_eval_harness.md` §6/§8 exactly:
-     - `k = 0` → `not run: <derived reason>`: `no cache file <path>`, or `0 of <n> scored; last error: <first 80 chars> (errors.jsonl)`;
-     - `0 < k < n` → a real row with `notes: "partial: <k> of <n> scored"`;
-     - it enters `action_best` (`:347`) only if `k ≥ 0.9·n`.
-   - **(b)** Add the `react-nonverbal|spoke=1` diagnostic row (§6) for HoloAssist.
-   - **(c)** Add synthetic tests: frontier `k = 0` → a derived note containing `0 of`; `k = 10 of 100` → a `partial` row that is **not** in `action_best`; `k = 95 of 100` → it enters `action_best`.
-9. **`tools/download_holoassist.py`:** fix the disk check for the future: require `free ≥ archive bytes + 50 GiB` before extraction, and record `free_gib_before_extract` in `DOWNLOAD.json`. The running process keeps its old code; just record what happened.
-10. **`tools/report_holoassist.py`:** build it on A7b's corrected pattern: per-clause prediction check, judge diagnostics, wall-clock, and descriptions you write after looking at the frames (TSV), as in A7b.
+8. **`src/harness/probes.py`:** add the `react-nonverbal|spoke=1` diagnostic row (§6) for HoloAssist.
+   - Add a synthetic test: the row exists, is scored only on `spoke = 1` items, and enters neither `fusion` nor `action_best`.
+   - The not-run/partial rules and `judge-large` already landed in A7c.
+9. **`tools/report_holoassist.py`:** build it on A7b's corrected pattern (`prediction_check` with a Clause 1 line for `judge` and for `judge-large`; judge diagnostics, including the pre/post answer distribution; wall-clock; descriptions you write after looking at the frames, in a TSV).
 
 **Then run, in order** (§0.7 detached; §0.18 one model job at a time; record `memguard --status` before each):
 1. `python tools/check_audio_presence.py`.
@@ -379,13 +486,15 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 3. Features, one after the other, each under its own supervisor:
    - `python -m features.extract --dataset holoassist --encoder siglip-b16-224`;
    - then `--encoder e2v-plus-large`.
-4. The judge: `python -m judge.vlm_judge --dataset holoassist --split train --backend ollama`, then `--split test`.
-   - Gemini on test **only if Issue 5 = A and billing is on**; otherwise do not launch it.
+4. The judges, one after the other:
+   - `python -m judge.vlm_judge --dataset holoassist --split train --backend ollama`, then `--split test`;
+   - then `--split test --backend ollama-large` (2,000 calls; `check_shared` applies).
+   - **No Gemini run** (Issue 5 = B). The `judge-frontier` row will read `not run: no cache file …`.
 5. `python -m harness.probes --dataset holoassist`.
 6. `python tools/report_holoassist.py` → `docs/evals/<YYYY-MM-DD>_holoassist_h1.md`, with:
    - **at the top:** the pitch-shift caveat, and the group caveat (`02_data_sources.md` → HoloAssist → pinned details);
    - the conditions table, the Δ row, the diagnostic row and the shuffled controls;
-   - the per-clause prediction check (*hidden outcome: reaction-only > action_best; fusion > action_best*);
+   - the per-clause prediction check (*hidden outcome: reaction-only > action_best; fusion > action_best*), with a Clause 1 line for `judge` and for `judge-large`;
    - the H1 pass bar (*proposed*, `00_thesis.md`: reaction-only ≥ 0.65 **and** Δ ≥ +0.03 with the CI excluding 0), with the measured values. It is stated as reported, never as the kill decision;
    - one plain paragraph on *"is the voice signal more than 'the instructor said something'?"*, answered from `react-spoke` and `react-nonverbal|spoke=1`;
    - the audio-presence measurement;
@@ -399,11 +508,13 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - `splits/holoassist.json` is group-disjoint and hash-verified.
 - **The shuffled controls:** every `:shuffled` row's CI contains 0.5. If any `ci_low` is > 0.5, **STOP** and find the leak.
 - Every §6 condition has a row (real, `partial` or `not run` with a derived reason), and the Δ row and `react-nonverbal|spoke=1` exist.
+- `judge-large` covers ≥ 90% of the 2,000 test items, or its row says `partial` and the commit body explains why.
 - The audio check's falsifying test is red on flat noise.
 - G1–G4 green.
 
 **Commit:** `feat(a8): …`, staging explicitly:
-- the draft files of §1.3 (except `tests/test_memguard.py`, already committed in A6c);
+- every source, test and tool file you changed;
+- `splits/holoassist.json`;
 - `results/scorecard.jsonl`;
 - `docs/evals/<date>_holoassist_h1.md` and its TSV;
 - `docs/02_data_sources.md`, `docs/ongoing_general_errors.md`, and this guide's §1.4.
@@ -417,23 +528,19 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 **What this means for the maintainer:** one page that says whether Wave A found reaction signal beyond the action-only controls, what it could not measure, and what the designer needs to know to write Wave B.
 
 **Implementation:**
-1. **Conditional, only if Issue 5 = A was selected and billing is enabled:**
-   - Let the Gemini runs finish on both test splits; check the cache coverage.
-   - Re-run `python -m harness.probes --dataset oops` and `--dataset holoassist`. This appends superseding rows; put `rerun: judge-frontier scored <k>/<n> (Issue 5 A)` in each new row's `notes` by passing it through a new `--notes` CLI argument.
-   - Regenerate both reports.
-2. Run `scripts/battery.sh --slow` bare and update §1.4.
-3. Write `docs/evals/<YYYY-MM-DD>_wave_a_summary.md`:
+1. Run `scripts/battery.sh --slow` bare and update §1.4.
+2. Write `docs/evals/<YYYY-MM-DD>_wave_a_summary.md`:
    - **the headline table:** dataset × condition, with CIs, n and `n_excluded`; the Δ rows; the diagnostic row; the shuffled controls;
    - **the per-clause prediction checks** for both datasets;
    - **the caveats,** stated in full:
      - Oops! `react-nonverbal` is not evidence of reaction signal;
      - HoloAssist audio is pitch-shifted, and its groups are pairs, not persons;
-     - **the state of the "just ask an LLM" control** (Issue 5);
+     - **the state of the "just ask an LLM" control:** both local judges (`judge`, `judge-large`) on both datasets. Note that no frontier model was run, by the maintainer's choice (Issue 5 = B). A reviewer may still ask for one;
    - **anything suspicious:** an excluded share > 5%, a judge parse-failure rate > 2%, a condition that could not run;
    - compute time per stage;
-   - **observations for Wave B:** encoder failures, the judge's behavior (the 90/100 answer pattern), and the observed speed of data handling.
-4. Make sure each item has its line in `ongoing_general_errors.md` §3, and add A6c, A7b, A8 and A9 to §5.1 below.
-5. **Rewrite this guide's title and status** to **"Queue Complete: waiting on Issue 1 and the Wave B spec"**, adding **"and Issue 5"** if it is still unselected. **Then stop. Do not invent work.**
+   - **observations for Wave B:** encoder failures, each judge's behavior (the qwen judge's 90/100 answer pattern; whether `gemma4:26b` shares it), and the observed speed of data handling.
+3. Make sure each item has its line in `ongoing_general_errors.md` §3, and add A6c, A7b, A7c, A8 and A9 to §5.1 below.
+4. **Rewrite this guide's title and status** to **"Queue Complete: waiting on Issue 1 and the Wave B spec"**. **Then stop. Do not invent work.**
 
 **Validation:** every number in the summary matches a row in `results/scorecard.jsonl` (cite its `ts`); G1–G4 green.
 
@@ -447,8 +554,9 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **The Ego4D false-positive set,** DW4.
 - **Wave D, the robot check (offline H3; RoboReward)**, DW5: the designer writes its spec after Wave A's results. Do not download RoboReward.
 - **Stage A live** (the microduck), DW6.
-- **A larger local judge** (`gemma4:26b`): only if the maintainer selects Issue 5 option B **and** the designer specs it.
-- **Any judge prompt or question change** (Issue 5 option D is not recommended).
+- **Paid frontier-judge runs or enabling billing** (Issue 5 option A was not selected). The free-tier Gemini cache stays as it is.
+- **Any judge prompt or question change** (Issue 5 option D was not selected). This includes giving `judge-large` a different prompt from `judge`.
+- **Using `judge-large` in `fusion` or on the train split.** It is a test-only control (§8).
 - **Any web or YouTube video acquisition. Re-downloading any Ego4D or Charades-Ego video. Anything from tag `v0-saf-final`.**
 
 ---
@@ -466,6 +574,7 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **A6** `0f16799`: `build_prompt` (verbatim), `prompt_hash`, `parse_prob`, `sample_frames`, `OllamaJudge`, `GeminiJudge` and the cache. A7b changes only Gemini's parse retries.
 - **A6b** `76e71cc`: `shared.memguard` (the floor, peaks re-measured at 1.60 / 4.94 / 7.80 GB, the shared lock path, unloading only our model, `--status`, the fake-reading override), plus exit 75 in the CLIs, the supervisor and the battery. A6c changes only what §3 lists.
 - **A7** `6d72492`: the Oops! download, schema, adapter, split, features, judge, probes and 11 scorecard rows. A7b corrects only the report.
+- **`949c180`** `chore(a8)`: the A8 draft, committed as found at the maintainer's request (incomplete). A8 resumes from it.
 - `shared/vlm_client.ollama_chat`'s enforced timeout is load-bearing (`LESSONS_v0.md`, "Operations"). Do not replace it with the `ollama` Python client.
 
 ### 5.2 Accepted equivalents (checked October 10; do not "fix" these back)
@@ -479,6 +588,7 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **`make_group_split(…, source=, seed=)`**, and HoloAssist's group pre-assignment before sampling (written into §5).
 - **HoloAssist task `fix motorcycle` → `repair motorcycle`** in `context_text` (`02_data_sources.md`, pinned details).
 - **`extract.py` skips `memguard.check()` before the first item.** The first item loads through `guard()` itself.
+- **`tools/download_holoassist.py` checked for 50 GiB free before the download, not after extraction, and deleted the archive once ≥ 1,000 videos existed.** In the event, 2,111 videos were extracted (every session in the official split lists), 1.3 TiB stayed free, and the archive's byte count matched before extraction. The download is finished, so the script is not fixed.
 
 ### 5.3 Maintainer decisions
 
@@ -493,6 +603,10 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **The designer does not code; an implementing agent builds from this guide. Commit straight to `main`.**
 - **Issue 3 → the v0 videos were deleted.**
 
+**October 10, 2026:**
+- **Issue 5 → option B:** a larger local judge (`gemma4:26b`, `judge-large`) instead of paid frontier calls.
+- **Commit and push the uncommitted A8 draft** (done as `949c180`).
+
 **October 9, 2026:**
 - **No self-recorded data, no human-subjects study, no academic partner** (Issues 1D, 4B, 4C).
 - **The offline robot check (Wave D) is in scope; the microduck demo is deferred.**
@@ -506,6 +620,7 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **Grouped splits and grouped CIs only.** Split files are written once; a forced rewrite is named in the commit.
 - **The scorecard is append-only. H2 targets are never training data. Fixed probe hyperparameters. Nulls with reasons, never zeros or sentinels. No licensed-dataset pixels in git.**
 - **`guard()` is re-entrant within a process; `read_memory()` fails closed; memory deferrals never consume supervisor attempts** (§12, from A6c onward).
+- **`gemma4:26b` is shared with `animated_infographics`.** `judge-large` uses that project's runner options (`num_ctx` 16384, `think: false`, `keep_alive` 15m), and this project **never** unloads it (§8, from A7c onward).
 
 ### 5.5 Assessed and rejected: do NOT re-propose
 
@@ -514,7 +629,7 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 - **Self-recorded data collection, any human-subjects study, or an academic partnership** (declined October 9, 2026).
 - **Ego4D bystander footage as H1 data. A first-person-only data restriction.**
 - **Using Oops! descriptions or HoloAssist mistake/purpose labels as model inputs.**
-- **Tuning prompts, hyperparameters, windows or caps on test results,** including rewriting the judge question because it scored 0.472 on Oops!. That is Issue 5 option D, and it is the maintainer's call.
+- **Tuning prompts, hyperparameters, windows or caps on test results,** including rewriting the judge question because it scored 0.472 on Oops!. That was Issue 5 option D, and the maintainer chose B.
 - **Circumventing YouTube or any site's bot checks.**
 
 ---
@@ -524,10 +639,10 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 | What | Where |
 |---|---|
 | The thesis, H1–H3, pass/kill, the decision log | `00_thesis.md` |
-| Items, splits, the scorecard schema, conditions (incl. the diagnostic row and the not-run/partial rules), metrics, the judge, encoders | `03_eval_harness.md` §3–§9 |
+| Items, splits, the scorecard schema, conditions (incl. `judge-large`, the diagnostic row and the not-run/partial rules), metrics, the judges (incl. §8 "Large local judge"), encoders | `03_eval_harness.md` §3–§9 |
 | The memory guard: floor, peaks, the shared lock, re-entrancy, fail-closed reads, exit 75, supervisor and battery behavior | `03_eval_harness.md` §12 |
 | Oops! and HoloAssist item definitions, schemas, as-built details and caveats | `02_data_sources.md` |
-| Issues 1, 4, 5 (open); Issues 2, 3 (resolved); maintainer actions; lessons L1–L11; the resolved index | `ongoing_general_errors.md` |
+| Issue 1 (open), Issue 4 (decided), Issue 5 (decided: B; moves to Resolved in A7c); Issues 2, 3 (resolved); maintainer actions; lessons L1–L11; the resolved index | `ongoing_general_errors.md` |
 | Operations (detached runs, ollama, decoding, storage) | `LESSONS_v0.md` "Operations"; `tools/README.md` |
 
 ---
@@ -547,7 +662,7 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 ## 8. THE LOOP
 
 ```
-(1) Is there an approved item? A6c, A7b, A8, A9, in §2 order. If all are done
+(1) Is there an approved item? A6c, A7b, A7c, A8, A9, in §2 order. If all are done
     or blocked, STOP. Never start §4 work. Never fill in a `Your selection:`
     line.
 (2) Read the item and EVERY contract section it names. Copy paths,
@@ -571,9 +686,10 @@ If the download supervisor aborted, read its log, relaunch it exactly as in §1.
 
 ## 9. Definition of Done: Wave A
 
-- [ ] A6c, A7b, A8 and A9 each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
+- [ ] A6c, A7b, A7c, A8 and A9 each landed as one pushed commit on `main`, scoped to its id, with red and green runs recorded.
 - [ ] The memory guard: tests (i) and (j) pass with the real nesting and were shown red without the depth branch; `read_memory()` fails closed; the supervisor finishes after more deferrals than `SR_SUPERVISE_MAX_ATTEMPTS`; fast tests never reach live Ollama; no jetsam report during a Wave A run names one of our processes.
 - [ ] The Oops! report carries the per-clause prediction check (judge clause: did not hold), correct judge diagnostics, wall-clock times, real example descriptions and the `react-nonverbal` caveat, with the scorecard untouched.
+- [ ] `judge-large`: its declared peak is measured; it covers ≥ 90% of both test splits (or is reported `partial` with the reason); its payload matches the other project's runner options; nothing in this project ever unloaded `gemma4:26b` (the test is falsified red; `memguard.log` is clean); the Oops! re-score left every other condition unchanged; Issue 5 is moved to Resolved.
 - [ ] HoloAssist: items in the `holoassist:` id format; the audio-presence check run (or Issue 6 filed); every §6 condition has a row (real, partial or derived not-run), the Δ row and the `spoke=1` diagnostic exist; the shuffled controls sit at chance; the report is written with both caveats at the top.
 - [ ] `docs/evals/<date>_wave_a_summary.md` is written, and every number in it is traceable to a scorecard row.
 - [ ] `scripts/battery.sh` exits 0 and `--slow` exits 0; §1.4 is re-measured bare.

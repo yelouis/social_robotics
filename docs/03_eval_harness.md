@@ -77,7 +77,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 - **`n_excluded`:** items dropped from this condition (missing feature, judge parse failure), always reported.
 - **The Δ row:**
   - `condition` = `"fusion_minus_action_best"`, `metric` = `"delta_auroc"`.
-  - `action_best` is whichever of `judge` / `action-probe` (and `judge-frontier`, per §8) has the higher test AUROC. That is conservative for our claim. Its `notes` are exactly `action_best=<condition>`.
+  - `action_best` is whichever of `judge` / `action-probe` (and `judge-large` and `judge-frontier`, per §8) has the higher test AUROC. That is conservative for our claim. Its `notes` are exactly `action_best=<condition>`.
   - Its CI is computed on paired group-bootstrap resamples (§7), over the test items where **both** scores are non-null. Its `n_items` is that intersection.
 - `python -m harness.scorecard` with no arguments prints the **latest** row per `(hypothesis, dataset, split, condition, metric)` as a table, with the newest first. `--history <dataset>` prints every row for one dataset in time order.
 
@@ -95,6 +95,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | Condition | Input | Model |
 |---|---|---|
 | `judge` | Action-window frames + `context_text`; **no audio, no reaction window** | Zero-shot VLM (§8). Score = P(good) |
+| `judge-large` | The same as `judge` | Zero-shot `gemma4:26b` (§8 "Large local judge"). **Test split only.** Enters `action_best` at ≥ 90% coverage; never enters `fusion`. *(Added October 10, 2026: Issue 5, option B)* |
 | `action-probe` | SigLIP features of the action window | Logistic regression |
 | `react-nonverbal` | emotion2vec+ embedding of the reaction-window audio; **no transcript** | Logistic regression |
 | `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | **Score = `1 − spoke`**: silence scores higher P(good), because `label = 1` means correct. The direction is fixed a priori from A4's label-level rates (an instructor spoke after 67.98% of mistakes vs. 30.87% of correct actions), never chosen on test. *HoloAssist only.* It answers "is the emotion signal more than 'they said something'?" |
@@ -114,6 +115,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 A condition that cannot run on a dataset is written as **one row with `value: null` and `notes: "not run: <reason>"`**, never silently absent.
 - **The reason is derived from the run's own evidence, never a hard-coded string.** For example, `not run: no cache file <path>`, or `not run: 0 of 1072 items scored; last error: 429 RESOURCE_EXHAUSTED (errors.jsonl)`. *(Added October 10, 2026: the A7 code wrote a fixed "daily quota exhausted" reason that would have been stamped on every later dataset.)*
 - **A partially run condition is a real row, not a "not run" row.** If `k` of the `n` test items have a score, compute the metric on those `k`. Count `n − k` in `n_excluded`, and write `notes: "partial: <k> of <n> scored"`. Only `k = 0` is "not run".
+  - If the metric cannot be computed on the `k` items (one class only, or the bootstrap raises), write `value: null` with `notes: "partial: <k> of <n> scored; metric undefined: <error message>"`.
 
 ## 7. Metrics
 
@@ -156,7 +158,25 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 - **Generation config:** `temperature=0`, `max_output_tokens=32`, `thinking_config=ThinkingConfig(thinking_budget=0)`. The 16-token budget of the local judge is too tight once the model's thinking is disabled through the config. Parse retries follow the local rule: up to 2 more attempts at `temperature` 0.3; after 3 unparsable answers, cache `null`.
 - **Rows:** written as condition `judge-frontier`. It does not enter `fusion` (it has no train-split scores).
   - It enters `action_best` for the Δ row **only if it scored ≥ 90% of the test items.** Below that, its row is still written (`partial: …`, §6) but stays out of `action_best`. A Δ over a small intersection would measure noise.
-  - **The frontier anchor is the real "just ask an LLM" control.** On Oops! the local 7B judge scored AUROC 0.472, at chance on visible failures. Whether it runs is Issue 5.
+  - **Issue 5 was decided October 10, 2026: option B.** On Oops! the local 7B judge scored AUROC 0.472, at chance on visible failures. The maintainer chose a larger local judge over paying for the frontier API.
+    - The frontier judge is not run beyond the free tier. Its rows stay `partial` or `not run` with a derived reason (§6).
+    - The stronger "just ask an LLM" control is `judge-large`, below.
+
+**Large local judge** (`judge-large`; added October 10, 2026, Issue 5 option B):
+- **Model:** `models_config.get_model("vlm_judge_large")` = **`gemma4:26b`** on every tier. It is a 25.2B mixture-of-experts at Q4_K_M, 18 GB on disk, and lists `vision` among its Ollama capabilities (checked October 10).
+- **Inputs, prompt, `{question}`, parse rule, retries and cache layout:** identical to the local judge. The cache directory is `judge/<dataset>/gemma4_26b/`, and the `prompt_hash` is the same.
+- **Split:** **test only.** Oops!: 1,072 items; HoloAssist: 2,000. It needs no train scores, because it never enters `fusion`.
+- **Options:** `{"temperature": 0, "num_ctx": 16384, "num_predict": 16}`, `timeout=180`, plus the top-level request fields `"think": false` and `"keep_alive": "15m"`. Retries 2 and 3 use `temperature` 0.3.
+- **Why these values:** `gemma4:26b` is **shared with `animated_infographics`**, whose planner loads it with `num_ctx` 16384, `think: false` and `keep_alive` 15m (`animated_infographics/src/animated_infographics/planner/llm.py`).
+  - Ollama reloads a model whenever a request asks for a different `num_ctx`, so a different value would evict the other project's runner on every alternation and spike memory.
+  - With identical runner options, both projects use the same loaded model.
+  - `think: false` is required: the model has a `thinking` capability, and thinking tokens would exhaust `num_predict` 16 before the answer.
+- **It is not ours to unload.** `memguard.unload_own_judge()` still targets only `get_model("vlm_judge")`. Nothing in this project ever posts `keep_alive: 0` for `gemma4:26b`: not between items, not at the end of a run, not in admission step 3. It expires on its own `keep_alive`, and `animated_infographics` may unload it at any time to admit its own steps. Our next call then reloads it through `guard()`.
+- **Memory** (§12, step `sr_judge_large_load`):
+  - Before every call, if `/api/ps` does not list `gemma4:26b`, wrap that call in `guard("sr_judge_large_load")`.
+  - Between items, call `memguard.check_shared("sr_judge_large_load")`: on `warning` or `critical`, it logs `action=stop` and raises `MemoryDeferred` (exit 75). It never releases or unloads anything, because the memory is a shared model's.
+- **CLI:** `python -m judge.vlm_judge --dataset <d> --split test --backend ollama-large [--limit N]`. Same `progress.json`, same count line.
+- **Rows:** condition `judge-large`. It is a prediction-check judge in its own right: a report states its AUROC on its own line next to `judge`'s.
 
 ## 9. Encoders
 
@@ -214,7 +234,13 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 | `sr_siglip` | `FrameEncoder` model load | 1.56 GB process footprint after load + one window (MPS 1.03 GB) | 1.60 GB peak memory footprint on 50 items (1.60 × 1.15 = 1.84 GB) | **2 GB** |
 | `sr_e2v` | `NonverbalAudioEncoder` model load | 4.76 GB peak RSS during load + one window; 3.0 GB steady | 4.94 GB peak memory footprint on 50 items (4.94 × 1.15 = 5.68 GB) | **6 GB** |
 | `sr_judge_load` | first `OllamaJudge` call while `qwen2.5vl:7b` is not loaded | `llama-server` 7.72 GB RSS; `/api/ps` 6.8 GiB at `num_ctx` 8192 | `llama-server` 7.80 GB RSS on first call (7.80 × 1.15 = 8.97 GB) | **9 GB** |
+| `sr_judge_large_load` | first `judge-large` call while `gemma4:26b` is absent from `/api/ps` (§8, added October 10, 2026) | Observed October 10: `llama-server` 29.7 GB RSS with `gemma4:26b` the only model loaded (context 16384, the `animated_infographics` setting, so most likely loaded by it). `animated_infographics` itself declares 12 GB from a 10.5 GB resident measurement | *To be measured in A7c* | **35 GB provisional** (29.7 × 1.15, rounded up) |
 
+- **`sr_judge_large_load` is provisional.** A7c measures it at our exact options:
+  - the larger of the `llama-server` RSS after 50 four-image calls, and the drop in `available` from before the load to after the 50th call;
+  - with no other model job running.
+
+  The declared peak is then set to measured × 1.15, rounded up, **in either direction this one time**, with the measurement written into this table.
 - After `release()`, the process measured 1.10 GB, against 0.14 GB before loading.
 - Re-measured on 50 items with `/usr/bin/time -l` ("peak memory footprint") and `llama-server` RSS from `ps`. None exceeded the declared peaks.
 
@@ -223,7 +249,7 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
 - **Contents:** while holding it, write one line, `<step> pid <pid>`, the format their `get_heavy_lock_holder()` parses.
 - The OS releases a `flock` when its process dies, so there is never a stale lock.
 
-**Admission:** `with guard("<step>"):` wraps every model load: `FrameEncoder._ensure_loaded`, `NonverbalAudioEncoder._ensure_loaded`, and `OllamaJudge` before a call while its model is absent from `GET /api/ps`. Every code path that loads a model (CLIs, the A7/A8 runs, slow tests) is therefore guarded, with no caller remembering to.
+**Admission:** `with guard("<step>"):` wraps every model load: `FrameEncoder._ensure_loaded`, `NonverbalAudioEncoder._ensure_loaded`, and `OllamaJudge` before a call while its model is absent from `GET /api/ps`. That covers the large judge too, with step `sr_judge_large_load` and model `gemma4:26b` (§8). Every code path that loads a model (CLIs, the A7/A8 runs, slow tests) is therefore guarded, with no caller remembering to.
 1. Take the heavy lock, polling non-blocking every 0.5 s.
 2. Admit when `available − peak(step) ≥ FLOOR`.
 3. If not admitted, and the step is not `sr_judge_load`, and our judge model is loaded: unload **only** it (`POST /api/generate {"model": <get_model("vlm_judge")>, "keep_alive": 0}`), wait up to 30 s for `/api/ps` to drop it, then check again.
@@ -248,6 +274,7 @@ macOS killed its own services for lack of compressor space. Nothing in either pr
   - continue.
 - **`release()`** drops the model references, runs `gc.collect()` and `torch.mps.empty_cache()`, and for the judge unloads only our own Ollama model. The process must return within **1.5 GB** of its pre-load footprint.
 - **The judge also releases when its run ends,** unloading only our model.
+- **A shared model is never released.** `check_shared(step)` exists for loops whose model is shared with another program (`judge-large`, §8). On `warning` or `critical` it logs `action=stop` and raises `MemoryDeferred`, so the CLI exits 75. The supervisor relaunches later, and admission happens again only if the model has meanwhile been unloaded. *(Added October 10, 2026.)*
 
 **The supervisor** (`tools/run_supervised.sh`):
 - Exit **75** means "deferred by memory guard". Sleep `SR_MEMWAIT_SLEEP_S` (default **600 s**), relaunch, and **do not** count the attempt toward the no-progress abort.
