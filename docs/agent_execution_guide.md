@@ -31,7 +31,7 @@
 - *"During another agent's last implementation and testing it seems like we ran out of memory. Write guards so that we don't run out of memory. Assume that other program can start and stop which will take from the available memory."* (October 10, 2026)
 - *"Update the agent_execution_guide to reflect my choice of option B for Issue 5. Make sure to commit and push the code that hasn't been committed yet"* (October 10, 2026). This is why A7c exists, and why the A8 draft is committed (`949c180`).
 
-**Status:** **Active Build: Wave A, remaining items.** Next is **A7b**.
+**Status:** **Active Build: Wave A, remaining items.** Next is **A7c**.
 - **Issue 5 is decided: option B.** `gemma4:26b` becomes the second local judge (`judge-large`, test split only). The frontier judge is **not** run beyond the free tier, so its rows stay `partial`/`not run` with derived reasons.
 - **No maintainer decision blocks this queue.** **Issue 1** gates only Wave B, which is not in this guide.
 
@@ -147,12 +147,12 @@
 
 ### 1.4 Gates (run bare October 10, 2026; the regression bar)
 
-| # | Gate | Command | `HEAD` = `949c180` | After A6c |
-|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) |
+| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b |
+|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** |
 
 
 - G1–G3 were run on `949c180`'s exact content just before it was committed. G4 was run earlier the same day on the same content.

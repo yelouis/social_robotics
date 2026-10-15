@@ -310,6 +310,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Findings:** the guide items A6c (memory-guard defects), A7b (report corrections and frontier parse parity), corrections to the A8 draft, and Issue 5.
   - **Design updated:** `03_eval_harness.md` §4–§6, §8 and §12, and `02_data_sources.md` (Oops! "As built"; HoloAssist "pinned details").
 - A6c — Memory guard fixes (re-entrancy, fail-closed read, supervisor accounting, fast test isolation) — git log --grep "(a6c)" — G1–G4 exit 0 (52 fast passed, 5 slow passed; slow release measured with footprint < 1.5 GB); nested guard re-enters without deadlock (< 1.5s); read_memory fails closed to (0, 4); exit 75 does not consume supervisor attempts; fast suite isolated from live HTTP.
+- A7b — Oops! report corrections and frontier-judge parse parity — git log --grep "(a7b)" — prediction_check tests pass; report regenerated with two clauses (Clause 1 did not hold [AUROC 0.472], Clause 2 held [Δ 0.015]), reclassified errors (qwen 2 ffmpeg, gemini 1,024 429 and 1 other), wall-clock timings (download 46.6 min, features 57.0 min, judge 398.2 min), verified descriptions for 10 sampled items, react-nonverbal caveat added; Gemini parse retries (outer loop temp 0/0.3) tested; scorecard unmodified; G1–G3 exit 0 (57 fast passed, self-test 4/4).
 
 
 ---

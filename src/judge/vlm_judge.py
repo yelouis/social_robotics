@@ -229,42 +229,56 @@ class GeminiJudge:
                     image_parts.append(types.Part.from_bytes(data=f.read(), mime_type="image/jpeg"))
 
             contents = image_parts + [prompt]
-            config = types.GenerateContentConfig(
-                temperature=0,
-                max_output_tokens=32,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            )
+            # Parse loop: up to 3 attempts (attempt 1 at temperature 0, attempts 2-3 at 0.3)
+            last_raw = ""
+            for parse_attempt in range(1, 4):
+                temp = 0.0 if parse_attempt == 1 else 0.3
+                config = types.GenerateContentConfig(
+                    temperature=temp,
+                    max_output_tokens=32,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                )
 
-            # Retry loop on HTTP 429 or 5xx: up to 5 tries with 30s sleep
-            last_err = ""
-            for attempt in range(1, 6):
-                try:
-                    resp = self.client.models.generate_content(
-                        model=self.model,
-                        contents=contents,
-                        config=config,
-                    )
-                    raw = resp.text or ""
-                    if not raw and getattr(resp, "candidates", None):
-                        for part in getattr(resp.candidates[0].content, "parts", []):
-                            if getattr(part, "text", None):
-                                raw = part.text
-                                break
-                    prob = parse_prob(raw)
+                # Retry loop on HTTP 429 or 5xx: up to 5 tries with 30s sleep
+                last_err = ""
+                call_succeeded = False
+                resp = None
+                for attempt in range(1, 6):
+                    try:
+                        resp = self.client.models.generate_content(
+                            model=self.model,
+                            contents=contents,
+                            config=config,
+                        )
+                        call_succeeded = True
+                        break
+                    except Exception as exc:
+                        err_str = str(exc)
+                        last_err = err_str
+                        # Check for rate limit or server error
+                        if "429" in err_str or "500" in err_str or "503" in err_str or "504" in err_str:
+                            if attempt < 5:
+                                time.sleep(30.0)
+                                continue
+                        raise
+
+                if not call_succeeded or resp is None:
+                    raise RuntimeError(f"Gemini API failed after 5 retries: {last_err}")
+
+                raw = resp.text or ""
+                if not raw and getattr(resp, "candidates", None):
+                    for part in getattr(resp.candidates[0].content, "parts", []):
+                        if getattr(part, "text", None):
+                            raw = part.text
+                            break
+                last_raw = raw
+                prob = parse_prob(raw)
+                if prob is not None:
                     elapsed_ms = (time.time() - t0) * 1000.0
-                    return prob, raw, attempt, elapsed_ms
-                except Exception as exc:
-                    err_str = str(exc)
-                    last_err = err_str
-                    # Check for rate limit or server error
-                    if "429" in err_str or "500" in err_str or "503" in err_str or "504" in err_str:
-                        if attempt < 5:
-                            time.sleep(30.0)
-                            continue
-                    raise
+                    return prob, raw, parse_attempt, elapsed_ms
 
             elapsed_ms = (time.time() - t0) * 1000.0
-            return None, last_err, 5, elapsed_ms
+            return None, last_raw, 3, elapsed_ms
 
         finally:
             for p in item_tmp_dir.glob("*"):

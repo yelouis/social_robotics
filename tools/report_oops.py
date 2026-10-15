@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -13,15 +14,152 @@ from harness.items import read_items
 from harness.splits import load_split
 
 
+def prediction_check(rows: Dict[str, dict]) -> List[str]:
+    """Check hypothesis predictions against scorecard rows.
+
+    Returns lines in order:
+    1. One Clause 1 line per judge condition with a non-null value, in the order
+       `judge`, `judge-large`, `judge-frontier`:
+       Held iff ci_low > 0.5 and AUROC >= action_probe_auroc - 0.05.
+    2. Clause 2 line for Delta approx 0:
+       Held iff ci_low <= 0 <= ci_high.
+    3. For each judge condition whose value is null:
+       - **<condition>:** <its notes>
+    """
+    judge_conditions = ["judge", "judge-large", "judge-frontier"]
+    action_probe_row = rows.get("action-probe")
+    action_probe_auroc = (
+        action_probe_row.get("value")
+        if action_probe_row and action_probe_row.get("value") is not None
+        else None
+    )
+
+    clause1_lines: List[str] = []
+    null_lines: List[str] = []
+
+    for cond in judge_conditions:
+        if cond in rows:
+            r = rows[cond]
+            val = r.get("value")
+            if val is not None:
+                ci_low = r.get("ci_low")
+                ci_high = r.get("ci_high")
+                n_items = r.get("n_items", 0)
+                held = False
+                if ci_low is not None and ci_low > 0.5:
+                    if action_probe_auroc is not None:
+                        held = val >= (action_probe_auroc - 0.05)
+                    else:
+                        held = True
+                verdict = "held" if held else "did not hold"
+                clause1_lines.append(
+                    f'- **Clause 1, "the judge is strong" ({cond}):** AUROC {val:.3f} [{ci_low:.3f}, {ci_high:.3f}] ({n_items} scored) → {verdict}'
+                )
+            else:
+                notes = r.get("notes", "")
+                null_lines.append(f"- **{cond}:** {notes}")
+
+    clause2_lines: List[str] = []
+    delta_row = rows.get("fusion_minus_action_best")
+    if delta_row:
+        d_val = delta_row.get("value")
+        d_low = delta_row.get("ci_low")
+        d_high = delta_row.get("ci_high")
+        notes = delta_row.get("notes", "")
+        if "action_best=" in notes:
+            best_name = notes.split("action_best=")[1].split(";")[0].strip()
+        elif ";" in notes:
+            best_name = notes.split(";")[0].strip()
+        else:
+            best_name = notes.strip()
+        held = (d_low is not None and d_high is not None and d_low <= 0 <= d_high)
+        verdict = "held" if held else "did not hold"
+        if d_val is not None and d_low is not None and d_high is not None:
+            clause2_lines.append(
+                f'- **Clause 2, "Δ ≈ 0":** Δ {d_val:.3f} [{d_low:.3f}, {d_high:.3f}] (action_best = {best_name}) → {verdict}'
+            )
+
+    return clause1_lines + clause2_lines + null_lines
+
+
+def compute_oops_wall_clocks(root: Path) -> Dict[str, str]:
+    timings: Dict[str, str] = {}
+
+    # 1. Download
+    dl_log = root / "raw" / "oops" / "download.log"
+    dl_recorded = False
+    if dl_log.exists():
+        try:
+            ts_matches = []
+            for line in dl_log.read_text(encoding="utf-8").splitlines():
+                m = re.search(r"\[supervise\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]", line)
+                if m:
+                    ts_matches.append(datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+            if len(ts_matches) >= 2:
+                dur_s = (ts_matches[-1] - ts_matches[0]).total_seconds()
+                timings["Download"] = f"{dur_s:,.1f} s ({dur_s / 60.0:.1f} min)"
+                dl_recorded = True
+        except Exception:
+            pass
+    if not dl_recorded:
+        timings["Download"] = "not recorded"
+
+    # 2. Features
+    feat_dir = root / "features" / "oops"
+    if feat_dir.exists():
+        for enc in ["siglip-b16-224", "e2v-plus-large"]:
+            idx_file = feat_dir / enc / "index.jsonl"
+            if idx_file.exists():
+                last_ms: Dict[str, float] = {}
+                for line in idx_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        try:
+                            d = json.loads(line)
+                            iid = d.get("item_id")
+                            if iid:
+                                last_ms[iid] = float(d.get("elapsed_ms", 0.0))
+                        except Exception:
+                            pass
+                total_s = sum(last_ms.values()) / 1000.0
+                timings[f"Features (`{enc}`)"] = f"{total_s:,.1f} s ({total_s / 60.0:.1f} min)"
+
+    # 3. Judge
+    judge_dir = root / "judge" / "oops"
+    if judge_dir.exists():
+        for model_dir in sorted(judge_dir.iterdir()):
+            if not model_dir.is_dir():
+                continue
+            total_ms = 0.0
+            for jf in model_dir.glob("*.jsonl"):
+                if jf.name == "errors.jsonl":
+                    continue
+                for line in jf.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        try:
+                            d = json.loads(line)
+                            total_ms += float(d.get("elapsed_ms", 0.0))
+                        except Exception:
+                            pass
+            total_s = total_ms / 1000.0
+            timings[f"Judge (`{model_dir.name}`)"] = f"{total_s:,.1f} s ({total_s / 60.0:.1f} min)"
+
+    # 4. Probes
+    timings["Probes"] = "not recorded (seconds)"
+
+    return timings
+
+
 def generate_oops_report(
     date_str: Optional[str] = None,
     data_root: Optional[Path] = None,
     scorecard_path: Optional[Path] = None,
     out_path: Optional[Path] = None,
-    wall_clocks: Optional[Dict[str, float]] = None,
+    descriptions_path: Optional[Path] = None,
+    corrected_date: Optional[str] = None,
 ) -> Path:
     root = data_root or DATA_ROOT
     today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    corr_date = corrected_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
 
     # 1. Read scorecard rows for Oops
@@ -41,36 +179,98 @@ def generate_oops_report(
     for r in rows:
         latest_rows[r["condition"]] = r
 
-    # 2. Judge stats
-    judge_stats = {"ollama": {"total": 0, "parse_failures": 0, "api_errors": 0},
-                   "gemini": {"total": 0, "parse_failures": 0, "api_errors": 0}}
+    # 2. Judge stats & answers
+    split_data = load_split("oops", path_dir="splits")
+    test_set = set(split_data.get("test", []))
+
     judge_dir = root / "judge" / "oops"
+    judge_cached: Dict[str, Optional[float]] = {}
+    judge_diag_lines: List[str] = []
+
     if judge_dir.exists():
-        for model_dir in judge_dir.iterdir():
+        for model_dir in sorted(judge_dir.iterdir()):
             if not model_dir.is_dir():
                 continue
-            backend = "gemini" if "gemini" in model_dir.name else "ollama"
-            for jf in model_dir.glob("*.jsonl"):
+
+            # (a) Read answers only from <prompt_hash>.jsonl (exclude errors.jsonl)
+            ans_files = [f for f in model_dir.glob("*.jsonl") if f.name != "errors.jsonl"]
+            total_answers = 0
+            parse_failures = 0
+            scored_test_count = 0
+
+            for jf in ans_files:
                 for line in jf.read_text(encoding="utf-8").splitlines():
                     if not line.strip():
                         continue
                     try:
                         e = json.loads(line)
-                        judge_stats[backend]["total"] += 1
-                        if e.get("judge_prob") is None:
-                            raw = e.get("raw", "")
-                            if "API error" in raw or "error" in raw.lower():
-                                judge_stats[backend]["api_errors"] += 1
-                            else:
-                                judge_stats[backend]["parse_failures"] += 1
+                        total_answers += 1
+                        prob = e.get("judge_prob")
+                        iid = e.get("item_id")
+                        if prob is None:
+                            parse_failures += 1
+                        elif iid in test_set:
+                            scored_test_count += 1
+                        if "qwen" in model_dir.name and iid:
+                            judge_cached[iid] = prob
                     except Exception:
                         pass
+
+            # Read errors.jsonl separately and classify
+            err_file = model_dir / "errors.jsonl"
+            err_by_id: Dict[str, str] = {}
+            if err_file.exists():
+                for line in err_file.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        e = json.loads(line)
+                        iid = e.get("item_id")
+                        err_text = str(e.get("error", ""))
+                        if "429" in err_text:
+                            cat = "429"
+                        elif re.search(r"\b5\d\d\b", err_text):
+                            cat = "5xx"
+                        elif "ffmpeg" in err_text:
+                            cat = "ffmpeg"
+                        else:
+                            cat = "other"
+                        if iid:
+                            err_by_id[iid] = cat
+                    except Exception:
+                        pass
+
+            cat_counts = {"429": 0, "5xx": 0, "ffmpeg": 0, "other": 0}
+            for cat in err_by_id.values():
+                cat_counts[cat] += 1
+
+            err_parts = []
+            for c in ["429", "5xx", "ffmpeg", "other"]:
+                count = cat_counts[c]
+                if count > 0:
+                    err_parts.append(f"{count:,} `{c}` error" + ("s" if count != 1 else ""))
+            err_summary = ", ".join(err_parts) if err_parts else "0 errors"
+
+            mname_lower = model_dir.name.lower()
+            if "gemini" in mname_lower:
+                judge_diag_lines.append(
+                    f"- **Frontier Judge (`{model_dir.name}`):** scored {scored_test_count} of {len(test_set)} test items, "
+                    f"{parse_failures} parse failures, {err_summary}"
+                )
+            elif "qwen" in mname_lower:
+                judge_diag_lines.append(
+                    f"- **Local Judge (`qwen2.5vl:7b`):** {total_answers:,} answers, "
+                    f"{parse_failures} parse failures, {err_summary}"
+                )
+            else:
+                judge_diag_lines.append(
+                    f"- **Judge (`{model_dir.name}`):** {total_answers:,} answers, "
+                    f"{parse_failures} parse failures, {err_summary}"
+                )
 
     # 3. 10 example items (5 pre, 5 post, default_rng(0))
     items_path = root / "items" / "oops" / "items.jsonl"
     all_items = read_items(items_path)
-    split_data = load_split("oops", path_dir="splits")
-    test_set = set(split_data.get("test", []))
     test_items = [it for it in all_items if it.item_id in test_set]
 
     pre_items = [it for it in test_items if it.label == 1]
@@ -83,23 +283,20 @@ def generate_oops_report(
     sampled_pre = [pre_items[i] for i in sorted(pre_sample_idx)]
     sampled_post = [post_items[i] for i in sorted(post_sample_idx)]
 
-    # Load judge cached predictions
-    judge_cached: Dict[str, Optional[float]] = {}
-    if judge_dir.exists():
-        for model_dir in judge_dir.iterdir():
-            if "qwen" in model_dir.name and model_dir.is_dir():
-                for jf in model_dir.glob("*.jsonl"):
-                    for line in jf.read_text(encoding="utf-8").splitlines():
-                        if line.strip():
-                            try:
-                                e = json.loads(line)
-                                judge_cached[e["item_id"]] = e.get("judge_prob")
-                            except Exception:
-                                pass
+    # Load descriptions
+    descriptions: Dict[str, str] = {}
+    desc_p = descriptions_path or Path("docs/evals/2026-10-10_oops_examples.tsv")
+    if desc_p.exists():
+        for line in desc_p.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                parts = line.split("\t", 1)
+                if len(parts) == 2:
+                    descriptions[parts[0].strip()] = parts[1].strip()
 
     # Build report markdown
     lines = [
         f"# Oops! H1 Evaluation Report ({today})",
+        f"*Corrected {corr_date} (A7b): prediction check split by clause; judge error counts reclassified; wall-clock times and example descriptions added. The numbers are unchanged.*",
         "",
         "## 1. Executive Summary & Prediction Check",
         "",
@@ -108,17 +305,9 @@ def generate_oops_report(
         "",
     ]
 
-    # Delta row check
-    delta_row = latest_rows.get("fusion_minus_action_best")
-    if delta_row:
-        d_val = delta_row.get("value")
-        d_low = delta_row.get("ci_low")
-        d_high = delta_row.get("ci_high")
-        lines.append(f"- **Result:** $\\Delta = {d_val:.3f}$ [95% CI: {d_low:.3f}, {d_high:.3f}] (action_best = `{delta_row.get('notes')}`).")
-        if d_low is not None and d_low <= 0 <= d_high:
-            lines.append("- **Verdict:** The prediction **holds**. Reactions add no statistically significant gain over the action-only judge on visible failure outcomes (zero is inside the 95% CI).")
-        else:
-            lines.append(f"- **Verdict:** $\\Delta$ is {d_val:.3f} with 95% CI [{d_low:.3f}, {d_high:.3f}].")
+    # Prediction check lines
+    pred_lines = prediction_check(latest_rows)
+    lines.extend(pred_lines)
     lines.append("")
 
     # Conditions Table
@@ -148,6 +337,8 @@ def generate_oops_report(
         else:
             lines.append(f"| `{c}` | auroc | null | — | — | — | not run |")
     lines.append("")
+    lines.append("react-nonverbal on Oops! is not evidence of reaction signal: the reaction window equals the action window, so the post-failure audio contains the failure's own sound and any compilation music (02_data_sources.md → Oops! → As built).")
+    lines.append("")
 
     # Shuffled Controls Table
     lines.extend([
@@ -174,21 +365,18 @@ def generate_oops_report(
     lines.extend([
         "## 4. Judge Diagnostics",
         "",
-        f"- **Local Judge (`qwen2.5vl:7b`):** total queries = {judge_stats['ollama']['total']}, parse failures = {judge_stats['ollama']['parse_failures']}, API errors = {judge_stats['ollama']['api_errors']}",
-        f"- **Frontier Judge (`gemini-3.6-flash`):** total queries = {judge_stats['gemini']['total']}, parse failures = {judge_stats['gemini']['parse_failures']}, API errors = {judge_stats['gemini']['api_errors']}",
-        "",
     ])
+    lines.extend(judge_diag_lines)
+    lines.append("")
 
     # Wall-clock timing
     lines.extend([
         "## 5. Wall-Clock Compute Time",
         "",
     ])
-    if wall_clocks:
-        for stage, secs in wall_clocks.items():
-            lines.append(f"- **{stage}:** {secs:.1f} s ({secs / 60.0:.1f} min)")
-    else:
-        lines.append("- Timings recorded per supervisor run logs under `raw/oops/` and `runs/`.")
+    wall_clocks = compute_oops_wall_clocks(root)
+    for stage, dur_str in wall_clocks.items():
+        lines.append(f"- **{stage}:** {dur_str}")
     lines.append("")
 
     # 10 example items
@@ -205,10 +393,11 @@ def generate_oops_report(
         j_str = f"{j_p:.2f}" if j_p is not None else "N/A"
         clip_name = it.meta.get("clip_id", it.item_id)
         t_onset = it.meta.get("t", 0.0)
+        desc = descriptions.get(it.item_id, "not described")
         lines.append(f"{idx}. **`{it.item_id}`** (Group: `{it.group_id}`)")
         lines.append(f"   - Clip: `{clip_name}` (Failure onset $t = {t_onset:.2f}\\text{{ s}}$)")
         lines.append(f"   - Window: `[{it.action_window_sec[0]:.2f}, {it.action_window_sec[1]:.2f}]` s (pre-failure window $[t-4, t-1]$)")
-        lines.append("   - Action Description: Person is engaged in everyday activity prior to accident onset.")
+        lines.append(f"   - Seen in the frames: {desc}")
         lines.append(f"   - Local Judge P(as intended): `{j_str}`")
         lines.append("")
 
@@ -221,10 +410,11 @@ def generate_oops_report(
         j_str = f"{j_p:.2f}" if j_p is not None else "N/A"
         clip_name = it.meta.get("clip_id", it.item_id)
         t_onset = it.meta.get("t", 0.0)
+        desc = descriptions.get(it.item_id, "not described")
         lines.append(f"{idx}. **`{it.item_id}`** (Group: `{it.group_id}`)")
         lines.append(f"   - Clip: `{clip_name}` (Failure onset $t = {t_onset:.2f}\\text{{ s}}$)")
         lines.append(f"   - Window: `[{it.action_window_sec[0]:.2f}, {it.action_window_sec[1]:.2f}]` s (post-failure window $[t, t+3]$)")
-        lines.append("   - Action Description: The unintended failure / slip / drop has initiated or completed.")
+        lines.append(f"   - Seen in the frames: {desc}")
         lines.append(f"   - Local Judge P(as intended): `{j_str}`")
         lines.append("")
 
@@ -240,12 +430,16 @@ def main() -> None:
     parser.add_argument("--date", default=None, help="Report date (YYYY-MM-DD)")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", help="Scorecard JSONL path")
     parser.add_argument("--out", default=None, help="Output markdown path")
+    parser.add_argument("--descriptions", default="docs/evals/2026-10-10_oops_examples.tsv", help="Path to TSV containing example descriptions")
+    parser.add_argument("--data-root", default=None, help="Root path containing dataset artifacts")
     args = parser.parse_args()
 
     generate_oops_report(
         date_str=args.date,
+        data_root=Path(args.data_root) if args.data_root else None,
         scorecard_path=Path(args.scorecard) if args.scorecard else None,
         out_path=Path(args.out) if args.out else None,
+        descriptions_path=Path(args.descriptions) if args.descriptions else None,
     )
 
 

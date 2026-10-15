@@ -175,9 +175,166 @@ def test_three_unparseable_replies_returns_null_and_three_attempts(tmp_path: Pat
     assert "unable to answer" in raw
 
 
+def test_gemini_judge_retry_parse_success(tmp_path: Path, monkeypatch):
+    """Replies 'none', 'none', '42' -> 0.42, attempts 3, and 2nd and 3rd calls had temperature=0.3."""
+    from judge.vlm_judge import GeminiJudge
+
+    vid_path = tmp_path / "dummy.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    recorded_configs = []
+
+    class MockResp:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    responses = ["none", "none", "42"]
+
+    class MockModels:
+        def generate_content(self, model, contents, config=None):
+            recorded_configs.append(config)
+            return MockResp(responses.pop(0))
+
+    class MockClient:
+        def __init__(self):
+            self.models = MockModels()
+
+    judge = GeminiJudge(api_key="fake")
+    judge.client = MockClient()
+
+    prob, raw, attempts, elapsed_ms = judge.judge_item(
+        video_path=str(vid_path),
+        window=[0.0, 1.0],
+        context_text="A home video.",
+        question=DATASET_QUESTIONS["oops"],
+    )
+
+    assert prob == 0.42
+    assert attempts == 3
+    assert len(recorded_configs) == 3
+    assert recorded_configs[0].temperature == 0
+    assert recorded_configs[1].temperature == 0.3
+    assert recorded_configs[2].temperature == 0.3
+
+
+def test_gemini_judge_retry_parse_failure(tmp_path: Path, monkeypatch):
+    """Replies 'none' x 3 -> None, attempts 3."""
+    from judge.vlm_judge import GeminiJudge
+
+    vid_path = tmp_path / "dummy.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    class MockResp:
+        def __init__(self, text):
+            self.text = text
+            self.candidates = []
+
+    responses = ["none", "none", "none"]
+
+    class MockModels:
+        def generate_content(self, model, contents, config=None):
+            return MockResp(responses.pop(0))
+
+    class MockClient:
+        def __init__(self):
+            self.models = MockModels()
+
+    judge = GeminiJudge(api_key="fake")
+    judge.client = MockClient()
+
+    prob, raw, attempts, elapsed_ms = judge.judge_item(
+        video_path=str(vid_path),
+        window=[0.0, 1.0],
+        context_text="A home video.",
+        question=DATASET_QUESTIONS["oops"],
+    )
+
+    assert prob is None
+    assert attempts == 3
+
+
+def test_gemini_judge_429_exhaustion_raises(tmp_path: Path, monkeypatch):
+    """Five raised 429 errors -> judge_item raises, and run_judge writes an errors.jsonl line and no cache line."""
+    from judge.vlm_judge import GeminiJudge
+
+    vid_path = tmp_path / "dummy.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    class RateLimitErr(Exception):
+        pass
+
+    class MockModels:
+        def generate_content(self, model, contents, config=None):
+            raise RateLimitErr("Resource has been exhausted (e.g. check quota) 429")
+
+    class MockClient:
+        def __init__(self):
+            self.models = MockModels()
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    judge = GeminiJudge(api_key="fake")
+    judge.client = MockClient()
+
+    with pytest.raises(Exception) as exc_info:
+        judge.judge_item(
+            video_path=str(vid_path),
+            window=[0.0, 1.0],
+            context_text="A home video.",
+            question=DATASET_QUESTIONS["oops"],
+        )
+    assert "429" in str(exc_info.value)
+
+    # Now verify run_judge writes to errors.jsonl and not to cache
+    item = Item("test:1:0", "oops_test", "g1", str(vid_path), [0.0, 1.0], [1.0, 2.0], 1, "Context.", "c")
+    items_dir = tmp_path / "items" / "oops_test"
+    items_dir.mkdir(parents=True)
+    write_items([item], items_dir / "items.jsonl")
+
+    splits_dir = tmp_path / "splits"
+    from harness.splits import make_group_split
+    make_group_split([item], "oops_test", official={item.item_id: "test"}, path_dir=splits_dir)
+
+    monkeypatch.setattr("judge.vlm_judge.GeminiJudge", lambda *a, **kw: judge)
+
+    run_judge(
+        dataset="oops_test",
+        split="test",
+        backend="gemini",
+        limit=1,
+        data_root=tmp_path,
+        splits_dir=splits_dir,
+        question_override=DATASET_QUESTIONS["oops"],
+    )
+
+    judge_dir = tmp_path / "judge" / "oops_test" / "gemini-3.6-flash"
+    assert judge_dir.exists()
+    err_file = judge_dir / "errors.jsonl"
+    assert err_file.exists()
+    err_content = err_file.read_text(encoding="utf-8")
+    assert "429" in err_content
+    assert item.item_id in err_content
+
+    # No successful answer cached
+    cache_files = [f for f in judge_dir.glob("*.jsonl") if f.name not in ("errors.jsonl", "progress.json")]
+    for cf in cache_files:
+        assert cf.stat().st_size == 0
+
+
 # ---------------------------------------------------------------------------
 # Slow tests (live local model)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.slow
 def test_live_local_judge_synthetic_items(tmp_path_factory):
