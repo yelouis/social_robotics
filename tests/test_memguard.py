@@ -548,6 +548,31 @@ else:
     assert "deferred 4 times; giving up" in res2.stderr
 
 
+def test_check_shared_warning_stops_and_normal_returns(tmp_path: Path, monkeypatch):
+    from shared.memguard import MemoryDeferred, check_shared
+
+    log_d = tmp_path / "runs"
+    log_d.mkdir(parents=True)
+    monkeypatch.setattr("shared.memguard.DATA_ROOT", tmp_path)
+
+    # 1. Normal reading -> returns, no log line
+    monkeypatch.setattr("shared.memguard.read_memory", lambda: (32 * 1024**3, 1))
+    check_shared("sr_judge_large_load")
+    log_file = log_d / "memguard.log"
+    assert not log_file.exists() or log_file.read_text(encoding="utf-8") == ""
+
+    # 2. Warning reading -> raises MemoryDeferred and logs action=stop
+    monkeypatch.setattr("shared.memguard.read_memory", lambda: (32 * 1024**3, 2))
+    with pytest.raises(MemoryDeferred):
+        check_shared("sr_judge_large_load")
+
+    assert log_file.exists()
+    content = log_file.read_text(encoding="utf-8")
+    assert "action=stop" in content
+    assert "step=sr_judge_large_load" in content
+    assert "pressure=2" in content
+
+
 # ---------------------------------------------------------------------------
 # Slow footprint test
 # ---------------------------------------------------------------------------

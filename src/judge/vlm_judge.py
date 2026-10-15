@@ -106,9 +106,21 @@ def sample_frames(
 
 
 class OllamaJudge:
-    def __init__(self, model: Optional[str] = None, host: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        host: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        think: Optional[bool] = None,
+        keep_alive: Optional[str] = None,
+        load_step: str = "sr_judge_load",
+    ) -> None:
         self.model = model or get_model("vlm_judge")
         self.host = host
+        self.options = options if options is not None else {"temperature": 0, "num_ctx": 8192, "num_predict": 16}
+        self.think = think
+        self.keep_alive = keep_alive
+        self.load_step = load_step
 
     def judge_item(
         self,
@@ -130,42 +142,48 @@ class OllamaJudge:
             prompt = build_prompt(context_text=context_text, question=question, n=4)
             str_frame_paths = [str(p) for p in frame_paths]
 
-            # Attempt 1: temperature 0 (guarded if model not yet loaded in Ollama)
-            is_loaded = memguard.is_our_judge_loaded(endpoint=self.host)
-            if not is_loaded:
-                with memguard.guard("sr_judge_load"):
-                    raw = ollama_chat(
+            extra_kw = {}
+            if self.think is not None:
+                extra_kw["think"] = self.think
+            if self.keep_alive is not None:
+                extra_kw["keep_alive"] = self.keep_alive
+
+            def _call(opts: Dict[str, Any]) -> str:
+                if not memguard.is_model_loaded(self.model, endpoint=self.host):
+                    with memguard.guard(self.load_step):
+                        return ollama_chat(
+                            model=self.model,
+                            prompt=prompt,
+                            image_paths=str_frame_paths,
+                            options=opts,
+                            timeout=180.0,
+                            host=self.host,
+                            **extra_kw,
+                        )
+                else:
+                    return ollama_chat(
                         model=self.model,
                         prompt=prompt,
                         image_paths=str_frame_paths,
-                        options={"temperature": 0, "num_ctx": 8192, "num_predict": 16},
+                        options=opts,
                         timeout=180.0,
                         host=self.host,
+                        **extra_kw,
                     )
-            else:
-                raw = ollama_chat(
-                    model=self.model,
-                    prompt=prompt,
-                    image_paths=str_frame_paths,
-                    options={"temperature": 0, "num_ctx": 8192, "num_predict": 16},
-                    timeout=180.0,
-                    host=self.host,
-                )
+
+            # Attempt 1: temperature 0 (from self.options)
+            opts1 = dict(self.options)
+            raw = _call(opts1)
             prob = parse_prob(raw)
             if prob is not None:
                 elapsed_ms = (time.time() - t0) * 1000.0
                 return prob, raw, 1, elapsed_ms
 
             # Retries 2 and 3: temperature 0.3
+            opts_retry = dict(self.options)
+            opts_retry["temperature"] = 0.3
             for attempt in (2, 3):
-                raw = ollama_chat(
-                    model=self.model,
-                    prompt=prompt,
-                    image_paths=str_frame_paths,
-                    options={"temperature": 0.3, "num_ctx": 8192, "num_predict": 16},
-                    timeout=180.0,
-                    host=self.host,
-                )
+                raw = _call(opts_retry)
                 prob = parse_prob(raw)
                 if prob is not None:
                     elapsed_ms = (time.time() - t0) * 1000.0
@@ -185,6 +203,16 @@ class OllamaJudge:
                 item_tmp_dir.rmdir()
             except Exception:
                 pass
+
+
+def make_large_judge() -> OllamaJudge:
+    return OllamaJudge(
+        model=get_model("vlm_judge_large"),
+        options={"temperature": 0, "num_ctx": 16384, "num_predict": 16},
+        think=False,
+        keep_alive="15m",
+        load_step="sr_judge_large_load",
+    )
 
 
 class GeminiJudge:
@@ -303,6 +331,11 @@ def run_judge(
     judge_instance: Optional[Any] = None,
 ) -> None:
     start_time = time.time()
+    if backend == "ollama-large" and split != "test":
+        raise ValueError("judge-large is test split only")
+    if backend == "gemini" and split != "test":
+        raise ValueError("GeminiJudge is test split only")
+
     root = Path(data_root or DATA_ROOT)
 
     question = question_override or DATASET_QUESTIONS.get(dataset)
@@ -315,11 +348,18 @@ def run_judge(
         judge = judge_instance
         if backend == "ollama":
             model_tag = getattr(judge, "model", "ollama").replace(":", "_")
+        elif backend == "ollama-large":
+            model_tag = "gemma4_26b"
         else:
             model_tag = getattr(judge, "model", "gemini-3.6-flash")
     elif backend == "ollama":
         judge = OllamaJudge()
         model_tag = judge.model.replace(":", "_")
+    elif backend == "ollama-large":
+        if split != "test":
+            raise ValueError("judge-large is test split only")
+        judge = make_large_judge()
+        model_tag = "gemma4_26b"
     elif backend == "gemini":
         if split != "test":
             raise ValueError("GeminiJudge is test split only")
@@ -389,6 +429,8 @@ def run_judge(
             # Between-items watchdog for local Ollama judge
             if backend == "ollama":
                 memguard.check("sr_judge_load", memguard.unload_own_judge, lambda: None)
+            elif backend == "ollama-large":
+                memguard.check_shared("sr_judge_large_load")
 
             try:
                 # Action window only
@@ -479,7 +521,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VLM Judge (local + frontier)")
     parser.add_argument("--dataset", required=True, help="Dataset name")
     parser.add_argument("--split", required=True, choices=["train", "test"], help="Dataset split")
-    parser.add_argument("--backend", default="ollama", choices=["ollama", "gemini"], help="Judge backend")
+    parser.add_argument("--backend", default="ollama", choices=["ollama", "ollama-large", "gemini"], help="Judge backend")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of items")
     args = parser.parse_args()
 

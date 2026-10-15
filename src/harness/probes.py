@@ -100,6 +100,119 @@ def load_judge_scores(
     return np.array(scores, dtype=np.float64), np.array(valid, dtype=bool), excluded
 
 
+def build_test_only_judge_row(
+    condition: str,
+    dataset: str,
+    split_name: str,
+    model_tag: str,
+    p_hash: str,
+    data_root: Path,
+    test_items: List[Item],
+    y_test: np.ndarray,
+    groups_test: List[str],
+    c_hash: str,
+) -> Tuple[ScorecardRow, np.ndarray, Optional[float], int]:
+    """Builds scorecard row for test-only judge condition (judge-large, judge-frontier) per §6."""
+    cache_file = data_root / "judge" / dataset / model_tag / f"{p_hash}.jsonl"
+    errors_file = data_root / "judge" / dataset / model_tag / "errors.jsonl"
+
+    scores, valid, _ = load_judge_scores(test_items, dataset, model_tag, p_hash, data_root)
+    k = int(np.sum(valid))
+    n_total_test = len(test_items)
+    n_groups_test = len(set(groups_test))
+
+    if k == 0:
+        if not cache_file.exists():
+            notes = f"not run: no cache file {cache_file}"
+        else:
+            err_str = None
+            if errors_file.exists():
+                try:
+                    lines = [line.strip() for line in errors_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+                    if lines:
+                        err_str = lines[-1][:80]
+                except Exception:
+                    pass
+            if err_str:
+                notes = f"not run: 0 of {n_total_test} scored; last error: {err_str}"
+            else:
+                notes = f"not run: 0 of {n_total_test} scored"
+
+        row = make_row(
+            hypothesis="H1",
+            dataset=dataset,
+            split=split_name,
+            condition=condition,
+            metric="auroc",
+            value=None,
+            ci_low=None,
+            ci_high=None,
+            n_items=n_total_test,
+            n_groups=n_groups_test,
+            n_excluded=n_total_test,
+            config_hash=c_hash,
+            notes=notes,
+        )
+        return row, scores, None, k
+
+    elif 0 < k < n_total_test:
+        try:
+            res = auroc_ci(y_test, scores, groups_test)
+            row = make_row(
+                hypothesis="H1",
+                dataset=dataset,
+                split=split_name,
+                condition=condition,
+                metric="auroc",
+                value=res.point,
+                ci_low=res.ci_low,
+                ci_high=res.ci_high,
+                n_items=n_total_test - res.n_excluded,
+                n_groups=n_groups_test,
+                n_excluded=res.n_excluded,
+                config_hash=c_hash,
+                notes=f"partial: {k} of {n_total_test} scored",
+            )
+            return row, scores, res.point, k
+        except Exception as exc:
+            row = make_row(
+                hypothesis="H1",
+                dataset=dataset,
+                split=split_name,
+                condition=condition,
+                metric="auroc",
+                value=None,
+                ci_low=None,
+                ci_high=None,
+                n_items=k,
+                n_groups=n_groups_test,
+                n_excluded=n_total_test - k,
+                config_hash=c_hash,
+                notes=f"partial: {k} of {n_total_test} scored; metric undefined: {exc}",
+            )
+            return row, scores, None, k
+
+    else:
+        # k == n_total_test
+        res = auroc_ci(y_test, scores, groups_test)
+        row = make_row(
+            hypothesis="H1",
+            dataset=dataset,
+            split=split_name,
+            condition=condition,
+            metric="auroc",
+            value=res.point,
+            ci_low=res.ci_low,
+            ci_high=res.ci_high,
+            n_items=n_total_test - res.n_excluded,
+            n_groups=n_groups_test,
+            n_excluded=res.n_excluded,
+            config_hash=c_hash,
+            notes="",
+        )
+        return row, scores, res.point, k
+
+
 def run_probes(
     dataset: str,
     split_name: str = "test",
@@ -107,6 +220,7 @@ def run_probes(
     splits_dir: Optional[Union[str, Path]] = None,
     scorecard_path: Optional[Union[str, Path]] = None,
     judge_model_tag: str = "qwen2.5vl_7b",
+    notes: str = "",
 ) -> List[ScorecardRow]:
     root = Path(data_root or DATA_ROOT)
     splits_path = Path(splits_dir or "splits")
@@ -144,18 +258,14 @@ def run_probes(
     judge_train_scores, valid_j_tr, n_ex_j_tr = load_judge_scores(train_items, dataset, judge_model_tag, p_hash, root)
     judge_test_scores, valid_j_te, n_ex_j_te = load_judge_scores(test_items, dataset, judge_model_tag, p_hash, root)
 
-    # Load Frontier Judge scores if present
-    frontier_test_scores, valid_front_te, n_ex_front_te = load_judge_scores(
-        test_items, dataset, "gemini-3.6-flash", p_hash, root
-    )
-    has_frontier = bool(np.sum(valid_front_te) > 0)
-
     # Run Config Hash
     cfg = {
         "dataset": dataset,
         "encoder_action": "siglip-b16-224",
         "encoder_react": "e2v-plus-large",
         "judge_model": judge_model_tag,
+        "judge_large_model": "gemma4:26b",
+        "judge_large_options": {"temperature": 0, "num_ctx": 16384, "num_predict": 16},
         "prompt_hash": p_hash,
         "probe_C": 1.0,
         "probe_class_weight": "balanced",
@@ -178,25 +288,35 @@ def run_probes(
         config_hash=c_hash, notes="",
     ))
 
-    # 2. Condition: judge-frontier (if run)
-    if has_frontier and np.sum(valid_front_te) >= 0.5 * len(test_items):
-        f_res = auroc_ci(y_test, frontier_test_scores, groups_test)
-        rows.append(make_row(
-            hypothesis="H1", dataset=dataset, split=split_name,
-            condition="judge-frontier", metric="auroc",
-            value=f_res.point, ci_low=f_res.ci_low, ci_high=f_res.ci_high,
-            n_items=n_total_test - f_res.n_excluded, n_groups=n_groups_test, n_excluded=f_res.n_excluded,
-            config_hash=c_hash, notes="",
-        ))
-    else:
-        f_res = None
-        rows.append(make_row(
-            hypothesis="H1", dataset=dataset, split=split_name,
-            condition="judge-frontier", metric="auroc",
-            value=None, ci_low=None, ci_high=None,
-            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
-            config_hash=c_hash, notes="not run: GOOGLE_API_KEY daily quota exhausted (20 req/day on Free Tier)",
-        ))
+    # 2. Condition: judge-large (test split only)
+    row_large, large_test_scores, large_point, k_large = build_test_only_judge_row(
+        condition="judge-large",
+        dataset=dataset,
+        split_name=split_name,
+        model_tag="gemma4_26b",
+        p_hash=p_hash,
+        data_root=root,
+        test_items=test_items,
+        y_test=y_test,
+        groups_test=groups_test,
+        c_hash=c_hash,
+    )
+    rows.append(row_large)
+
+    # 3. Condition: judge-frontier (test split only)
+    row_front, frontier_test_scores, front_point, k_front = build_test_only_judge_row(
+        condition="judge-frontier",
+        dataset=dataset,
+        split_name=split_name,
+        model_tag="gemini-3.6-flash",
+        p_hash=p_hash,
+        data_root=root,
+        test_items=test_items,
+        y_test=y_test,
+        groups_test=groups_test,
+        c_hash=c_hash,
+    )
+    rows.append(row_front)
 
     # 3. Condition: action-probe
     act_mask_tr = valid_act_tr
@@ -342,10 +462,16 @@ def run_probes(
     ))
 
     # 7. Condition: fusion_minus_action_best
-    action_candidates = [("judge", judge_test_scores, j_res.point)]
-    if has_frontier and f_res is not None:
-        action_candidates.append(("judge-frontier", frontier_test_scores, f_res.point))
-    action_candidates.append(("action-probe", act_test_probs, act_res.point))
+    action_candidates = []
+    k_judge = int(np.sum(valid_j_te))
+    if k_judge >= 0.9 * n_total_test and j_res.point is not None:
+        action_candidates.append(("judge", judge_test_scores, j_res.point))
+    if k_large >= 0.9 * n_total_test and large_point is not None:
+        action_candidates.append(("judge-large", large_test_scores, large_point))
+    if k_front >= 0.9 * n_total_test and front_point is not None:
+        action_candidates.append(("judge-frontier", frontier_test_scores, front_point))
+    if act_res.point is not None:
+        action_candidates.append(("action-probe", act_test_probs, act_res.point))
 
     valid_candidates = [c for c in action_candidates if c[2] is not None]
     best_candidate = max(valid_candidates, key=lambda c: c[2])
@@ -412,6 +538,13 @@ def run_probes(
         config_hash=c_hash, notes="shuffled-label control",
     ))
 
+    if notes:
+        for r in rows:
+            if r.notes:
+                r.notes = f"{r.notes}; {notes}"
+            else:
+                r.notes = notes
+
     # Append rows to scorecard
     target_scorecard = scorecard_path or "results/scorecard.jsonl"
     append_rows(rows, path=target_scorecard)
@@ -432,12 +565,14 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, help="Dataset name")
     parser.add_argument("--split", default="test", help="Split name")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", help="Scorecard JSONL path")
+    parser.add_argument("--notes", default="", help="Optional notes to append to all rows")
     args = parser.parse_args()
 
     run_probes(
         dataset=args.dataset,
         split_name=args.split,
         scorecard_path=args.scorecard,
+        notes=args.notes,
     )
 
 

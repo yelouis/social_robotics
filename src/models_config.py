@@ -30,13 +30,19 @@ VALID_TIERS = ("small", "medium", "large")
 # on-disk weight. The bytes column is used only for the banner total; a `None`
 # entry is excluded from the sum (e.g. shared models counted under another
 # layer).
-_MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, int]]] = {
+_MODEL_TIERS: Dict[str, Dict[str, Tuple[str, str, Optional[int]]]] = {
     # Local VLM judge: the "just ask a VLM" control in H1 (docs/03_eval_harness.md).
     # Sees the ACTION only (reactions masked), answers "did this go well?".
     "vlm_judge": {
         "small":  ("qwen2.5vl:3b", "~3 GB", 3_000_000_000),
         "medium": ("qwen2.5vl:7b", "~7 GB", 7_000_000_000),
         "large":  ("qwen2.5vl:7b", "~7 GB", 7_000_000_000),
+    },
+    # shared with animated_infographics (its planner model); None keeps it out of the banner total
+    "vlm_judge_large": {
+        "small":  ("gemma4:26b", "~12 GB", None),
+        "medium": ("gemma4:26b", "~12 GB", None),
+        "large":  ("gemma4:26b", "~12 GB", None),
     },
 }
 

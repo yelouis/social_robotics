@@ -14,10 +14,9 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 5 was decided October 10: option B.** A larger local judge (`gemma4:26b`, condition `judge-large`) is added as the stronger "just ask an LLM" control; no frontier billing. The guide item **A7c** builds it.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
-- **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4) and Issue 3 (SSD space; October 8).
+- **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4), Issue 3 (SSD space; October 8), and Issue 5 (large local judge `gemma4:26b` evaluated on Oops!, October 14, A7c).
 
 **October 10, 2026: designer verification of A1–A7** (battery re-run bare; every item's code read against its contract).
 - **Verified correct:** A1–A5 as specified, and A6 except one gap: the frontier judge does not retry an unparsable answer (§8). That is fixed in **A7b**.
@@ -167,68 +166,6 @@ Your selection: _____
 
 ---
 
-### Issue 5: The "just ask an LLM" control is unmeasured: the local judge is at chance on Oops!, and the frontier judge is blocked by the free-tier quota
-
-**Status**: ✅ **Decided: option B, by the maintainer, October 10, 2026** (in chat: *"my choice of option B for Issue 5"*). Implementation: guide item **A7c**, with the contract in `03_eval_harness.md` §6, §8 ("Large local judge") and §12 (`sr_judge_large_load`). The entry moves to 🧪 Resolved once A7c has run `judge-large` on Oops!.
-
-*Found in the designer's verification of A7, October 10, 2026. The original filing follows, unchanged.*
-
-**Facts (October 10, 2026):**
-1. **The local judge is at chance where it should be strongest.** On the Oops! test split, `qwen2.5vl:7b` scored AUROC **0.472 [0.440, 0.498]** (scorecard row `2026-10-10T17:33:22Z`, n = 1,072, 90 groups). Oops! failures are *visible*, and the spec predicted a strong judge here.
-2. **It is not a pipeline bug.** The designer checked:
-   - the 4 frames come from the action window (`judge/vlm_judge.py` `sample_frames`);
-   - the images reach Ollama (`shared/vlm_client.py` base64 `images`);
-   - the prompt is verbatim, and the cache has 2,708 non-null answers.
-3. **The model mostly answers "90" or "100", whatever it is shown.** That is 2,479 of 2,708 answers (91.5%):
-
-   | Window | 100 | 90 | 80 or below | 0 |
-   |---|---|---|---|---|
-   | `pre` (before the failure) | 374 | 965 | 5 | 10 |
-   | `post` (after the failure) | 589 | 551 | 30 | 184 |
-
-   - It does see some failures: it answers 0 on 14% of `post` windows, against 1% of `pre` windows.
-   - But it answers "100" *more* often after the failure than before. Motion reads as "going as intended". That ranks failures above successes and puts AUROC below 0.5.
-4. **What it changes:**
-   - On Oops!, `action_best` = `action-probe` (0.779), so the Δ row is unaffected.
-   - But the thesis's central control (`00_thesis.md`, "Why this is not just ask an LLM") is currently a 7B model at chance on visible failures. A reviewer would call that a straw man.
-5. **The frontier anchor is blocked.** The frontier judge (`gemini-3.6-flash`, `03_eval_harness.md` §8) is the control that can answer the challenge.
-   - The project's `GOOGLE_API_KEY` is on the free tier: **20 requests/day** for this model (429 body: `generate_content_free_tier_requests, limit: 20`).
-   - 11 of 1,072 Oops! test items are scored. At 20 a day, the Oops! test split takes about 54 days and HoloAssist's 2,000 about 100 more.
-6. **A supervised Gemini job** (`run_supervised.sh … judge.vlm_judge --dataset oops --split test --backend gemini`) has been retrying 429s since about 10:30 on October 10. It is network-only and harmless, but it cannot progress until this is decided. Its cache stays valid either way.
-
-**Option A (recommended): Enable billing on the Google AI Studio project (M6), then run the frontier judge on both test splits** (Oops! 1,072; HoloAssist ≤ 2,000)
-- *Pros:*
-  - it is the control as specified, unchanged;
-  - about 3,100 calls, done in hours;
-  - each call is 4 JPEGs (longer side 768 px), about 100 prompt tokens and ≤ 32 output tokens: roughly 3–15 M input tokens in total, depending on how the model tokenizes images. At Flash-tier prices that should be a few dollars; **check the current price page before enabling**;
-  - BAD is unaffected: it never goes to a cloud API (`02_data_sources.md` → BAD).
-- *Cons:*
-  - it costs money and needs a paid account;
-  - Oops! and HoloAssist frames are sent to Google. Both licenses allow research use, and nothing is redistributed.
-
-**Option B: Add a larger local judge that is already installed (`gemma4:26b`) as a second local judge condition, only if it accepts images**
-- *Pros:*
-  - free;
-  - frames never leave the Mac;
-  - no account.
-- *Cons:*
-  - it is still not a frontier model, so "just ask an LLM" stays contestable;
-  - it is heavy: `llama-server` showed 29 GB resident with it loaded on October 10. It needs its own memory-guard peak and cannot run beside other jobs;
-  - it is slow: at the local judge's 8–10 s per call, about 3,100 test calls is roughly 8 h;
-  - it is a spec change: a new condition and a new cache directory, and the designer must write it.
-
-**Option C: Proceed without a frontier judge**, reporting `judge-frontier` as "not run" with its reason
-- *Pros:* no cost, no delay.
-- *Cons:* the weakest paper. The maintainer's own challenge ("how is this different from asking an LLM?") would be answered only by a model that misses visible failures.
-
-**Option D (not recommended): Rewrite the judge question or prompt and re-run the local judge**
-- *Pros:* free.
-- *Cons:* the prompt would change *after* seeing test results. That is tuning on test, which the guide rejects (§5.5). Even choosing on the train split alone, it is a post-hoc protocol change.
-
-Your selection: **B** (maintainer, October 10, 2026)
-
----
-
 ## 🧪 Resolved Issues & Implementation Refinements
 
 Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
@@ -250,6 +187,10 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - **Manifest:** every path plus the Ego4D clip ids, for re-download, is in `DATA_ROOT/DELETED_2026-10-08.json`.
      - **Why Ego4D was deleted rather than pruned:** nothing in Waves A or B uses it, and its bystander footage is the wrong data for H1.
      - **Result:** free space went to 1.5 TiB (1.4 TiB on October 10, with Oops! extracted and the HoloAssist archive downloading).
+3. **Issue 5: Large local judge (`gemma4:26b`) replaces stalled frontier judge on Oops! (Resolved - October 14, A7c)**:
+   - **Problem**: The 7B local judge (`qwen2.5vl:7b`) scored at chance on Oops! (AUROC 0.472 [0.440, 0.498]), while the frontier judge (`gemini-3.6-flash`) was blocked by free-tier daily rate limits (20 req/day). The central control ("just ask an LLM") lacked a strong measurement.
+   - **Solution**: Option B (larger local judge) was selected by the maintainer and implemented in A7c. `gemma4:26b` (`vlm_judge_large`) was evaluated on all 1,072 Oops! test split items under memory guard (`sr_judge_large_load`, declared peak 33 GB, measured 28.10 GB RSS).
+   - **Outcome**: 1,072 items scored, 0 excluded, 0 parse failures, 0 API errors (41.8 min wall-clock). `judge-large` AUROC is **0.708 [0.684, 0.731]**, showing that a sufficiently large local VLM reliably recognizes visible failures (answer distribution: 78.0% 100s on pre-failure, 63.4% 0s on post-failure). Because `action-probe` (SigLIP) achieves 0.779, `action_best` remains `action-probe`, and $\Delta = +0.015$ [-0.002, 0.029] is completely unchanged. Clause 1 of the thesis prediction now holds for `judge-large` ($0.708 > 0.50$).
 
 ---
 
@@ -311,6 +252,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Design updated:** `03_eval_harness.md` §4–§6, §8 and §12, and `02_data_sources.md` (Oops! "As built"; HoloAssist "pinned details").
 - A6c — Memory guard fixes (re-entrancy, fail-closed read, supervisor accounting, fast test isolation) — git log --grep "(a6c)" — G1–G4 exit 0 (52 fast passed, 5 slow passed; slow release measured with footprint < 1.5 GB); nested guard re-enters without deadlock (< 1.5s); read_memory fails closed to (0, 4); exit 75 does not consume supervisor attempts; fast suite isolated from live HTTP.
 - A7b — Oops! report corrections and frontier-judge parse parity — git log --grep "(a7b)" — prediction_check tests pass; report regenerated with two clauses (Clause 1 did not hold [AUROC 0.472], Clause 2 held [Δ 0.015]), reclassified errors (qwen 2 ffmpeg, gemini 1,024 429 and 1 other), wall-clock timings (download 46.6 min, features 57.0 min, judge 398.2 min), verified descriptions for 10 sampled items, react-nonverbal caveat added; Gemini parse retries (outer loop temp 0/0.3) tested; scorecard unmodified; G1–G3 exit 0 (57 fast passed, self-test 4/4).
+- A7c — Large local judge (judge-large, gemma4:26b) on Oops! — git log --grep "(a7c)" — Issue 5 resolved with option B; declared peak 33 GB (28.10 GB RSS measured); gemma4:26b evaluated on 1,072 Oops! test items (0 parse failures, 0 errors, 41.8 min wall-clock); answer distribution shows clean binary separation (pre: 78% 100s; post: 63.4% 0s); judge-large AUROC=0.708 [0.684, 0.731] (vs 0.472 for 7B judge); action_best remains action-probe (0.779); delta=+0.015 unchanged; G1–G4 pass.
 
 
 ---

@@ -262,11 +262,72 @@ def generate_oops_report(
                     f"- **Local Judge (`qwen2.5vl:7b`):** {total_answers:,} answers, "
                     f"{parse_failures} parse failures, {err_summary}"
                 )
+            elif "gemma" in mname_lower:
+                judge_diag_lines.append(
+                    f"- **Large Local Judge (`gemma4:26b`):** {total_answers:,} answers, "
+                    f"{parse_failures} parse failures, {err_summary}"
+                )
             else:
                 judge_diag_lines.append(
                     f"- **Judge (`{model_dir.name}`):** {total_answers:,} answers, "
                     f"{parse_failures} parse failures, {err_summary}"
                 )
+
+    # Compute answer distributions by window type for local judges
+    def compute_distribution(model_name: str) -> Optional[Dict[str, Dict[str, int]]]:
+        m_dir = judge_dir / model_name
+        if not m_dir.exists():
+            return None
+        counts = {
+            "pre": {"100": 0, "90": 0, "80 or below": 0, "0": 0},
+            "post": {"100": 0, "90": 0, "80 or below": 0, "0": 0},
+        }
+        ans_files = [f for f in m_dir.glob("*.jsonl") if f.name != "errors.jsonl"]
+        has_any = False
+        for jf in ans_files:
+            for line in jf.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    e = json.loads(line)
+                    prob = e.get("judge_prob")
+                    if prob is None:
+                        continue
+                    iid = e.get("item_id", "")
+                    w = "pre" if iid.endswith(":pre") else "post"
+                    p_pct = round(prob * 100)
+                    if p_pct == 100:
+                        counts[w]["100"] += 1
+                    elif p_pct == 90:
+                        counts[w]["90"] += 1
+                    elif p_pct == 0:
+                        counts[w]["0"] += 1
+                    elif p_pct <= 80:
+                        counts[w]["80 or below"] += 1
+                    else:
+                        counts[w]["80 or below"] += 1
+                    has_any = True
+                except Exception:
+                    pass
+        return counts if has_any else None
+
+    dist_lines: List[str] = [
+        "",
+        "### Answer Distribution by Window Type",
+        "",
+    ]
+    for model_key, label in [("qwen2.5vl_7b", "Local Judge (`qwen2.5vl:7b`)"), ("gemma4_26b", "Large Local Judge (`gemma4:26b`)")]:
+        dist = compute_distribution(model_key)
+        if dist:
+            dist_lines.extend([
+                f"#### {label}",
+                "",
+                "| Window | 100 | 90 | 80 or below | 0 |",
+                "|---|---|---|---|---|",
+                f"| `pre` (before the failure) | {dist['pre']['100']} | {dist['pre']['90']} | {dist['pre']['80 or below']} | {dist['pre']['0']} |",
+                f"| `post` (after the failure) | {dist['post']['100']} | {dist['post']['90']} | {dist['post']['80 or below']} | {dist['post']['0']} |",
+                "",
+            ])
 
     # 3. 10 example items (5 pre, 5 post, default_rng(0))
     items_path = root / "items" / "oops" / "items.jsonl"
@@ -297,6 +358,7 @@ def generate_oops_report(
     lines = [
         f"# Oops! H1 Evaluation Report ({today})",
         f"*Corrected {corr_date} (A7b): prediction check split by clause; judge error counts reclassified; wall-clock times and example descriptions added. The numbers are unchanged.*",
+        f"*Updated {corr_date} (A7c): judge-large added (Issue 5, option B).*",
         "",
         "## 1. Executive Summary & Prediction Check",
         "",
@@ -319,6 +381,7 @@ def generate_oops_report(
     ])
     core_conditions = [
         "judge",
+        "judge-large",
         "judge-frontier",
         "action-probe",
         "react-nonverbal",
@@ -367,6 +430,7 @@ def generate_oops_report(
         "",
     ])
     lines.extend(judge_diag_lines)
+    lines.extend(dist_lines)
     lines.append("")
 
     # Wall-clock timing

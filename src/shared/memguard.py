@@ -29,6 +29,8 @@ HEAVY_STEPS: Dict[str, int] = {
     "sr_e2v": 6 * (1024**3),
     # Measured designer October 10, 2026, M4 Max (7.72 GB * 1.15 rounded up)
     "sr_judge_load": 9 * (1024**3),
+    # Measured in A7c step 6: 28.10 GB RSS on 50 items (drop 24.96 GB; 28.10 × 1.15 = 32.32 GB)
+    "sr_judge_large_load": 33 * (1024**3),
 }
 
 DEFAULT_MEM_WAIT_S: float = 1800.0
@@ -143,9 +145,8 @@ def log_event(
         os.fsync(f.fileno())
 
 
-def is_our_judge_loaded(endpoint: Optional[str] = None) -> bool:
-    """Check if our judge model is loaded in Ollama via GET /api/ps."""
-    our_model = get_model("vlm_judge")
+def is_model_loaded(model: str, endpoint: Optional[str] = None) -> bool:
+    """Check if a model is loaded in Ollama via GET /api/ps."""
     base = endpoint or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
     try:
         resp = httpx.get(f"{base}/api/ps", timeout=5.0)
@@ -153,11 +154,16 @@ def is_our_judge_loaded(endpoint: Optional[str] = None) -> bool:
             models = resp.json().get("models", [])
             for m in models:
                 name = m.get("name") or m.get("model") or ""
-                if name == our_model or name.startswith(f"{our_model}:") or our_model.startswith(f"{name}:"):
+                if name == model or name.startswith(f"{model}:") or model.startswith(f"{name}:"):
                     return True
     except Exception:
         pass
     return False
+
+
+def is_our_judge_loaded(endpoint: Optional[str] = None) -> bool:
+    """Check if our judge model is loaded in Ollama via GET /api/ps."""
+    return is_model_loaded(get_model("vlm_judge"), endpoint=endpoint)
 
 
 def unload_own_judge(endpoint: Optional[str] = None, timeout_s: float = 30.0) -> bool:
@@ -373,6 +379,24 @@ def check(
             reload()
         avail_after, press_after = read_memory()
         log_event(step, "resume", 0, avail_after / (1024**3), press_after)
+
+
+def check_shared(
+    step: str,
+    data_root: Optional[Union[str, Path]] = None,
+) -> None:
+    """Between-items check for shared models per 03_eval_harness.md §8 and §12.
+
+    On warning or critical pressure/memory, logs action=stop and raises MemoryDeferred.
+    Never releases or unloads anything.
+    """
+    available, pressure = read_memory()
+    if pressure >= 2 or available < FLOOR:
+        log_event(step, "stop", 0, available / (1024**3), pressure, data_root=data_root)
+        raise MemoryDeferred(
+            f"memory guard: shared step '{step}' stopped due to memory pressure ({pressure}) "
+            f"or available memory ({available / (1024**3):.1f} GB < {FLOOR / (1024**3):.1f} GB)"
+        )
 
 
 def status() -> None:

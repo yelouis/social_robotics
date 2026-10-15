@@ -15,6 +15,7 @@ handled gracefully (the clip is skipped/defaulted, not stuck).
 """
 import base64
 import os
+from typing import Optional
 
 import httpx
 
@@ -26,8 +27,17 @@ def _default_host() -> str:
     return h.rstrip("/")
 
 
-def ollama_chat(model, prompt, image_paths=None, options=None, fmt=None,
-                timeout=180.0, host=None) -> str:
+def ollama_chat(
+    model,
+    prompt,
+    image_paths=None,
+    options=None,
+    fmt=None,
+    timeout=180.0,
+    host=None,
+    think: Optional[bool] = None,
+    keep_alive: Optional[str] = None,
+) -> str:
     """POST one user message to ollama `/api/chat` (non-streaming) and return the
     assistant message content. ``image_paths`` are read and base64-encoded.
     ``fmt`` maps to the API's ``format`` field (e.g. "json"). Raises
@@ -44,6 +54,10 @@ def ollama_chat(model, prompt, image_paths=None, options=None, fmt=None,
         payload["options"] = options
     if fmt:
         payload["format"] = fmt
+    if think is not None:
+        payload["think"] = think
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
     resp = httpx.post(f"{base}/api/chat", json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json().get("message", {}).get("content", "")

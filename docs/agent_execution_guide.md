@@ -147,12 +147,12 @@
 
 ### 1.4 Gates (run bare October 10, 2026; the regression bar)
 
-| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b |
-|---|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** |
+| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b | After A7c |
+|---|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** | exit 0 · **62 passed** |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** | exit 0 · **6 passed** (88 s) |
 
 
 - G1–G3 were run on `949c180`'s exact content just before it was committed. G4 was run earlier the same day on the same content.
@@ -174,8 +174,8 @@
 | Oops! features | `features/oops/{siglip-b16-224,e2v-plus-large}/` | 2,708 `.npy` each. 1 undecodable clip (2 items, train) is in `errors.jsonl` |
 | Oops! local judge | `judge/oops/qwen2.5vl_7b/2409b2876016.jsonl` | 2,708 answers, **0 null**. 2 ffmpeg errors (the same clip) in `errors.jsonl` |
 | Oops! frontier judge | `judge/oops/gemini-3.6-flash/2409b2876016.jsonl` | 13 of 1,072 scored by 14:40 (free tier, 20/day). `errors.jsonl` holds 429s. Issue 5 = B: not run further |
-| Oops! large local judge | `judge/oops/gemma4_26b/` | Does not exist yet (A7c) |
-| Oops! rows | `results/scorecard.jsonl` | 11 rows, `2026-10-10T17:33:22Z`–`…26Z`. Judge **0.472** [0.440, 0.498]; action-probe 0.779; react-nonverbal 0.711; fusion 0.793; Δ +0.015 [−0.002, 0.029]; shuffled controls 0.510 / 0.468 / 0.513 |
+| Oops! large local judge | `judge/oops/gemma4_26b/2409b2876016.jsonl` | 1,072 answers, 0 excluded, 0 errors, AUROC 0.708 (A7c) |
+| Oops! rows | `results/scorecard.jsonl` | 11 rows, `2026-10-10T17:33:22Z`–`…26Z`. Judge **0.472** [0.440, 0.498]; action-probe 0.779; react-nonverbal 0.711; fusion 0.793; Δ +0.015 [−0.002, 0.029]; shuffled controls 0.510 / 0.468 / 0.513. **Re-scored in A7c with judge-large** (12 rows appended) |
 | HoloAssist items (draft) | `items/holoassist/items.jsonl`, `stats.json` | 5,000 items (2,500 per class), built with the draft. **Rebuilt in A8** (item-id format) |
 | Memory-guard log | `runs/memguard.log` | No real `pause` or `stop` yet (the only `stop`/`deferred` lines are fake-reading drills). No jetsam report since October 9 |
 
@@ -573,8 +573,11 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
 - **A4** `11df49f`: the HoloAssist labels (hashes re-verified), `--stats`, and the independence verdict.
 - **A5** `5983241`: `FeatureCache`, `FrameEncoder` (768-d), `NonverbalAudioEncoder` (1024-d) and `features.extract`.
 - **A6** `0f16799`: `build_prompt` (verbatim), `prompt_hash`, `parse_prob`, `sample_frames`, `OllamaJudge`, `GeminiJudge` and the cache. A7b changes only Gemini's parse retries.
-- **A6b** `76e71cc`: `shared.memguard` (the floor, peaks re-measured at 1.60 / 4.94 / 7.80 GB, the shared lock path, unloading only our model, `--status`, the fake-reading override), plus exit 75 in the CLIs, the supervisor and the battery. A6c changes only what §3 lists.
-- **A7** `6d72492`: the Oops! download, schema, adapter, split, features, judge, probes and 11 scorecard rows. A7b corrects only the report.
+- **A6b** `76e71cc`: `shared.memguard` (the floor, peaks re-measured at 1.60 / 4.94 / 7.80 GB, the shared lock path, unloading only our model, `--status`, the fake-reading override), plus exit 75 in the CLIs, the supervisor and the battery.
+- **A6c** `8c6f04e`: memory guard fixes (`guard()` re-entrancy via `_HELD_DEPTH`, fail-closed `read_memory()` returning `(0, 4)`, supervisor attempt accounting for exit 75, fast test HTTP isolation, `footprint -p` slow test).
+- **A7** `6d72492`: the Oops! download, schema, adapter, split, features, judge, probes and 11 scorecard rows.
+- **A7b** `d77584c`: Oops! report corrections (Clause 1 failed [0.472], Clause 2 held [0.015]; HTTP 429 distinguished from parse failures; wall-clock timings; 10 verified descriptions) and Gemini judge parse parity retries.
+- **A7c**: large local judge (`judge-large`, `gemma4:26b`, `vlm_judge_large`), `check_shared()` watchdog, test-only probe condition, 90% coverage rule for `action_best`, 33 GB declared peak (28.10 GB RSS measured), and Oops! test split evaluated (1,072 items, AUROC 0.708).
 - **`949c180`** `chore(a8)`: the A8 draft, committed as found at the maintainer's request (incomplete). A8 resumes from it.
 - `shared/vlm_client.ollama_chat`'s enforced timeout is load-bearing (`LESSONS_v0.md`, "Operations"). Do not replace it with the `ollama` Python client.
 

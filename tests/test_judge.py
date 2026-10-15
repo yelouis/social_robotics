@@ -331,6 +331,141 @@ def test_gemini_judge_429_exhaustion_raises(tmp_path: Path, monkeypatch):
         assert cf.stat().st_size == 0
 
 
+def test_payload_large_judge_and_qwen_judge_unchanged(tmp_path: Path, monkeypatch):
+    from judge.vlm_judge import make_large_judge
+
+    vid_path = tmp_path / "dummy.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    recorded_calls = []
+
+    def mock_ollama_chat(model, prompt, image_paths=None, options=None, timeout=None, host=None, fmt=None, think=None, keep_alive=None):
+        recorded_calls.append({
+            "model": model,
+            "prompt": prompt,
+            "image_paths": image_paths,
+            "options": options,
+            "think": think,
+            "keep_alive": keep_alive,
+        })
+        return "85"
+
+    monkeypatch.setattr("judge.vlm_judge.ollama_chat", mock_ollama_chat)
+    monkeypatch.setattr("shared.memguard.is_model_loaded", lambda m, endpoint=None: True)
+
+    # 1. Test large judge payload
+    large_judge = make_large_judge()
+    assert large_judge.model == "gemma4:26b"
+    assert large_judge.options == {"temperature": 0, "num_ctx": 16384, "num_predict": 16}
+    assert large_judge.think is False
+    assert large_judge.keep_alive == "15m"
+    assert large_judge.load_step == "sr_judge_large_load"
+
+    prob, raw, attempts, elapsed_ms = large_judge.judge_item(
+        video_path=str(vid_path),
+        window=[0.0, 1.0],
+        context_text="A short clip.",
+        question=DATASET_QUESTIONS["oops"],
+    )
+
+    assert prob == 0.85
+    assert len(recorded_calls) == 1
+    call = recorded_calls[0]
+    assert call["model"] == "gemma4:26b"
+    assert call["options"] == {"temperature": 0, "num_ctx": 16384, "num_predict": 16}
+    assert call["think"] is False
+    assert call["keep_alive"] == "15m"
+    assert len(call["image_paths"]) == 4
+
+    # 2. Test qwen judge payload (neither think nor keep_alive)
+    recorded_calls.clear()
+    qwen_judge = OllamaJudge()
+    prob_q, raw_q, attempts_q, elapsed_q = qwen_judge.judge_item(
+        video_path=str(vid_path),
+        window=[0.0, 1.0],
+        context_text="A short clip.",
+        question=DATASET_QUESTIONS["oops"],
+    )
+    assert prob_q == 0.85
+    assert len(recorded_calls) == 1
+    q_call = recorded_calls[0]
+    assert q_call["think"] is None
+    assert q_call["keep_alive"] is None
+    assert q_call["options"] == {"temperature": 0, "num_ctx": 8192, "num_predict": 16}
+
+
+def test_run_judge_ollama_large_split_train_raises_value_error(tmp_path: Path):
+    with pytest.raises(ValueError, match="judge-large is test split only"):
+        run_judge(
+            dataset="oops_test",
+            split="train",
+            backend="ollama-large",
+            data_root=tmp_path,
+        )
+
+
+def test_run_judge_ollama_large_never_unloads_shared_model(tmp_path: Path, monkeypatch):
+    from shared.memguard import MemoryDeferred
+
+    vid_path = tmp_path / "dummy.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    items = [
+        Item("test:1:0", "oops_test", "g1", str(vid_path), [0.0, 1.0], [1.0, 2.0], 1, "Context 1.", "c"),
+        Item("test:2:0", "oops_test", "g2", str(vid_path), [0.0, 1.0], [1.0, 2.0], 0, "Context 2.", "c"),
+    ]
+    items_dir = tmp_path / "items" / "oops_test"
+    items_dir.mkdir(parents=True)
+    write_items(items, items_dir / "items.jsonl")
+
+    splits_dir = tmp_path / "splits"
+    make_group_split(items, "oops_test", official={it.item_id: "test" for it in items}, path_dir=splits_dir)
+
+    http_calls = []
+
+    def fake_post(url, *args, **kwargs):
+        http_calls.append({"method": "POST", "url": url, "json": kwargs.get("json")})
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {"message": {"content": "50"}}
+        return FakeResp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    monkeypatch.setattr("shared.memguard.is_model_loaded", lambda m, endpoint=None: True)
+
+    read_count = [0]
+    def fake_read_memory():
+        read_count[0] += 1
+        if read_count[0] <= 1:
+            return 32 * (1024**3), 1  # normal
+        return 32 * (1024**3), 2  # warning before second item
+
+    monkeypatch.setattr("shared.memguard.read_memory", fake_read_memory)
+
+    with pytest.raises(MemoryDeferred):
+        run_judge(
+            dataset="oops_test",
+            split="test",
+            backend="ollama-large",
+            data_root=tmp_path,
+            splits_dir=splits_dir,
+            question_override=DATASET_QUESTIONS["oops"],
+        )
+
+    # Recorded HTTP calls must contain NO /api/generate and NO keep_alive: 0
+    for call in http_calls:
+        assert "/api/generate" not in call["url"], f"Unexpected call to /api/generate: {call}"
+        payload = call.get("json") or {}
+        assert payload.get("keep_alive") != 0, f"Unexpected keep_alive: 0: {call}"
+
+
 # ---------------------------------------------------------------------------
 # Slow tests (live local model)
 # ---------------------------------------------------------------------------
@@ -358,3 +493,38 @@ def test_live_local_judge_synthetic_items(tmp_path_factory):
         assert prob is not None, f"Item {idx} returned None probability. Raw: {raw}"
         assert 0.0 <= prob <= 1.0
         assert attempts >= 1
+
+
+@pytest.mark.slow
+def test_live_large_judge_synthetic_items(tmp_path_factory):
+    import httpx
+    from judge.vlm_judge import make_large_judge
+
+    fn_dir = tmp_path_factory.mktemp("judge_large_live")
+    vid_path = fn_dir / "test_live_large.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=5:size=320x240:rate=10",
+        "-pix_fmt", "yuv420p", str(vid_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    judge = make_large_judge()
+    windows = [[0.0, 1.0], [1.0, 2.0], [2.0, 3.0], [3.0, 4.0]]
+    for idx, win in enumerate(windows):
+        prob, raw, attempts, elapsed_ms = judge.judge_item(
+            video_path=str(vid_path),
+            window=win,
+            context_text="A synthetic test pattern video.",
+            question=DATASET_QUESTIONS["oops"],
+        )
+        assert prob is not None, f"Item {idx} returned None probability. Raw: {raw}"
+        assert 0.0 <= prob <= 1.0
+        assert attempts >= 1
+
+    # Check /api/ps lists gemma4:26b with context_length 16384
+    resp = httpx.get("http://127.0.0.1:11434/api/ps", timeout=10.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    loaded_models = data.get("models", [])
+    gemma_entry = next((m for m in loaded_models if "gemma4:26b" in m.get("name", "") or "gemma4:26b" in m.get("model", "")), None)
+    assert gemma_entry is not None, f"gemma4:26b not found in /api/ps: {loaded_models}"
+    assert gemma_entry.get("context_length") == 16384, f"Unexpected context_length: {gemma_entry}"
