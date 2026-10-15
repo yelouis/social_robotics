@@ -24,7 +24,7 @@
 #       ./venv/bin/python -m <resumable runner>
 #
 # Env:
-#   SR_SUPERVISE_MAX_ATTEMPTS  hard ceiling on relaunches (default 50)
+#   SR_SUPERVISE_MAX_ATTEMPTS  hard ceiling on relaunches (default 50; memory deferrals do not count toward SR_SUPERVISE_MAX_ATTEMPTS)
 #   SR_SUPERVISE_LOG           supervisor log path (default supervise_<ts>.log)
 #   SR_MEMWAIT_SLEEP_S         sleep seconds after exit 75 memory deferral (default 600)
 #   SR_MAX_MEM_DEFERRALS       max consecutive memory deferrals before abort (default 72)
@@ -67,9 +67,10 @@ log "supervising: $* (progress=$PROGRESS_FILE, max_attempts=$MAX_ATTEMPTS, log=$
 
 stale=0
 mem_deferrals=0
-for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+attempt=0
+while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
     before="$(count_records)"
-    log "attempt $attempt/$MAX_ATTEMPTS — $before records so far"
+    log "attempt $((attempt + 1))/$MAX_ATTEMPTS — $before records so far"
     PYTHONFAULTHANDLER=1 "${NOSLEEP[@]}" "$@" 2>&1 | tee -a "$LOG"
     rc="${PIPESTATUS[0]}"
     after="$(count_records)"
@@ -90,6 +91,7 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
         continue
     fi
 
+    attempt=$((attempt + 1))
     mem_deferrals=0
     log "runner died (exit $rc) — progressed ${before} -> ${after} records this attempt."
     if [ "$after" -le "$before" ]; then

@@ -309,6 +309,8 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Working tree** (with the uncommitted A8 draft): G1–G4 exit 0 (48 passed, self-test 4/4, 5 slow passed).
   - **Findings:** the guide items A6c (memory-guard defects), A7b (report corrections and frontier parse parity), corrections to the A8 draft, and Issue 5.
   - **Design updated:** `03_eval_harness.md` §4–§6, §8 and §12, and `02_data_sources.md` (Oops! "As built"; HoloAssist "pinned details").
+- A6c — Memory guard fixes (re-entrancy, fail-closed read, supervisor accounting, fast test isolation) — git log --grep "(a6c)" — G1–G4 exit 0 (52 fast passed, 5 slow passed; slow release measured with footprint < 1.5 GB); nested guard re-enters without deadlock (< 1.5s); read_memory fails closed to (0, 4); exit 75 does not consume supervisor attempts; fast suite isolated from live HTTP.
+
 
 ---
 

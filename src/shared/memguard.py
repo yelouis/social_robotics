@@ -33,6 +33,8 @@ HEAVY_STEPS: Dict[str, int] = {
 
 DEFAULT_MEM_WAIT_S: float = 1800.0
 
+_HELD_DEPTH: int = 0
+
 
 class MemoryDeferred(Exception):
     """Raised when memory guard cannot admit a heavy step within the time limit or stops it."""
@@ -68,13 +70,18 @@ def read_memory() -> Tuple[int, int]:
             ],
             text=True,
         ).split()
+        if len(out) < 3:
+            raise ValueError(f"expected >= 3 fields from sysctl, got {len(out)}: {out}")
         memsize = int(out[0])
         level = int(out[1])
         pressure = int(out[2])
         available_bytes = int(memsize * level / 100)
         return available_bytes, pressure
-    except Exception:
-        return 64 * (1024**3), 1
+    except Exception as e:
+        sys.stderr.write(f"memory guard: READ FAILED ({e})\n")
+        sys.stderr.flush()
+        return 0, 4
+
 
 
 def lock_dir() -> Path:
@@ -179,9 +186,43 @@ def unload_own_judge(endpoint: Optional[str] = None, timeout_s: float = 30.0) ->
     return False
 
 
+def _log_waiting_line(
+    step: str,
+    peak_gb: int,
+    available: int,
+    pressure: int,
+    holder_pid: Optional[int],
+    last_log_time: float,
+) -> float:
+    now = time.monotonic()
+    if last_log_time == 0.0 or now - last_log_time >= 30.0:
+        avail_gb = available / (1024**3)
+        holder_str = f"held by pid {holder_pid}" if holder_pid is not None else "free"
+        msg = (
+            f"memory guard: waiting for {step}: need {peak_gb} GB + floor 8 GB, "
+            f"available {avail_gb:.1f} GB, pressure {pressure}, heavy lock {holder_str}"
+        )
+        print(msg, flush=True)
+        logger.info(msg)
+        return now
+    return last_log_time
+
+
+def _handle_timeout(step: str, peak_gb: int, timeout_s: float, t_start: float) -> None:
+    available, pressure = read_memory()
+    avail_gb = available / (1024**3)
+    waited_ms = int((time.monotonic() - t_start) * 1000)
+    log_event(step, "deferred", waited_ms, avail_gb, pressure)
+    raise MemoryDeferred(
+        f"memory guard: timed out waiting {timeout_s:.0f}s for {step}: "
+        f"need {peak_gb} GB + floor 8 GB, available {avail_gb:.1f} GB"
+    )
+
+
 @contextmanager
 def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
     """Admission context manager implementing 03_eval_harness.md §12 steps 1-6."""
+    global _HELD_DEPTH
     if timeout_s is None:
         if "SR_MEM_WAIT_S" in os.environ:
             timeout_s = float(os.environ["SR_MEM_WAIT_S"])
@@ -192,6 +233,45 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
     peak = HEAVY_STEPS.get(step, 0)
     peak_gb = int(round(peak / (1024**3)))
     t_start = time.monotonic()
+
+    # Nested path: already hold the heavy lock in this process
+    if _HELD_DEPTH > 0:
+        last_log_time = 0.0
+        while time.monotonic() - t_start < timeout_s:
+            available, pressure = read_memory()
+            if available - peak >= FLOOR:
+                waited_ms = int((time.monotonic() - t_start) * 1000)
+                if waited_ms < 50:
+                    waited_ms = 0
+                avail_gb = available / (1024**3)
+                log_event(step, "admit", waited_ms, avail_gb, pressure)
+                _HELD_DEPTH += 1
+                try:
+                    yield
+                    return
+                finally:
+                    _HELD_DEPTH -= 1
+
+            if step != "sr_judge_load" and is_our_judge_loaded():
+                unload_own_judge()
+                available, pressure = read_memory()
+                if available - peak >= FLOOR:
+                    continue
+
+            last_log_time = _log_waiting_line(
+                step=step,
+                peak_gb=peak_gb,
+                available=available,
+                pressure=pressure,
+                holder_pid=os.getpid(),
+                last_log_time=last_log_time,
+            )
+            time.sleep(min(5.0, max(0.1, timeout_s - (time.monotonic() - t_start))))
+
+        _handle_timeout(step, peak_gb, timeout_s, t_start)
+        return
+
+    # Outer path: acquire the heavy lock
     lock_file = lock_dir() / "heavy.lock"
     lock_fd = open(lock_file, "a+", encoding="utf-8")
     acquired_lock = False
@@ -218,8 +298,12 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
                             waited_ms = 0
                         avail_gb = available / (1024**3)
                         log_event(step, "admit", waited_ms, avail_gb, pressure)
-                        yield
-                        return
+                        _HELD_DEPTH += 1
+                        try:
+                            yield
+                            return
+                        finally:
+                            _HELD_DEPTH -= 1
                     else:
                         lock_fd.seek(0)
                         lock_fd.truncate()
@@ -235,31 +319,21 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
                 if available - peak >= FLOOR:
                     continue
 
-            now = time.monotonic()
-            if last_log_time == 0.0 or now - last_log_time >= 30.0:
-                avail_gb = available / (1024**3)
-                holder_str = f"held by pid {holder_pid}" if holder_pid is not None else "free"
-                msg = (
-                    f"memory guard: waiting for {step}: need {peak_gb} GB + floor 8 GB, "
-                    f"available {avail_gb:.1f} GB, pressure {pressure}, heavy lock {holder_str}"
-                )
-                print(msg, flush=True)
-                logger.info(msg)
-                last_log_time = now
+            last_log_time = _log_waiting_line(
+                step=step,
+                peak_gb=peak_gb,
+                available=available,
+                pressure=pressure,
+                holder_pid=holder_pid,
+                last_log_time=last_log_time,
+            )
 
             if holder_pid is not None:
                 time.sleep(min(0.5, max(0.05, timeout_s - (time.monotonic() - t_start))))
             else:
                 time.sleep(min(5.0, max(0.1, timeout_s - (time.monotonic() - t_start))))
 
-        available, pressure = read_memory()
-        avail_gb = available / (1024**3)
-        waited_ms = int((time.monotonic() - t_start) * 1000)
-        log_event(step, "deferred", waited_ms, avail_gb, pressure)
-        raise MemoryDeferred(
-            f"memory guard: timed out waiting {timeout_s:.0f}s for {step}: "
-            f"need {peak_gb} GB + floor 8 GB, available {avail_gb:.1f} GB"
-        )
+        _handle_timeout(step, peak_gb, timeout_s, t_start)
     finally:
         if acquired_lock:
             try:

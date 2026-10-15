@@ -5,6 +5,7 @@ import sys
 import time
 from typing import List
 
+import httpx
 import pytest
 
 from shared.memguard import (
@@ -16,6 +17,24 @@ from shared.memguard import (
     read_memory,
     unload_own_judge,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_http(request, monkeypatch):
+    if "slow" in request.keywords:
+        yield
+        return
+    recorded_urls = []
+
+    def mock_http(url, *args, **kwargs):
+        recorded_urls.append(str(url))
+        raise httpx.ConnectError("blocked in fast test")
+
+    monkeypatch.setattr("httpx.get", mock_http)
+    monkeypatch.setattr("httpx.post", mock_http)
+    yield
+    assert not recorded_urls, f"live HTTP in a fast memguard test: {recorded_urls}"
+
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +120,7 @@ def test_memguard_c_timeout_raises_memory_deferred(tmp_path: Path, monkeypatch):
 
     # Only 5 GB available: need 6 + 8 = 14 GB for sr_e2v
     monkeypatch.setattr("shared.memguard.read_memory", lambda: (5 * 1024**3, 1))
+    monkeypatch.setattr("shared.memguard.is_our_judge_loaded", lambda *a, **kw: False)
 
     t0 = time.time()
     with pytest.raises(MemoryDeferred) as exc_info:
@@ -248,6 +268,7 @@ def test_memguard_g_lock_shared_with_child_process(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("INFOGRAPHICS_LOCK_DIR", str(lock_d))
     monkeypatch.setattr("shared.memguard.DATA_ROOT", tmp_path)
     monkeypatch.setattr("shared.memguard.read_memory", lambda: (32 * 1024**3, 1))
+    monkeypatch.setattr("shared.memguard.is_our_judge_loaded", lambda *a, **kw: False)
 
     lock_file = lock_d / "heavy.lock"
 
@@ -351,24 +372,211 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# Re-entrancy, fail-closed & accounting tests (A6c)
+# ---------------------------------------------------------------------------
+
+def test_memguard_i_nested_guard(tmp_path: Path, monkeypatch):
+    """(i) A nested guard() inside check() re-admits without deadlocking."""
+    lock_d = tmp_path / "locks"
+    monkeypatch.setenv("INFOGRAPHICS_LOCK_DIR", str(lock_d))
+    monkeypatch.setattr("shared.memguard.DATA_ROOT", tmp_path)
+    monkeypatch.setenv("SR_MEM_WAIT_S", "2")
+    monkeypatch.setattr("shared.memguard.is_our_judge_loaded", lambda *a, **kw: False)
+
+    read_count = [0]
+
+    def fake_read():
+        read_count[0] += 1
+        if read_count[0] == 1:
+            return (7 * 1024**3, 2)
+        return (40 * 1024**3, 1)
+
+    monkeypatch.setattr("shared.memguard.read_memory", fake_read)
+
+    calls = []
+
+    def release():
+        calls.append("release")
+
+    def reload():
+        with guard("sr_siglip"):
+            calls.append("reload-admitted")
+
+    t0 = time.monotonic()
+    check("sr_siglip", release, reload)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.5
+    assert calls == ["release", "reload-admitted"]
+
+    # Assert that afterwards a child process can take flock(LOCK_EX | LOCK_NB)
+    lock_file = lock_d / "heavy.lock"
+    child_code = f"""
+import fcntl, sys
+fd = open({repr(str(lock_file))}, "a+")
+try:
+    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"""
+    res = subprocess.run([sys.executable, "-c", child_code])
+    assert res.returncode == 0
+
+
+def test_memguard_j_real_callables(tmp_path: Path, monkeypatch):
+    """(j) Test composed path with real FrameEncoder callables (enc.release, enc._ensure_loaded)."""
+    from features.visual import FrameEncoder
+
+    lock_d = tmp_path / "locks"
+    monkeypatch.setenv("INFOGRAPHICS_LOCK_DIR", str(lock_d))
+    monkeypatch.setattr("shared.memguard.DATA_ROOT", tmp_path)
+    monkeypatch.setenv("SR_MEM_WAIT_S", "2")
+    monkeypatch.setattr("shared.memguard.is_our_judge_loaded", lambda *a, **kw: False)
+
+    class DummyModel:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    dummy_model = DummyModel()
+    dummy_processor = object()
+
+    monkeypatch.setattr("features.visual.AutoProcessor.from_pretrained", lambda *a, **kw: dummy_processor)
+    monkeypatch.setattr("features.visual.SiglipModel.from_pretrained", lambda *a, **kw: dummy_model)
+
+    enc = FrameEncoder()
+    enc.release()
+
+    read_count = [0]
+
+    def fake_read():
+        read_count[0] += 1
+        if read_count[0] == 1:
+            return (7 * 1024**3, 2)
+        return (40 * 1024**3, 1)
+
+    monkeypatch.setattr("shared.memguard.read_memory", fake_read)
+
+    t0 = time.monotonic()
+    check("sr_siglip", enc.release, enc._ensure_loaded)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.5
+    assert enc._model is dummy_model
+
+
+def test_memguard_k_fail_closed(monkeypatch, capsys):
+    """(k) read_memory() fails closed: returns (0, 4) on error and logs to stderr."""
+    monkeypatch.delenv("SR_MEMGUARD_FAKE_AVAILABLE_GB", raising=False)
+
+    def mock_check_output(*a, **kw):
+        raise OSError("sysctl execution failed")
+
+    monkeypatch.setattr("subprocess.check_output", mock_check_output)
+    avail, pressure = read_memory()
+    captured = capsys.readouterr()
+
+    assert avail == 0
+    assert pressure == 4
+    assert "memory guard: READ FAILED" in captured.err
+
+
+def test_supervisor_deferrals_do_not_consume_attempts(tmp_path: Path):
+    """Supervisor accounting: exit 75 does not consume SR_SUPERVISE_MAX_ATTEMPTS.
+
+    - With SR_SUPERVISE_MAX_ATTEMPTS=3, SR_MEMWAIT_SLEEP_S=0 and SR_MAX_MEM_DEFERRALS=100,
+      a runner that exits 75 five times and then 0 finishes with exit 0 and DONE.
+    - With SR_MAX_MEM_DEFERRALS=4, a runner that always exits 75 exits 75 with
+      'deferred 4 times; giving up' in stderr.
+    """
+    sup_script = Path("tools/run_supervised.sh").resolve()
+    progress_file = tmp_path / "progress.json"
+    progress_file.write_text("[]", encoding="utf-8")
+
+    counter_file = tmp_path / "counter_defer.txt"
+    runner_code = f"""
+import json, sys
+counter_path = {repr(str(counter_file))}
+p_path = {repr(str(progress_file))}
+c = 0
+try:
+    c = int(open(counter_path).read().strip())
+except Exception:
+    pass
+c += 1
+open(counter_path, "w").write(str(c))
+if c <= 5:
+    sys.exit(75)
+else:
+    json.dump(["item1"], open(p_path, "w"))
+    sys.exit(0)
+"""
+    env = dict(os.environ)
+    env["SR_SUPERVISE_MAX_ATTEMPTS"] = "3"
+    env["SR_MEMWAIT_SLEEP_S"] = "0"
+    env["SR_MAX_MEM_DEFERRALS"] = "100"
+    env["SR_SUPERVISE_LOG"] = str(tmp_path / "sup_defer.log")
+
+    res = subprocess.run(
+        [str(sup_script), str(progress_file), sys.executable, "-c", runner_code],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0
+    assert "runner exited 0 (clean)" in res.stderr or "DONE" in res.stderr
+
+    # Second check: runner that always exits 75 with SR_MAX_MEM_DEFERRALS=4
+    runner_always_75 = "import sys; sys.exit(75)"
+    env2 = dict(os.environ)
+    env2["SR_SUPERVISE_MAX_ATTEMPTS"] = "10"
+    env2["SR_MEMWAIT_SLEEP_S"] = "0"
+    env2["SR_MAX_MEM_DEFERRALS"] = "4"
+    env2["SR_SUPERVISE_LOG"] = str(tmp_path / "sup_always.log")
+
+    res2 = subprocess.run(
+        [str(sup_script), str(progress_file), sys.executable, "-c", runner_always_75],
+        env=env2,
+        capture_output=True,
+        text=True,
+    )
+    assert res2.returncode == 75
+    assert "deferred 4 times; giving up" in res2.stderr
+
+
+# ---------------------------------------------------------------------------
 # Slow footprint test
 # ---------------------------------------------------------------------------
+
+def _get_footprint_bytes(pid: int) -> int:
+    import re
+    out = subprocess.check_output(["/usr/bin/footprint", "-p", str(pid)], text=True)
+    m = re.search(r"Footprint:\s+([\d.]+)\s+(B|KB|MB|GB)", out)
+    if not m:
+        raise ValueError(f"Could not parse footprint output: {out}")
+    val, unit = float(m.group(1)), m.group(2)
+    mult = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}
+    return int(val * mult[unit])
+
 
 @pytest.mark.slow
 def test_memguard_release_footprint():
     """Release is real (slow): after FrameEncoder + NonverbalAudioEncoder load, encode
 
     and release(), the process footprint is within 1.5 GB of its pre-load value.
+    Measured with /usr/bin/footprint -p <pid> per §12.
     """
     import gc
-    import psutil
     from features.audio import NonverbalAudioEncoder
     from features.visual import FrameEncoder
     from PIL import Image
 
-    proc = psutil.Process()
     gc.collect()
-    rss_before = proc.memory_info().rss
+    fp_before = _get_footprint_bytes(os.getpid())
 
     # Load and encode with FrameEncoder
     v_encoder = FrameEncoder()
@@ -398,6 +606,7 @@ def test_memguard_release_footprint():
             os.remove(wav_path)
 
     gc.collect()
-    rss_after = proc.memory_info().rss
-    diff_gb = (rss_after - rss_before) / (1024**3)
+    fp_after = _get_footprint_bytes(os.getpid())
+    diff_gb = (fp_after - fp_before) / (1024**3)
     assert diff_gb < 1.5, f"Footprint grew by {diff_gb:.2f} GB after release"
+
