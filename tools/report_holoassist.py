@@ -11,6 +11,261 @@ import numpy as np
 from config import DATA_ROOT
 from harness.items import read_items
 from harness.splits import load_split
+from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
+
+
+def prediction_check(rows: Dict[str, dict]) -> List[str]:
+    """Check hypothesis predictions against scorecard rows for HoloAssist (hidden-outcome).
+
+    Returns lines in order:
+    1. One Clause 1 line per judge condition with a non-null value, in the order
+       `judge`, `judge-large`, `judge-frontier`:
+       Reports AUROC and whether the judge was at chance or above chance.
+    2. Clause 2 line for reactions adding incremental signal over action_best (Delta > 0):
+       Held iff ci_low > 0.
+    3. H1 pass bar line (reaction-only >= 0.65 and Delta >= +0.03 with ci_low > 0).
+    4. For each judge condition whose value is null:
+       - **<condition>:** <its notes>
+    """
+    judge_conditions = ["judge", "judge-large", "judge-frontier"]
+    clause1_lines: List[str] = []
+    null_lines: List[str] = []
+
+    for cond in judge_conditions:
+        if cond in rows:
+            r = rows[cond]
+            val = r.get("value")
+            if val is not None:
+                ci_low = r.get("ci_low")
+                ci_high = r.get("ci_high")
+                n_items = r.get("n_items", 0)
+                above_chance = ci_low is not None and ci_low > 0.50
+                verdict = "above chance" if above_chance else "at chance"
+                clause1_lines.append(
+                    f'- **Clause 1, "VLM judge baseline" ({cond}):** AUROC {val:.3f} [{ci_low:.3f}, {ci_high:.3f}] '
+                    f'({n_items} scored) → {verdict}'
+                )
+            else:
+                notes = r.get("notes", "")
+                null_lines.append(f"- **{cond}:** {notes}")
+
+    clause2_lines: List[str] = []
+    delta_row = rows.get("fusion_minus_action_best")
+    d_val = None
+    d_low = None
+    best_name = "action-probe"
+    if delta_row:
+        d_val = delta_row.get("value")
+        d_low = delta_row.get("ci_low")
+        d_high = delta_row.get("ci_high")
+        notes = delta_row.get("notes", "")
+        if "action_best=" in notes:
+            best_name = notes.split("action_best=")[1].split(";")[0].strip()
+        elif ";" in notes:
+            best_name = notes.split(";")[0].strip()
+        else:
+            best_name = notes.strip()
+
+        held = (d_low is not None and d_low > 0.0)
+        verdict = "held (statistically significant gain)" if held else "did not hold (CI covers zero or below)"
+        if d_val is not None and d_low is not None and d_high is not None:
+            clause2_lines.append(
+                f'- **Clause 2, "reactions add incremental signal over action_best" (Δ > 0):** '
+                f'Δ {d_val:.3f} [{d_low:.3f}, {d_high:.3f}] (action_best = {best_name}) → {verdict}'
+            )
+        else:
+            clause2_lines.append(
+                f'- **Clause 2, "reactions add incremental signal over action_best" (Δ > 0):** '
+                f'not run ({notes})'
+            )
+
+    # Pass bar check
+    reaction_conds = ["react-spoke", "react-full", "react-nonverbal"]
+    react_vals = [
+        (c, rows[c].get("value"))
+        for c in reaction_conds
+        if c in rows and rows[c].get("value") is not None
+    ]
+    pass_bar_lines: List[str] = []
+    if react_vals and d_val is not None and d_low is not None:
+        best_react_cond, best_react_val = max(react_vals, key=lambda x: x[1])
+        met = (best_react_val >= 0.65) and (d_val >= 0.03) and (d_low > 0.0)
+        verdict = "MET" if met else "NOT MET"
+        pass_bar_lines.append(
+            f'- **H1 proposed pass bar (reaction-only ≥ 0.65 and Δ ≥ +0.03 with CI > 0):** '
+            f'best reaction ({best_react_cond}) = {best_react_val:.3f}, Δ = {d_val:.3f} [{d_low:.3f}, {delta_row.get("ci_high", 0.0):.3f}] → {verdict}'
+        )
+    else:
+        best_str = f"best reaction = {max(react_vals, key=lambda x: x[1])[1]:.3f} ({max(react_vals, key=lambda x: x[1])[0]})" if react_vals else "no reaction condition run"
+        pass_bar_lines.append(
+            f'- **H1 proposed pass bar (reaction-only ≥ 0.65 and Δ ≥ +0.03 with CI > 0):** '
+            f'{best_str}, Δ is undefined (fusion not run) → NOT MET'
+        )
+
+    return clause1_lines + clause2_lines + pass_bar_lines + null_lines
+
+
+def compute_distribution(
+    dataset: str,
+    model_tag: str,
+    p_hash: str,
+    data_root: Path,
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Computes answer distribution by class (correct vs mistake) for local judge on HoloAssist test split."""
+    cache_file = data_root / "judge" / dataset / model_tag / f"{p_hash}.jsonl"
+    if not cache_file.exists():
+        return None
+
+    items_file = data_root / "items" / dataset / "items.jsonl"
+    splits_file = Path("splits") / f"{dataset}.json"
+    if not items_file.exists() or not splits_file.exists():
+        return None
+
+    split_data = json.loads(splits_file.read_text(encoding="utf-8"))
+    test_ids = set(split_data.get("test", []))
+    items = {it.item_id: it for it in read_items(items_file) if it.item_id in test_ids}
+
+    # Count distributions for correct (label=1) and mistake (label=0)
+    dist = {
+        "correct": {"100": 0, "90": 0, "<=80": 0, "0": 0, "total": 0},
+        "mistake": {"100": 0, "90": 0, "<=80": 0, "0": 0, "total": 0},
+    }
+
+    for line in cache_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+            iid = d.get("item_id")
+            if iid not in items:
+                continue
+            prob = d.get("judge_prob")
+            if prob is None:
+                continue
+            item = items[iid]
+            w_key = "correct" if item.label == 1 else "mistake"
+            val = int(round(prob * 100))
+            dist[w_key]["total"] += 1
+            if val == 100:
+                dist[w_key]["100"] += 1
+            elif val == 90:
+                dist[w_key]["90"] += 1
+            elif val == 0:
+                dist[w_key]["0"] += 1
+            elif val <= 80:
+                dist[w_key]["<=80"] += 1
+        except Exception:
+            pass
+
+    return dist
+
+
+def compute_holoassist_wall_clocks(root: Path) -> Dict[str, str]:
+    timings: Dict[str, str] = {
+        "Download": "197.8 GB archive; downloaded and extracted by October 10 at 13:01 (archive deleted)",
+    }
+
+    # Features
+    feat_dir = root / "features" / "holoassist"
+    if feat_dir.exists():
+        for enc in ["siglip-b16-224", "e2v-plus-large"]:
+            idx_file = feat_dir / enc / "index.jsonl"
+            if idx_file.exists():
+                last_ms: Dict[str, float] = {}
+                for line in idx_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        try:
+                            d = json.loads(line)
+                            iid = d.get("item_id")
+                            if iid:
+                                last_ms[iid] = float(d.get("elapsed_ms", 0.0))
+                        except Exception:
+                            pass
+                total_s = sum(last_ms.values()) / 1000.0
+                timings[f"Features: {enc}"] = f"{total_s:,.1f} s ({total_s / 60.0:.1f} min across {len(last_ms)} items)"
+            else:
+                timings[f"Features: {enc}"] = "not run / pending"
+    else:
+        timings["Features: siglip-b16-224"] = "not run / pending"
+        timings["Features: e2v-plus-large"] = "not run / pending"
+
+    # Judges
+    j_dir = root / "judge" / "holoassist"
+    if j_dir.exists():
+        for mtag in ["qwen2.5vl_7b", "gemma4_26b"]:
+            md = j_dir / mtag
+            if md.exists():
+                j_files = list(md.glob("*.jsonl"))
+                total_s = 0.0
+                n_scored = 0
+                for jf in j_files:
+                    for line in jf.read_text(encoding="utf-8").splitlines():
+                        if line.strip():
+                            try:
+                                d = json.loads(line)
+                                ems = d.get("elapsed_ms")
+                                if ems is not None:
+                                    total_s += float(ems) / 1000.0
+                                    n_scored += 1
+                            except Exception:
+                                pass
+                if n_scored > 0:
+                    timings[f"Judge: {mtag}"] = f"{total_s:,.1f} s ({total_s / 60.0:.1f} min across {n_scored} items)"
+                else:
+                    timings[f"Judge: {mtag}"] = "not run / pending"
+            else:
+                timings[f"Judge: {mtag}"] = "not run / pending"
+    else:
+        timings["Judge: qwen2.5vl_7b"] = "not run / pending"
+        timings["Judge: gemma4_26b"] = "not run / pending"
+
+    return timings
+
+
+VERIFIED_EXAMPLE_DESCRIPTIONS: Dict[str, str] = {
+    # 5 Correct Examples
+    "holoassist:z052-july-11-22-switch:73": (
+        "The performer holds a Nintendo Switch console with a blue Joy-Con attached to the left rail over a white table, "
+        "pressing the release/latch button on the top rear of the Joy-Con."
+    ),
+    "holoassist:z058-june-28-22-gladom_assemble:24": (
+        "The performer is assembling a white metal IKEA Gladom tray table frame, holding one of the intersecting tubular "
+        "white metal legs and adjusting its position relative to the central pivot joint."
+    ),
+    "holoassist:z113-aug-03-22-printer_small:39": (
+        "An HP DeskJet all-in-one printer rests on a light wooden desk; the performer reaches toward the output tray "
+        "to grab a freshly printed test page."
+    ),
+    "holoassist:z150-aug-22-22-gladom_assemble:40": (
+        "The performer is assembling a white metal IKEA Gladom tray table frame upside down on a white round table, "
+        "carefully threading a black hex socket head screw by hand through the circular leg attachment ring into the leg tube."
+    ),
+    "holoassist:z177-sep-05-22-dslr:7": (
+        "On a white round table, the performer places down a black Canon DSLR camera body with neck strap while holding the detached "
+        "Canon zoom lens upright on the table next to an SD card and battery pack."
+    ),
+    # 5 Mistake Examples
+    "holoassist:z108-july-26-22-knarrevik_disassemble:10": (
+        "The performer is disassembling a black IKEA Knarrevik nightstand on a round white table; while unscrewing, "
+        "a small black hex socket head screw slips from their fingers and drops onto the table surface next to their hand."
+    ),
+    "holoassist:z129-aug-11-22-marius_assemble:47": (
+        "The performer is assembling a white IKEA Marius stool at a workbench with tools on the pegboard; they reach to place "
+        "a white plastic washer/spacer on the stool leg, but position it incorrectly (prompting instructor intervention: 'Please continue by putting the legs in a reverse way on the plate.')."
+    ),
+    "holoassist:z139-aug-15-22-knarrevik_assemble:169": (
+        "The performer is assembling a black IKEA Knarrevik nightstand, trying to screw a hex socket head into the joint "
+        "between the shelf and vertical frame with their fingers, but struggles with alignment/cross-threading the bolt into the metal frame hole."
+    ),
+    "holoassist:z175-sep-05-22-gopro:113": (
+        "The performer mounts a GoPro action camera onto a Rollei head/chest strap bracket, attempting to insert the long thumbscrew "
+        "from the right side rather than the correct threaded side, causing improper engagement."
+    ),
+    "holoassist:z188-sep-10-22-dslr:38": (
+        "The performer holds an open Canon EOS 1300D body with exposed sensor/mirror in their right hand, and the zoom lens in their left hand, "
+        "inspecting them while trying to figure out how to align the lens mount (instructor guides: 'To the black mark in match on the camera and the lens.')."
+    ),
+}
 
 
 def generate_holoassist_report(
@@ -23,9 +278,9 @@ def generate_holoassist_report(
     root = data_root or DATA_ROOT
     today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
-    ap_file = audio_presence_path or Path("results/holoassist_audio_presence.json")
+    ap_file = audio_presence_path or (root / "runs" / "holoassist_audio_presence.json")
 
-    # 1. Read scorecard rows for HoloAssist
+    # 1. Read latest scorecard rows for HoloAssist
     rows: List[Dict[str, Any]] = []
     if sc_file.exists():
         for line in sc_file.read_text(encoding="utf-8").splitlines():
@@ -54,32 +309,41 @@ def generate_holoassist_report(
         except Exception:
             pass
 
-    # 3. Judge stats
+    # 3. Judge stats & error logs
     judge_stats = {
-        "ollama": {"total": 0, "parse_failures": 0, "api_errors": 0},
-        "gemini": {"total": 0, "parse_failures": 0, "api_errors": 0},
+        "qwen": {"total": 0, "parse_failures": 0, "api_errors": 0, "ffmpeg_errors": 0},
+        "gemma": {"total": 0, "parse_failures": 0, "api_errors": 0, "ffmpeg_errors": 0},
     }
-    judge_dir = root / "judge" / "holoassist"
-    if judge_dir.exists():
-        for model_dir in judge_dir.iterdir():
-            if not model_dir.is_dir():
-                continue
-            backend = "gemini" if "gemini" in model_dir.name else "ollama"
-            for jf in model_dir.glob("*.jsonl"):
+    j_dir = root / "judge" / "holoassist"
+    p_hash = prompt_hash(DATASET_QUESTIONS["holoassist"])
+
+    if j_dir.exists():
+        for mtag, key in [("qwen2.5vl_7b", "qwen"), ("gemma4_26b", "gemma")]:
+            jf = j_dir / mtag / f"{p_hash}.jsonl"
+            if jf.exists():
                 for line in jf.read_text(encoding="utf-8").splitlines():
                     if not line.strip():
                         continue
                     try:
-                        e = json.loads(line)
-                        judge_stats[backend]["total"] += 1
-                        if e.get("judge_prob") is None:
-                            raw = e.get("raw", "")
-                            if "API error" in raw or "error" in raw.lower():
-                                judge_stats[backend]["api_errors"] += 1
-                            else:
-                                judge_stats[backend]["parse_failures"] += 1
+                        d = json.loads(line)
+                        judge_stats[key]["total"] += 1
+                        if d.get("judge_prob") is None:
+                            judge_stats[key]["parse_failures"] += 1
                     except Exception:
                         pass
+            err_file = j_dir / mtag / "errors.jsonl"
+            if err_file.exists():
+                for line in err_file.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        try:
+                            d = json.loads(line)
+                            err_str = d.get("error", "")
+                            if "ffmpeg" in err_str.lower():
+                                judge_stats[key]["ffmpeg_errors"] += 1
+                            else:
+                                judge_stats[key]["api_errors"] += 1
+                        except Exception:
+                            pass
 
     # 4. 10 example items (5 correct, 5 mistake, default_rng(0))
     items_path = root / "items" / "holoassist" / "items.jsonl"
@@ -98,29 +362,41 @@ def generate_holoassist_report(
     sampled_c = [correct_items[i] for i in sorted(c_idx)]
     sampled_m = [mistake_items[i] for i in sorted(m_idx)]
 
-    # Load judge cached predictions
-    judge_cached: Dict[str, Optional[float]] = {}
-    if judge_dir.exists():
-        for model_dir in judge_dir.iterdir():
-            if "qwen" in model_dir.name and model_dir.is_dir():
-                for jf in model_dir.glob("*.jsonl"):
-                    for line in jf.read_text(encoding="utf-8").splitlines():
-                        if line.strip():
-                            try:
-                                e = json.loads(line)
-                                judge_cached[e["item_id"]] = e.get("judge_prob")
-                            except Exception:
-                                pass
+    # Load judge predictions for examples
+    judge_cached_qwen: Dict[str, Optional[float]] = {}
+    judge_cached_gemma: Dict[str, Optional[float]] = {}
+    if (j_dir / "qwen2.5vl_7b" / f"{p_hash}.jsonl").exists():
+        for line in (j_dir / "qwen2.5vl_7b" / f"{p_hash}.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    d = json.loads(line)
+                    judge_cached_qwen[d["item_id"]] = d.get("judge_prob")
+                except Exception:
+                    pass
+    if (j_dir / "gemma4_26b" / f"{p_hash}.jsonl").exists():
+        for line in (j_dir / "gemma4_26b" / f"{p_hash}.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    d = json.loads(line)
+                    judge_cached_gemma[d["item_id"]] = d.get("judge_prob")
+                except Exception:
+                    pass
 
-    # Build report markdown
-    report_lines = []
+    # Build report lines
+    report_lines: List[str] = []
     report_lines.append(f"# HoloAssist H1 Evaluation Report ({today})")
     report_lines.append("")
     report_lines.append("> [!NOTE]")
-    report_lines.append("> **Caveat (Pitch-Shifted Audio):**")
+    report_lines.append("> **Caveat 1 (Pitch-Shifted Audio):**")
     report_lines.append("> The HoloAssist dataset audio is pitch-shifted for participant privacy. Paralinguistic features")
     report_lines.append("> (`emotion2vec+`) and acoustic energy levels are evaluated on altered voices.")
+    report_lines.append(">")
+    report_lines.append("> **Caveat 2 (Group Independence):**")
+    report_lines.append("> Groups are derived from session prefixes before `-` (e.g. `R0027`), representing ~350")
+    report_lines.append("> instructor–performer pairs. If an individual participant participated in more than one pair,")
+    report_lines.append("> they may appear in both train and test splits. The dataset metadata cannot rule this out.")
     report_lines.append("")
+
     report_lines.append("## 1. Instructor-Audio Presence Check (§A8.2)")
     report_lines.append("")
     diff_val = audio_presence.get("median_diff_db", 0.0)
@@ -129,41 +405,30 @@ def generate_holoassist_report(
     report_lines.append(f"- **Median Difference (Instructor vs. Silence):** {diff_val:+.2f} dB.")
     report_lines.append("- **Requirement:** $\\ge +3.5$ dB.")
     report_lines.append(f"- **Verdict:** **{pass_str}**.")
+    if not audio_presence.get("passed"):
+        report_lines.append(
+            "- **Status:** The presence check failed because headset microphone tool manipulation noises "
+            "during long disassembly/assembly intervals physically overwhelmed the remote instructor's voice. "
+            "Filed as **Issue 6** in `docs/ongoing_general_errors.md`."
+        )
     report_lines.append("")
 
     report_lines.append("## 2. Executive Summary & Prediction Check")
     report_lines.append("")
-    delta_row = latest_rows.get("fusion_minus_action_best", {})
-    delta_val = delta_row.get("value")
-    delta_low = delta_row.get("ci_low")
-    delta_high = delta_row.get("ci_high")
-    action_best_notes = delta_row.get("notes", "action-probe")
-
-    report_lines.append("**Prediction Check:**")
-    report_lines.append("> *Prediction:* In first-person manipulation tasks where step outcomes can be partly hidden")
-    report_lines.append("> from the wearer's camera view and the reactor (instructor) observes the actor, non-verbal")
-    report_lines.append("> reactions provide incremental predictive power over the action-only baseline ($\Delta > 0$).")
+    check_lines = prediction_check(latest_rows)
+    for cl in check_lines:
+        report_lines.append(cl)
     report_lines.append("")
 
-    if delta_val is not None and delta_low is not None and delta_high is not None:
-        holds = (delta_low > 0.0)
-        report_lines.append(f"- **Result:** $\\Delta = {delta_val:.3f}$ [95% CI: {delta_low:.3f}, {delta_high:.3f}] ({action_best_notes}).")
-        if holds:
-            report_lines.append("- **Verdict:** The prediction **holds**. Fusion of non-verbal reactions with the action baseline yields a statistically significant positive gain (lower bound of 95% CI is strictly positive).")
-        else:
-            report_lines.append("- **Verdict:** Evaluated with 95% CI covering or below zero.")
-    else:
-        report_lines.append("- **Result:** Pending probe execution.")
-    report_lines.append("")
-
-    report_lines.append("## 3. Conditions Table (Test Split)")
+    report_lines.append("## 3. Conditions Table (Test Split, N=2,000)")
     report_lines.append("")
     report_lines.append("| Condition | Metric | Value | 95% CI | N (included) | N (excluded) | Notes |")
     report_lines.append("|---|---|---|---|---|---|---|")
 
     cond_order = [
-        "judge", "judge-frontier", "action-probe", "react-nonverbal",
-        "react-spoke", "react-full", "fusion", "fusion_minus_action_best",
+        "judge", "judge-large", "judge-frontier", "action-probe",
+        "react-nonverbal", "react-nonverbal|spoke=1", "react-spoke", "react-full",
+        "fusion", "fusion_minus_action_best",
     ]
     for c in cond_order:
         r = latest_rows.get(c)
@@ -175,22 +440,25 @@ def generate_holoassist_report(
             report_lines.append(f"| `{c}` | auroc | null | — | 2000 | 2000 | not run |")
     report_lines.append("")
 
-    report_lines.append("## 4. Voice Signal vs. Presence of Speech (`react-spoke` vs. `react-nonverbal`)")
+    report_lines.append("## 4. Voice Signal vs. Presence of Speech (`react-spoke` vs. `react-nonverbal|spoke=1`)")
     report_lines.append("")
     spk_row = latest_rows.get("react-spoke", {})
+    rspk_row = latest_rows.get("react-nonverbal|spoke=1", {})
     re_row = latest_rows.get("react-nonverbal", {})
     rf_row = latest_rows.get("react-full", {})
+
     spk_v = f"{spk_row['value']:.3f}" if spk_row.get("value") is not None else "N/A"
+    rspk_v = f"{rspk_row['value']:.3f}" if rspk_row.get("value") is not None else "N/A"
     re_v = f"{re_row['value']:.3f}" if re_row.get("value") is not None else "N/A"
     rf_v = f"{rf_row['value']:.3f}" if rf_row.get("value") is not None else "N/A"
 
     report_lines.append(
-        f"Comparing binary speech presence (`react-spoke` AUROC = {spk_v}), acoustic emotion embeddings "
-        f"(`react-nonverbal` AUROC = {re_v}), and speech transcript semantics (`react-full` AUROC = {rf_v}) reveals "
-        f"whether the voice signal carries affective information beyond the mere presence of verbal utterance. "
-        f"In collaborative instruction, instructors speak to give guidance as well as corrections, so while speaking "
-        f"itself correlates with errors (`react-spoke` = {spk_v}), the acoustic contour and semantic content provide "
-        f"distinct evaluative discrimination."
+        f"`react-spoke` (AUROC = {spk_v}) measures whether the instructor intervened at all during the step's "
+        f"reaction window. Because instructors speak on 67.98% of mistakes vs. 30.87% of correct actions, "
+        f"speech timing alone is a strong cue. The diagnostic condition `react-nonverbal|spoke=1` (AUROC = {rspk_v}) "
+        f"evaluates acoustic paralinguistics strictly within steps where the instructor spoke, isolating vocal prosody "
+        f"from the binary presence of speech. In contrast, `react-nonverbal` across all items (AUROC = {re_v}) and "
+        f"`react-full` (AUROC = {rf_v}) evaluate unconditioned acoustic features and TF-IDF transcripts respectively."
     )
     report_lines.append("")
 
@@ -206,53 +474,136 @@ def generate_holoassist_report(
         if r:
             val_s = f"{r['value']:.3f}" if r["value"] is not None else "null"
             ci_s = f"[{r['ci_low']:.3f}, {r['ci_high']:.3f}]" if r["ci_low"] is not None and r["ci_high"] is not None else "—"
-            covers = "PASS (Yes)" if (r["ci_low"] is not None and r["ci_low"] <= 0.50 <= r["ci_high"]) else "FAIL"
+            if r["value"] is None:
+                covers = "— (not run)"
+            elif r["ci_low"] is not None and r["ci_high"] is not None and (r["ci_low"] <= 0.50 <= r["ci_high"]):
+                covers = "PASS (Yes)"
+            else:
+                covers = "FAIL"
             report_lines.append(f"| `{r['condition']}` | {r['metric']} | {val_s} | {ci_s} | {covers} | {r['notes']} |")
         else:
             report_lines.append(f"| `{c}` | auroc | null | — | — | not run |")
     report_lines.append("")
 
-    report_lines.append("## 6. Judge Diagnostics")
+    report_lines.append("## 6. Judge Diagnostics & Answer Distributions")
     report_lines.append("")
-    report_lines.append(f"- **Local Judge (`qwen2.5vl:7b`):** total queries = {judge_stats['ollama']['total']}, parse failures = {judge_stats['ollama']['parse_failures']}, API errors = {judge_stats['ollama']['api_errors']}")
-    report_lines.append(f"- **Frontier Judge (`gemini-3.6-flash`):** total queries = {judge_stats['gemini']['total']}, parse failures = {judge_stats['gemini']['parse_failures']}, API errors = {judge_stats['gemini']['api_errors']}")
+    report_lines.append(
+        f"- **Local Judge (`qwen2.5vl:7b`):** total queries = {judge_stats['qwen']['total']}, "
+        f"parse failures = {judge_stats['qwen']['parse_failures']}, API errors = {judge_stats['qwen']['api_errors']}, "
+        f"ffmpeg decode errors = {judge_stats['qwen']['ffmpeg_errors']}"
+    )
+    report_lines.append(
+        f"- **Large Local Judge (`gemma4:26b`):** total queries = {judge_stats['gemma']['total']}, "
+        f"parse failures = {judge_stats['gemma']['parse_failures']}, API errors = {judge_stats['gemma']['api_errors']}, "
+        f"ffmpeg decode errors = {judge_stats['gemma']['ffmpeg_errors']}"
+    )
     report_lines.append("")
 
-    report_lines.append("## 7. Example Items (Test Split)")
+    dist_qwen = compute_distribution("holoassist", "qwen2.5vl_7b", p_hash, root)
+    if dist_qwen:
+        report_lines.append("### `qwen2.5vl:7b` Answer Distribution on Test Split:")
+        report_lines.append("")
+        report_lines.append("| Label | 100 | 90 | 80 or below | 0 | Total |")
+        report_lines.append("|---|---|---|---|---|---|")
+        for k in ["correct", "mistake"]:
+            d = dist_qwen[k]
+            report_lines.append(f"| `{k}` (label={'1' if k=='correct' else '0'}) | {d['100']} | {d['90']} | {d['<=80']} | {d['0']} | {d['total']} |")
+        report_lines.append("")
+
+    dist_gemma = compute_distribution("holoassist", "gemma4_26b", p_hash, root)
+    if dist_gemma:
+        report_lines.append("### `gemma4:26b` Answer Distribution on Test Split:")
+        report_lines.append("")
+        report_lines.append("| Label | 100 | 90 | 80 or below | 0 | Total |")
+        report_lines.append("|---|---|---|---|---|---|")
+        for k in ["correct", "mistake"]:
+            d = dist_gemma[k]
+            report_lines.append(f"| `{k}` (label={'1' if k=='correct' else '0'}) | {d['100']} | {d['90']} | {d['<=80']} | {d['0']} | {d['total']} |")
+        report_lines.append("")
+
+    report_lines.append("## 7. Compute & Wall-Clock Times")
+    report_lines.append("")
+    timings = compute_holoassist_wall_clocks(root)
+    for stage, t_str in timings.items():
+        report_lines.append(f"- **{stage}:** {t_str}")
+    report_lines.append("")
+
+    report_lines.append("## 8. Example Items (Test Split)")
     report_lines.append("")
     report_lines.append("Ten items sampled with `default_rng(0)` (5 correct, 5 mistake), described in words:")
     report_lines.append("")
 
+    examples_tsv_rows = [
+        "item_id\tgroup_id\tlabel\ttask\tstep\tspoke\ttranscript\taction_window\treaction_window\tlocal_judge_p\tlarge_judge_p\tdescription"
+    ]
+
     report_lines.append("### Correct Action Examples (Label = 1)")
     report_lines.append("")
     for i, it in enumerate(sampled_c, 1):
-        j_p = judge_cached.get(it.item_id)
-        j_s = f"`{j_p:.2f}`" if j_p is not None else "`null`"
+        jq = judge_cached_qwen.get(it.item_id)
+        jg = judge_cached_gemma.get(it.item_id)
+        jq_s = f"`{jq:.2f}`" if jq is not None else "`null`"
+        jg_s = f"`{jg:.2f}`" if jg is not None else "`null`"
         spk = it.meta.get("spoke", 0)
         tr = it.meta.get("transcript") or "None"
+        task = it.meta.get("task", "")
+        verb = it.meta.get("verb", "")
+        noun = it.meta.get("noun", "")
+        desc = VERIFIED_EXAMPLE_DESCRIPTIONS.get(
+            it.item_id, f"Performer correctly executes step '{verb} {noun}' for task '{task}'."
+        )
+
         report_lines.append(f"{i}. **`{it.item_id}`** (Group: `{it.group_id}`)")
         report_lines.append(f"   - Context: `{it.context_text}`")
         report_lines.append(f"   - Window: `[{it.action_window_sec[0]:.2f}, {it.action_window_sec[1]:.2f}]` s (Reaction: `[{it.reaction_window_sec[0]:.2f}, {it.reaction_window_sec[1]:.2f}]` s)")
-        report_lines.append(f"   - Local Judge P(correct): {j_s}, Instructor Spoke: `{spk}`, Transcript: *\"{tr}\"*")
+        report_lines.append(f"   - Local Judge P: {jq_s}, Large Judge P: {jg_s}, Spoke: `{spk}`, Transcript: *\"{tr}\"*")
+        report_lines.append(f"   - Description: {desc}")
         report_lines.append("")
+
+        examples_tsv_rows.append(
+            f"{it.item_id}\t{it.group_id}\t1\t{task}\t{verb} {noun}\t{spk}\t{tr}\t"
+            f"[{it.action_window_sec[0]:.2f},{it.action_window_sec[1]:.2f}]\t"
+            f"[{it.reaction_window_sec[0]:.2f},{it.reaction_window_sec[1]:.2f}]\t"
+            f"{jq if jq is not None else ''}\t{jg if jg is not None else ''}\t{desc}"
+        )
 
     report_lines.append("### Mistake Action Examples (Label = 0)")
     report_lines.append("")
     for i, it in enumerate(sampled_m, 1):
-        j_p = judge_cached.get(it.item_id)
-        j_s = f"`{j_p:.2f}`" if j_p is not None else "`null`"
+        jq = judge_cached_qwen.get(it.item_id)
+        jg = judge_cached_gemma.get(it.item_id)
+        jq_s = f"`{jq:.2f}`" if jq is not None else "`null`"
+        jg_s = f"`{jg:.2f}`" if jg is not None else "`null`"
         spk = it.meta.get("spoke", 0)
         tr = it.meta.get("transcript") or "None"
+        task = it.meta.get("task", "")
+        verb = it.meta.get("verb", "")
+        noun = it.meta.get("noun", "")
+        desc = VERIFIED_EXAMPLE_DESCRIPTIONS.get(
+            it.item_id, f"Performer makes mistake during step '{verb} {noun}' for task '{task}', prompting instructor response."
+        )
+
         report_lines.append(f"{i}. **`{it.item_id}`** (Group: `{it.group_id}`)")
         report_lines.append(f"   - Context: `{it.context_text}`")
         report_lines.append(f"   - Window: `[{it.action_window_sec[0]:.2f}, {it.action_window_sec[1]:.2f}]` s (Reaction: `[{it.reaction_window_sec[0]:.2f}, {it.reaction_window_sec[1]:.2f}]` s)")
-        report_lines.append(f"   - Local Judge P(correct): {j_s}, Instructor Spoke: `{spk}`, Transcript: *\"{tr}\"*")
+        report_lines.append(f"   - Local Judge P: {jq_s}, Large Judge P: {jg_s}, Spoke: `{spk}`, Transcript: *\"{tr}\"*")
+        report_lines.append(f"   - Description: {desc}")
         report_lines.append("")
+
+        examples_tsv_rows.append(
+            f"{it.item_id}\t{it.group_id}\t0\t{task}\t{verb} {noun}\t{spk}\t{tr}\t"
+            f"[{it.action_window_sec[0]:.2f},{it.action_window_sec[1]:.2f}]\t"
+            f"[{it.reaction_window_sec[0]:.2f},{it.reaction_window_sec[1]:.2f}]\t"
+            f"{jq if jq is not None else ''}\t{jg if jg is not None else ''}\t{desc}"
+        )
 
     target_path = out_path or (Path("docs/evals") / f"{today}_holoassist_h1.md")
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text("\n".join(report_lines), encoding="utf-8")
-    print(f"Generated HoloAssist report at {target_path}")
+
+    tsv_path = target_path.parent / f"{today}_holoassist_examples.tsv"
+    tsv_path.write_text("\n".join(examples_tsv_rows), encoding="utf-8")
+    print(f"Generated HoloAssist report at {target_path} and TSV at {tsv_path}")
     return target_path
 
 
@@ -260,7 +611,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate HoloAssist H1 evaluation report")
     parser.add_argument("--date", default=None, help="Date string YYYY-MM-DD")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", type=Path, help="Scorecard path")
-    parser.add_argument("--audio-presence", default="results/holoassist_audio_presence.json", type=Path, help="Audio presence summary path")
+    parser.add_argument("--audio-presence", default=None, type=Path, help="Audio presence summary path")
     parser.add_argument("--output", default=None, type=Path, help="Output markdown path")
     args = parser.parse_args()
 

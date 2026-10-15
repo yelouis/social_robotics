@@ -31,6 +31,139 @@ def test_derive_group_id():
     assert derive_group_id("standalone_session") == "standalone_session"
 
 
+def test_holoassist_builder_synthetic(tmp_path: Path):
+    """Fast test of build_holoassist_items using synthetic annotations in tmp_path."""
+    synth_sessions = [
+        {
+            "video_name": "R001-1-GoPro",
+            "taskType": "setup gopro",
+            "videoMetadata": {"duration": {"seconds": 60.0}},
+            "events": [
+                {
+                    "label": "Conversation",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Conversation Purpose": "instructor-guidance",
+                        "Transcription": "turn it on",
+                    },
+                },
+                {
+                    "id": 101,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 4.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "turn",
+                        "Noun": "power",
+                    },
+                },
+                {
+                    "id": 102,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 7.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, corrected by student",
+                        "Verb": "press",
+                        "Noun": "shutter",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R002-1-Switch",
+            "taskType": "setup switch",
+            "videoMetadata": {"duration": {"seconds": 50.0}},
+            "events": [
+                {
+                    "id": 201,
+                    "label": "Fine grained action",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "insert",
+                        "Noun": "cartridge",
+                    },
+                },
+                {
+                    "id": 202,
+                    "label": "Fine grained action",
+                    "start": 4.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "otherwise",
+                        "Verb": "close",
+                        "Noun": "flap",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R003-1-Coffee",
+            "taskType": "make coffee",
+            "videoMetadata": {"duration": {"seconds": 40.0}},
+            "events": [
+                {
+                    "id": 301,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "pour",
+                        "Noun": "water",
+                    },
+                },
+                {
+                    "id": 302,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, not corrected",
+                        "Verb": "press",
+                        "Noun": "brew",
+                    },
+                },
+            ],
+        },
+    ]
+
+    ann_file = tmp_path / "data-annotation-trainval-v1_1.json"
+    ann_file.write_text(json.dumps(synth_sessions), encoding="utf-8")
+
+    items, stats, split_map = build_holoassist_items(
+        labels_dir=tmp_path,
+        check_paths=False,
+        train_cap=10,
+        test_cap=10,
+        seed=0,
+    )
+
+    errs = validate_items(items, check_paths=False)
+    assert not errs, f"Validation errors: {errs}"
+
+    # Verify item_id format starts with holoassist:
+    assert len(items) > 0
+    assert all(i.item_id.startswith("holoassist:") for i in items)
+    assert all(i.meta.get("event_id") is not None for i in items)
+
+    # Check that spoke flag and transcript were captured for first session action
+    gopro_items = [i for i in items if "R001" in i.item_id]
+    assert any(i.meta.get("spoke") == 1 for i in gopro_items)
+    assert any("turn it on" in i.meta.get("transcript", "") for i in gopro_items)
+
+    # Group disjointness
+    tr_groups = set(it.group_id for it in items if split_map[it.item_id] == "train")
+    te_groups = set(it.group_id for it in items if split_map[it.item_id] == "test")
+    assert tr_groups.isdisjoint(te_groups), "Train and test groups must be disjoint!"
+    assert stats["straddling_groups"] == 0
+
+
+@pytest.mark.slow
 def test_holoassist_builder_and_group_disjointness():
     items, stats, split_map = build_holoassist_items(
         check_paths=False,
@@ -41,6 +174,9 @@ def test_holoassist_builder_and_group_disjointness():
 
     errs = validate_items(items, check_paths=False)
     assert not errs, f"Validation errors: {errs}"
+
+    assert all(i.item_id.startswith("holoassist:") for i in items)
+    assert all(i.meta.get("event_id") is not None for i in items)
 
     train_items = [it for it in items if split_map[it.item_id] == "train"]
     test_items = [it for it in items if split_map[it.item_id] == "test"]
@@ -56,8 +192,10 @@ def test_holoassist_builder_and_group_disjointness():
     tr_groups = set(it.group_id for it in train_items)
     te_groups = set(it.group_id for it in test_items)
     assert tr_groups.isdisjoint(te_groups), "Train and test groups must be disjoint!"
+    assert stats["straddling_groups"] == 0
 
 
+@pytest.mark.slow
 def test_real_items_leakage_check():
     items_path = DATA_ROOT / "items" / "holoassist" / "items.jsonl"
     if not items_path.exists():
@@ -95,6 +233,7 @@ def test_leakage_check_falsification():
     assert match.group(0).lower() == "mistake"
 
 
+@pytest.mark.slow
 def test_real_split_group_disjointness():
     split_path = Path("splits/holoassist.json")
     if not split_path.exists():

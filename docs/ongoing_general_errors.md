@@ -14,6 +14,7 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
+  - **Issue 6 (October 15):** HoloAssist audio presence check failed (+1.51 dB vs >= +3.5 dB requirement). Awaiting selection on audio channel handling.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4), Issue 3 (SSD space; October 8), and Issue 5 (large local judge `gemma4:26b` evaluated on Oops!, October 14, A7c).
@@ -161,6 +162,46 @@ Your selection: _____
 - *Cons:* loses the "reactions *to robots*" claim, which is the most robotics-relevant result.
 
 **Recommendation:** send A now (free). If C is also out, the realistic routes to a robot-reaction result are **B** (an academic partner) or a yes on A. Otherwise accept **D**: H2 transfer is shown on HoloAssist and AM-FED+, and "reactions *to robots*" waits for stage A (the microduck).
+
+Your selection: _____
+
+---
+
+### Issue 6: Instructor not audible over background manipulation in HoloAssist video audio (audio presence check: +1.51 dB vs >= +3.5 dB requirement)
+
+**Status:** ⚠️ Awaiting selection. **Blocks HoloAssist audio channel (`react-nonverbal` and `fusion`).** Non-audio conditions (`judge`, `judge-large`, `action-probe`, `react-spoke`, `react-full`) are unaffected.
+
+**Facts (October 15, 2026):**
+1. **Audio presence check failed the $\ge +3.5$ dB threshold:** `tools/check_audio_presence.py` was run on 20 randomly sampled sessions (`default_rng(0)`, sorted by `video_name`, restricted to sessions with $\ge 1$ instructor utterance and $\ge 1$ no-utterance gap $\ge 2$ s, where video exists).
+   - **Median per-session difference:** **+1.51 dB** (requirement: $\ge +3.5$ dB). Verdict: **FAIL**. Summary saved to `DATA_ROOT/runs/holoassist_audio_presence.json`.
+2. **Breakdown across tasks:**
+   - In quiet manipulation tasks (e.g. `z129-aug-11-22-dslr`, `z094-july-11-22-switch`, `z195-sep-17-22-gopro`), instructor utterances are clearly audible and substantially louder than silence (+14.32 dB, +8.41 dB, +8.05 dB).
+   - In noisy manipulation tasks involving tools and furniture assembly/disassembly (e.g. `z202-sep-23-22-knarrevik_disassemble`, `z046-june-24-22-knarrevik_disassemble`, `z175-sep-05-22-gladom_disassemble`), long unannotated periods contain loud table thuds, metal clattering, screwdriver ratchets, and part handling (-41 to -45 dBFS). This is louder than the instructor's pitch-shifted voice (-50 to -55 dBFS), yielding differences down to -10.36 dB.
+   - The microphone is on the wearer's HoloLens headset, so hands-on tool noise inches from the mic physically overwhelms the instructor's voice (who is sitting at a remote screen or further away).
+3. **Execution guide requirement (§3 A8.1):**
+   > *"Requirement: a median per-session difference $\ge +3.5$ dB. If it fails, **STOP**, and file **Issue 6** ('instructor not audible in the video audio') with options A (`react-spoke`/`react-full` from annotations only) and B (drop HoloAssist's audio channel), and a `Your selection: _____` line. Continue only with what does not use audio."*
+
+**Option A (recommended): Use `react-spoke` and `react-full` from annotations only; do not extract `e2v-plus-large` on HoloAssist**
+- *Pros:*
+  - `react-spoke` (binary timing of instructor utterance) and `react-full` (TF-IDF on instructor transcripts) are completely uncorrupted by headset microphone manipulation noise;
+  - A4 showed strong signal: instructors intervened on 67.98% of mistakes vs 30.87% of correct actions;
+  - avoids spending ~1.5 h extracting 5,000 `emotion2vec+` embeddings on noise-dominated audio.
+- *Cons:*
+  - `react-nonverbal` is reported as `not run: audio presence check failed (+1.51 dB < +3.5 dB; Issue 6)` and `fusion` is omitted or based on `react-spoke`/`react-full`.
+
+**Option B: Drop HoloAssist's audio channel entirely**
+- *Pros:*
+  - Strict separation: HoloAssist evaluates action video and VLM judges only.
+- *Cons:*
+  - Discards `react-spoke` and `react-full`, which are verified independent ground-truth annotations of instructor guidance.
+
+**Option C: Proceed with `e2v-plus-large` extraction anyway, reporting the +1.51 dB presence caveat**
+- *Pros:*
+  - Preserves exact probe condition table as originally drafted.
+- *Cons:*
+  - `react-nonverbal` will capture screwdriver clatter and table bangs rather than instructor affect (similar to Oops! failure audio).
+
+**Recommendation:** Option A. `react-spoke` and `react-full` provide clean, noise-free reactions from the instructor annotations.
 
 Your selection: _____
 

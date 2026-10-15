@@ -130,6 +130,13 @@ These were left open by the item definition above. The A8 draft adapter chose th
 - **Task name `fix motorcycle` is rendered `repair motorcycle`** in `context_text`. It is a task name, not an outcome, but the leakage test bans the word `fix`. Verbs and nouns are not rewritten; the real items contain no banned word (checked October 10: 0 of 5,000).
 - **`reaction_window_sec` end = `min(duration, end + 5.0)`**, where `duration` is `videoMetadata.duration.seconds`. If that field is missing, skip the action with reason `missing_duration`. The draft defaulted to 10⁹ s, which silently disables the clip.
 
+### Videos (as extracted, October 15, 2026)
+
+- **Total sessions extracted on Extreme SSD:** 2,111 session directories under `raw/holoassist/videos/`, matching every session in the official split lists (`train-v1_2.txt` [1,466], `val-v1_2.txt` [207], `test-v1_2.txt` [438]).
+- **Directory layout:** `raw/holoassist/videos/<session>/Export_py/Video_pitchshift.mp4` (all 2,111 sessions have this exact path). The video archive (`1f4f68b9...`, 184 GB) was deleted after extraction per SSD space invariants.
+- **Annotated session coverage:** Of the 1,758 sessions in `data-annotation-trainval-v1_1.json`, exactly **1,673 sessions** have an extracted video. The remaining **85 sessions** are not present in the official video release archive.
+- **Handling of missing videos:** Missing videos are skipped honestly by the item builder with reason `missing_video` (6,589 candidate action instances skipped across the 85 sessions; recorded in `DATA_ROOT/items/holoassist/stats.json`), never silently ignored.
+
 ## Oops!: visible-outcome contrast
 
 Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.

@@ -147,12 +147,12 @@
 
 ### 1.4 Gates (run bare October 10, 2026; the regression bar)
 
-| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b | After A7c |
-|---|---|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** | exit 0 · **62 passed** |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** | exit 0 · **6 passed** (88 s) |
+| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b | After A7c | After A8 |
+|---|---|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** | exit 0 · **62 passed** | exit 0 · **62 passed** (34 s) |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** | exit 0 · **6 passed** (88 s) | exit 0 · **9 passed** (94 s) |
 
 
 - G1–G3 were run on `949c180`'s exact content just before it was committed. G4 was run earlier the same day on the same content.

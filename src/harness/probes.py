@@ -319,46 +319,113 @@ def run_probes(
     rows.append(row_front)
 
     # 3. Condition: action-probe
-    act_mask_tr = valid_act_tr
-    act_scaler = StandardScaler().fit(X_action_train[act_mask_tr])
-    X_act_tr_scaled = act_scaler.transform(X_action_train[act_mask_tr])
-    clf_act = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_act.fit(X_act_tr_scaled, y_train[act_mask_tr])
+    act_point = None
+    k_act_tr = int(np.sum(valid_act_tr))
+    if k_act_tr > 0 and len(set(y_train[valid_act_tr])) > 1:
+        act_mask_tr = valid_act_tr
+        act_scaler = StandardScaler().fit(X_action_train[act_mask_tr])
+        X_act_tr_scaled = act_scaler.transform(X_action_train[act_mask_tr])
+        clf_act = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_act.fit(X_act_tr_scaled, y_train[act_mask_tr])
 
-    act_test_probs = np.full(len(test_items), np.nan)
-    if np.any(valid_act_te):
-        X_act_te_scaled = act_scaler.transform(X_action_test[valid_act_te])
-        act_test_probs[valid_act_te] = clf_act.predict_proba(X_act_te_scaled)[:, 1]
+        act_test_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_act_te):
+            X_act_te_scaled = act_scaler.transform(X_action_test[valid_act_te])
+            act_test_probs[valid_act_te] = clf_act.predict_proba(X_act_te_scaled)[:, 1]
 
-    act_res = auroc_ci(y_test, act_test_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="action-probe", metric="auroc",
-        value=act_res.point, ci_low=act_res.ci_low, ci_high=act_res.ci_high,
-        n_items=n_total_test - act_res.n_excluded, n_groups=n_groups_test, n_excluded=act_res.n_excluded,
-        config_hash=c_hash, notes="",
-    ))
+        act_res = auroc_ci(y_test, act_test_probs, groups_test)
+        act_point = act_res.point
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe", metric="auroc",
+            value=act_res.point, ci_low=act_res.ci_low, ci_high=act_res.ci_high,
+            n_items=n_total_test - act_res.n_excluded, n_groups=n_groups_test, n_excluded=act_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        act_test_probs = np.full(len(test_items), np.nan)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: 0 of {len(train_items)} items cached in {action_cache.cache_dir}",
+        ))
 
     # 4. Condition: react-nonverbal
-    re_mask_tr = valid_re_tr
-    re_scaler = StandardScaler().fit(X_react_train[re_mask_tr])
-    X_re_tr_scaled = re_scaler.transform(X_react_train[re_mask_tr])
-    clf_re = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_re.fit(X_re_tr_scaled, y_train[re_mask_tr])
+    k_re_tr = int(np.sum(valid_re_tr))
+    if k_re_tr > 0 and len(set(y_train[valid_re_tr])) > 1:
+        re_mask_tr = valid_re_tr
+        re_scaler = StandardScaler().fit(X_react_train[re_mask_tr])
+        X_re_tr_scaled = re_scaler.transform(X_react_train[re_mask_tr])
+        clf_re = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_re.fit(X_re_tr_scaled, y_train[re_mask_tr])
 
-    re_test_probs = np.full(len(test_items), np.nan)
-    if np.any(valid_re_te):
-        X_re_te_scaled = re_scaler.transform(X_react_test[valid_re_te])
-        re_test_probs[valid_re_te] = clf_re.predict_proba(X_re_te_scaled)[:, 1]
+        re_test_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_re_te):
+            X_re_te_scaled = re_scaler.transform(X_react_test[valid_re_te])
+            re_test_probs[valid_re_te] = clf_re.predict_proba(X_re_te_scaled)[:, 1]
 
-    re_res = auroc_ci(y_test, re_test_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="react-nonverbal", metric="auroc",
-        value=re_res.point, ci_low=re_res.ci_low, ci_high=re_res.ci_high,
-        n_items=n_total_test - re_res.n_excluded, n_groups=n_groups_test, n_excluded=re_res.n_excluded,
-        config_hash=c_hash, notes="",
-    ))
+        re_res = auroc_ci(y_test, re_test_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal", metric="auroc",
+            value=re_res.point, ci_low=re_res.ci_low, ci_high=re_res.ci_high,
+            n_items=n_total_test - re_res.n_excluded, n_groups=n_groups_test, n_excluded=re_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        re_test_probs = np.full(len(test_items), np.nan)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: 0 of {len(train_items)} items cached in {react_cache.cache_dir}",
+        ))
+
+    # 4b. HoloAssist diagnostic: react-nonverbal|spoke=1
+    if dataset == "holoassist":
+        spoke_mask_te = np.array([bool(it.meta.get("spoke", 0)) for it in test_items], dtype=bool)
+        n_spoke_items = int(np.sum(spoke_mask_te))
+        spoke_groups = [groups_test[i] for i in range(len(test_items)) if spoke_mask_te[i]]
+        n_spoke_groups = len(set(spoke_groups))
+
+        if k_re_tr > 0 and n_spoke_items > 0 and len(set(y_train[valid_re_tr])) > 1:
+            spoke_test_probs = np.full(n_spoke_items, np.nan)
+            valid_re_spoke = valid_re_te[spoke_mask_te]
+            if np.any(valid_re_spoke):
+                X_re_spoke = X_react_test[spoke_mask_te][valid_re_spoke]
+                X_re_spk_scaled = re_scaler.transform(X_re_spoke)
+                spoke_test_probs[valid_re_spoke] = clf_re.predict_proba(X_re_spk_scaled)[:, 1]
+
+            y_test_spoke = y_test[spoke_mask_te]
+            valid_probs_mask = ~np.isnan(spoke_test_probs)
+            if len(set(y_test_spoke[valid_probs_mask])) > 1:
+                rspk_res = auroc_ci(y_test_spoke, spoke_test_probs, spoke_groups)
+                rows.append(make_row(
+                    hypothesis="H1", dataset=dataset, split=split_name,
+                    condition="react-nonverbal|spoke=1", metric="auroc",
+                    value=rspk_res.point, ci_low=rspk_res.ci_low, ci_high=rspk_res.ci_high,
+                    n_items=n_spoke_items - rspk_res.n_excluded, n_groups=n_spoke_groups, n_excluded=rspk_res.n_excluded,
+                    config_hash=c_hash, notes="diagnostic: test items with spoke=1",
+                ))
+            else:
+                rows.append(make_row(
+                    hypothesis="H1", dataset=dataset, split=split_name,
+                    condition="react-nonverbal|spoke=1", metric="auroc",
+                    value=None, ci_low=None, ci_high=None,
+                    n_items=n_spoke_items, n_groups=n_spoke_groups, n_excluded=n_spoke_items,
+                    config_hash=c_hash, notes="diagnostic: test items with spoke=1; metric undefined: only one class in spoke=1 subset",
+                ))
+        else:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal|spoke=1", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_spoke_items, n_groups=n_spoke_groups, n_excluded=n_spoke_items,
+                config_hash=c_hash, notes=f"diagnostic: test items with spoke=1; not run: react-nonverbal not run ({rows[-1].notes})",
+            ))
 
     # 5. Condition: react-spoke & react-full
     if dataset == "oops":
@@ -429,37 +496,57 @@ def run_probes(
     fusion_tr_mask = valid_j_tr & valid_act_tr & valid_re_tr
     fusion_te_mask = valid_j_te & valid_act_te & valid_re_te
 
-    logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
-    X_fusion_tr_raw = np.hstack([
-        logit_j_tr[:, None],
-        X_action_train[fusion_tr_mask],
-        X_react_train[fusion_tr_mask],
-    ])
-    fusion_scaler = StandardScaler().fit(X_fusion_tr_raw)
-    X_fusion_tr = fusion_scaler.transform(X_fusion_tr_raw)
-
-    clf_fusion = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_fusion.fit(X_fusion_tr, y_train[fusion_tr_mask])
-
-    fusion_test_probs = np.full(len(test_items), np.nan)
-    if np.any(fusion_te_mask):
-        logit_j_te = logit(judge_test_scores[fusion_te_mask])
-        X_fusion_te_raw = np.hstack([
-            logit_j_te[:, None],
-            X_action_test[fusion_te_mask],
-            X_react_test[fusion_te_mask],
+    fu_point = None
+    if np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1:
+        logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
+        X_fusion_tr_raw = np.hstack([
+            logit_j_tr[:, None],
+            X_action_train[fusion_tr_mask],
+            X_react_train[fusion_tr_mask],
         ])
-        X_fusion_te = fusion_scaler.transform(X_fusion_te_raw)
-        fusion_test_probs[fusion_te_mask] = clf_fusion.predict_proba(X_fusion_te)[:, 1]
+        fusion_scaler = StandardScaler().fit(X_fusion_tr_raw)
+        X_fusion_tr = fusion_scaler.transform(X_fusion_tr_raw)
 
-    fu_res = auroc_ci(y_test, fusion_test_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="fusion", metric="auroc",
-        value=fu_res.point, ci_low=fu_res.ci_low, ci_high=fu_res.ci_high,
-        n_items=n_total_test - fu_res.n_excluded, n_groups=n_groups_test, n_excluded=fu_res.n_excluded,
-        config_hash=c_hash, notes="",
-    ))
+        clf_fusion = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_fusion.fit(X_fusion_tr, y_train[fusion_tr_mask])
+
+        fusion_test_probs = np.full(len(test_items), np.nan)
+        if np.any(fusion_te_mask):
+            logit_j_te = logit(judge_test_scores[fusion_te_mask])
+            X_fusion_te_raw = np.hstack([
+                logit_j_te[:, None],
+                X_action_test[fusion_te_mask],
+                X_react_test[fusion_te_mask],
+            ])
+            X_fusion_te = fusion_scaler.transform(X_fusion_te_raw)
+            fusion_test_probs[fusion_te_mask] = clf_fusion.predict_proba(X_fusion_te)[:, 1]
+
+        fu_res = auroc_ci(y_test, fusion_test_probs, groups_test)
+        fu_point = fu_res.point
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion", metric="auroc",
+            value=fu_res.point, ci_low=fu_res.ci_low, ci_high=fu_res.ci_high,
+            n_items=n_total_test - fu_res.n_excluded, n_groups=n_groups_test, n_excluded=fu_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        fusion_test_probs = np.full(len(test_items), np.nan)
+        missing_reasons = []
+        if not np.any(valid_j_tr):
+            missing_reasons.append("judge not run on train")
+        if not np.any(valid_act_tr):
+            missing_reasons.append("action-probe not run on train")
+        if not np.any(valid_re_tr):
+            missing_reasons.append("react-nonverbal not run on train")
+        reason_str = ", ".join(missing_reasons) if missing_reasons else "no overlapping items across modalities"
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: {reason_str}",
+        ))
 
     # 7. Condition: fusion_minus_action_best
     action_candidates = []
@@ -470,23 +557,36 @@ def run_probes(
         action_candidates.append(("judge-large", large_test_scores, large_point))
     if k_front >= 0.9 * n_total_test and front_point is not None:
         action_candidates.append(("judge-frontier", frontier_test_scores, front_point))
-    if act_res.point is not None:
-        action_candidates.append(("action-probe", act_test_probs, act_res.point))
+    if act_point is not None:
+        action_candidates.append(("action-probe", act_test_probs, act_point))
 
     valid_candidates = [c for c in action_candidates if c[2] is not None]
-    best_candidate = max(valid_candidates, key=lambda c: c[2])
-    action_best_name, action_best_scores, _ = best_candidate
+    if valid_candidates:
+        best_candidate = max(valid_candidates, key=lambda c: c[2])
+        action_best_name, action_best_scores, _ = best_candidate
+    else:
+        action_best_name = "none"
+        action_best_scores = np.full(len(test_items), np.nan)
 
-    d_res = delta_auroc_ci(
-        y_test, action_best_scores, fusion_test_probs, groups_test
-    )
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="fusion_minus_action_best", metric="delta_auroc",
-        value=d_res.point, ci_low=d_res.ci_low, ci_high=d_res.ci_high,
-        n_items=n_total_test - d_res.n_excluded, n_groups=n_groups_test, n_excluded=d_res.n_excluded,
-        config_hash=c_hash, notes=f"action_best={action_best_name}",
-    ))
+    if fu_point is not None and valid_candidates:
+        d_res = delta_auroc_ci(
+            y_test, action_best_scores, fusion_test_probs, groups_test
+        )
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_best", metric="delta_auroc",
+            value=d_res.point, ci_low=d_res.ci_low, ci_high=d_res.ci_high,
+            n_items=n_total_test - d_res.n_excluded, n_groups=n_groups_test, n_excluded=d_res.n_excluded,
+            config_hash=c_hash, notes=f"action_best={action_best_name}",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_best", metric="delta_auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"action_best={action_best_name}; not run: fusion not run" if valid_candidates else "not run",
+        ))
 
     # 8. Shuffled-label controls (permuted train labels)
     rng = np.random.default_rng(0)
@@ -494,49 +594,76 @@ def run_probes(
     rng.shuffle(y_train_shuffled)
 
     # action-probe:shuffled
-    clf_act_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_act_sh.fit(X_act_tr_scaled, y_train_shuffled[act_mask_tr])
-    act_sh_probs = np.full(len(test_items), np.nan)
-    if np.any(valid_act_te):
-        act_sh_probs[valid_act_te] = clf_act_sh.predict_proba(X_act_te_scaled)[:, 1]
-    ash_res = auroc_ci(y_test, act_sh_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="action-probe:shuffled", metric="auroc",
-        value=ash_res.point, ci_low=ash_res.ci_low, ci_high=ash_res.ci_high,
-        n_items=n_total_test - ash_res.n_excluded, n_groups=n_groups_test, n_excluded=ash_res.n_excluded,
-        config_hash=c_hash, notes="shuffled-label control",
-    ))
+    if k_act_tr > 0 and len(set(y_train[valid_act_tr])) > 1:
+        clf_act_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_act_sh.fit(X_act_tr_scaled, y_train_shuffled[act_mask_tr])
+        act_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_act_te):
+            act_sh_probs[valid_act_te] = clf_act_sh.predict_proba(X_act_te_scaled)[:, 1]
+        ash_res = auroc_ci(y_test, act_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe:shuffled", metric="auroc",
+            value=ash_res.point, ci_low=ash_res.ci_low, ci_high=ash_res.ci_high,
+            n_items=n_total_test - ash_res.n_excluded, n_groups=n_groups_test, n_excluded=ash_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: action-probe not run",
+        ))
 
     # react-nonverbal:shuffled
-    clf_re_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_re_sh.fit(X_re_tr_scaled, y_train_shuffled[re_mask_tr])
-    re_sh_probs = np.full(len(test_items), np.nan)
-    if np.any(valid_re_te):
-        re_sh_probs[valid_re_te] = clf_re_sh.predict_proba(X_re_te_scaled)[:, 1]
-    rsh_res = auroc_ci(y_test, re_sh_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="react-nonverbal:shuffled", metric="auroc",
-        value=rsh_res.point, ci_low=rsh_res.ci_low, ci_high=rsh_res.ci_high,
-        n_items=n_total_test - rsh_res.n_excluded, n_groups=n_groups_test, n_excluded=rsh_res.n_excluded,
-        config_hash=c_hash, notes="shuffled-label control",
-    ))
+    if k_re_tr > 0 and len(set(y_train[valid_re_tr])) > 1:
+        clf_re_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_re_sh.fit(X_re_tr_scaled, y_train_shuffled[re_mask_tr])
+        re_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_re_te):
+            re_sh_probs[valid_re_te] = clf_re_sh.predict_proba(X_re_te_scaled)[:, 1]
+        rsh_res = auroc_ci(y_test, re_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal:shuffled", metric="auroc",
+            value=rsh_res.point, ci_low=rsh_res.ci_low, ci_high=rsh_res.ci_high,
+            n_items=n_total_test - rsh_res.n_excluded, n_groups=n_groups_test, n_excluded=rsh_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: react-nonverbal not run",
+        ))
 
     # fusion:shuffled
-    clf_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    clf_fu_sh.fit(X_fusion_tr, y_train_shuffled[fusion_tr_mask])
-    fu_sh_probs = np.full(len(test_items), np.nan)
-    if np.any(fusion_te_mask):
-        fu_sh_probs[fusion_te_mask] = clf_fu_sh.predict_proba(X_fusion_te)[:, 1]
-    fsh_res = auroc_ci(y_test, fu_sh_probs, groups_test)
-    rows.append(make_row(
-        hypothesis="H1", dataset=dataset, split=split_name,
-        condition="fusion:shuffled", metric="auroc",
-        value=fsh_res.point, ci_low=fsh_res.ci_low, ci_high=fsh_res.ci_high,
-        n_items=n_total_test - fsh_res.n_excluded, n_groups=n_groups_test, n_excluded=fsh_res.n_excluded,
-        config_hash=c_hash, notes="shuffled-label control",
-    ))
+    if np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1:
+        clf_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_fu_sh.fit(X_fusion_tr, y_train_shuffled[fusion_tr_mask])
+        fu_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(fusion_te_mask):
+            fu_sh_probs[fusion_te_mask] = clf_fu_sh.predict_proba(X_fusion_te)[:, 1]
+        fsh_res = auroc_ci(y_test, fu_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion:shuffled", metric="auroc",
+            value=fsh_res.point, ci_low=fsh_res.ci_low, ci_high=fsh_res.ci_high,
+            n_items=n_total_test - fsh_res.n_excluded, n_groups=n_groups_test, n_excluded=fsh_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: fusion not run",
+        ))
 
     if notes:
         for r in rows:

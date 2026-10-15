@@ -193,6 +193,7 @@ def build_holoassist_items(
 
     skip_counts: Dict[str, int] = {
         "missing_correctness_attr": 0,
+        "missing_duration": 0,
         "invalid_action_window": 0,
         "invalid_reaction_window": 0,
         "missing_video": 0,
@@ -207,7 +208,11 @@ def build_holoassist_items(
         group_id = derive_group_id(vname)
         task = sanitize_task_name(sess.get("taskType", ""))
         vmeta = sess.get("videoMetadata", {})
-        duration = float(vmeta.get("duration", {}).get("seconds", 1e9))
+        dur_val = vmeta.get("duration", {}).get("seconds")
+        if dur_val is None or float(dur_val) <= 0:
+            skip_counts["missing_duration"] += 1
+            continue
+        duration = float(dur_val)
 
         # Instructor utterances
         instructor_spans: List[Tuple[float, float, str]] = []
@@ -273,7 +278,7 @@ def build_holoassist_items(
             noun = attrs.get("Noun", "").strip()
             context_text = f"Task: {task}. Step: {verb} {noun}."
             eid = e.get("id", idx)
-            item_id = f"{vname}_{eid}_{idx}"
+            item_id = f"holoassist:{vname}:{idx}"
 
             item = Item(
                 item_id=item_id,
@@ -286,6 +291,7 @@ def build_holoassist_items(
                 label_source="holoassist.Action Correctness",
                 context_text=context_text,
                 meta={
+                    "event_id": eid,
                     "spoke": spoke,
                     "transcript": transcript,
                     "session": vname,
@@ -296,8 +302,8 @@ def build_holoassist_items(
             )
             candidates.append(item)
 
-    # 2. Partition groups 70/30
-    unique_groups = sorted(list(set(c.group_id for c in candidates)))
+    # 2. Partition groups 70/30 across all sessions
+    unique_groups = sorted(list(set(derive_group_id(s.get("video_name", "")) for s in sessions)))
     rng_group = np.random.default_rng(0)
     shuffled_groups = list(unique_groups)
     rng_group.shuffle(shuffled_groups)
@@ -364,6 +370,16 @@ def build_holoassist_items(
     if errors:
         raise ValueError(f"HoloAssist items validation failed with {len(errors)} errors: {errors[:5]}")
 
+    split_map: Dict[str, str] = {
+        it.item_id: ("train" if it.group_id in train_groups else "test")
+        for it in all_items
+    }
+
+    group_splits: Dict[str, set] = defaultdict(set)
+    for it in all_items:
+        group_splits[it.group_id].add(split_map[it.item_id])
+    straddling_groups = sum(1 for s in group_splits.values() if len(s) > 1)
+
     stats = {
         "sessions_seen": len(sessions),
         "actions_seen": actions_seen,
@@ -372,18 +388,13 @@ def build_holoassist_items(
         "unique_groups": len(unique_groups),
         "train_groups": len(train_groups),
         "test_groups": len(test_groups),
-        "straddling_groups": 0,
+        "straddling_groups": straddling_groups,
         "train_items": len(train_items),
         "train_mistakes": len(sampled_tr_m),
         "train_correct": len(sampled_tr_c),
         "test_items": len(test_items),
         "test_mistakes": len(sampled_te_m),
         "test_correct": len(sampled_te_c),
-    }
-
-    split_map: Dict[str, str] = {
-        it.item_id: ("train" if it.group_id in train_groups else "test")
-        for it in all_items
     }
 
     return all_items, stats, split_map
@@ -394,6 +405,7 @@ def main() -> None:
     parser.add_argument("--stats", action="store_true", help="Print HoloAssist label statistics")
     parser.add_argument("--build", action="store_true", help="Build items, stats, and group split")
     parser.add_argument("--no-check-paths", action="store_true", help="Do not require video files to exist on disk")
+    parser.add_argument("--force-split", action="store_true", help="Force overwrite of splits/holoassist.json")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for sampling")
     args = parser.parse_args()
 
@@ -429,7 +441,7 @@ def main() -> None:
             official=split_map,
             source="grouped_70_30",
             seed=args.seed,
-            force=True,
+            force=args.force_split,
         )
         print(f"Split generated: {len(split_data['train'])} train, {len(split_data['test'])} test. sha256={split_data['sha256']}")
 

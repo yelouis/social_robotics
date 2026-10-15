@@ -130,7 +130,8 @@ def test_run_probes_holoassist_synthetic():
             group = f"group_{i // 10}"
             item_id = f"holoassist:sess_{i}:{i}"
             label = 1 if i % 2 == 0 else 0
-            spoke = 0 if label == 1 else 1
+            # Some correct actions also have instructor speech (like real data)
+            spoke = 1 if (label == 0 or i % 4 == 0) else 0
             transcript = "good job continue" if label == 1 else "no that is wrong stop"
             it = Item(
                 item_id=item_id,
@@ -165,6 +166,9 @@ def test_run_probes_holoassist_synthetic():
             action_cache.save(it.item_id, act_vec, it.action_window_sec, elapsed_ms=10)
 
             re_vec = rng.standard_normal(16).astype(np.float32)
+            if it.label == 1:
+                re_vec[:4] += 0.5
+            re_vec = re_vec / float(np.linalg.norm(re_vec))
             react_cache.save(it.item_id, re_vec, it.reaction_window_sec, elapsed_ms=10)
 
         p_hash = prompt_hash(DATASET_QUESTIONS["holoassist"])
@@ -193,9 +197,20 @@ def test_run_probes_holoassist_synthetic():
 
         row_map = {r.condition: r for r in rows}
         assert row_map["react-spoke"].value is not None
-        assert row_map["react-spoke"].value > 0.9  # strongly predictive
+        assert row_map["react-spoke"].value > 0.7
         assert row_map["react-full"].value is not None
-        assert row_map["react-full"].value > 0.9   # strongly predictive
+        assert row_map["react-full"].value > 0.8
+
+        # Diagnostic row assertions:
+        assert "react-nonverbal|spoke=1" in row_map
+        diag_row = row_map["react-nonverbal|spoke=1"]
+        assert diag_row.notes == "diagnostic: test items with spoke=1"
+        assert diag_row.value is not None
+        assert diag_row.n_items < len([it for it in items if official_map[it.item_id] == "test"])
+
+        # Check action_best never picks the diagnostic row
+        delta_row = row_map["fusion_minus_action_best"]
+        assert "react-nonverbal|spoke=1" not in delta_row.notes
 
 
 def test_probes_judge_large_and_frontier_rules():
