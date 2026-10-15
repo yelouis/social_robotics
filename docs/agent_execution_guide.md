@@ -1,21 +1,16 @@
-# Agent Execution Guide: Active Build: Wave A, remaining items (A6c → A7b → A7c → A8 → A9), October 10, 2026
+# Agent Execution Guide: Queue Complete: waiting on Issue 1 and the Wave B spec
 
-**You are an engineering agent with no memory of this project.**
+**Status: Queue Complete: waiting on Issue 1 and the Wave B spec (October 15, 2026).**
 - **What happened:** on October 8, 2026 the project was reoriented. The v0 pipeline (six hand-built affect layers over Ego4D, plus a human-rated benchmark) is archived at git tag `v0-saf-final` and removed from the tree, because it could not be validated ([`LESSONS_v0.md`](LESSONS_v0.md)).
-- **What exists:** Wave A items **A1–A7 and A6b have landed** on `main` (`651039b` … `6d72492`, October 9–10):
+- **What exists:** All Wave A queue items **(A1–A9, A6b, A6c, A7b, A7c)** have landed on `main`:
   - the harness (items, splits, metrics, scorecard);
   - the encoders and the feature cache;
-  - the VLM judge;
-  - the memory guard;
-  - the first H1 numbers, on Oops!.
-
-  The designer verified them on October 10 by reading every item's code against its contract and re-running the battery (§1).
-- **What you build:** the rest of Wave A, in the §2 order:
-  - **A6c:** fix three memory-guard defects found in verification;
-  - **A7b:** correct the Oops! report, and give the frontier judge the same parse retries as the local one;
-  - **A7c:** add the larger local judge `gemma4:26b` (`judge-large`, the maintainer's Issue 5 choice), and run it on Oops!;
-  - **A8:** finish HoloAssist, resuming the draft committed in `949c180`, with corrections;
-  - **A9:** close out Wave A.
+  - the VLM judges (local 7B, local 26B, frontier);
+  - the shared memory guard;
+  - Oops! end-to-end H1 evaluation;
+  - HoloAssist end-to-end H1 evaluation;
+  - Wave A closeout summary (`docs/evals/2026-10-15_wave_a_summary.md`).
+- **All items in the approved queue are complete.** No further engineering work should be started until the maintainer decides Issue 1 and the designer specifies Wave B.
 
 **Read before anything else, in this order:**
 1. [`00_thesis.md`](00_thesis.md): the thesis, H1–H3, the pass and kill criteria, and the decision log (entries 15–17 are the verification; 18 is the maintainer's Issue 5 choice).
@@ -147,12 +142,12 @@
 
 ### 1.4 Gates (run bare October 10, 2026; the regression bar)
 
-| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b | After A7c | After A8 |
-|---|---|---|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** | exit 0 · **62 passed** | exit 0 · **62 passed** (34 s) |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** | exit 0 · **6 passed** (88 s) | exit 0 · **9 passed** (94 s) |
+| # | Gate | Command | `HEAD` = `949c180` | After A6c | After A7b | After A7c | After A8 | After A9 |
+|---|---|---|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **48 passed** | exit 0 · **52 passed** | exit 0 · **57 passed** | exit 0 · **62 passed** | exit 0 · **62 passed** (34 s) | exit 0 · **62 passed** (34 s) |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **5 passed** (82 s) | exit 0 · **5 passed** (69 s) | exit 0 · **5 passed** | exit 0 · **6 passed** (88 s) | exit 0 · **9 passed** (94 s) | exit 0 · **9 passed** (78 s) |
 
 
 - G1–G3 were run on `949c180`'s exact content just before it was committed. G4 was run earlier the same day on the same content.
@@ -577,8 +572,8 @@ Check with: `ps -axo pid,ppid,etime,command | grep -E "run_supervised|download_h
 - **A6c** `8c6f04e`: memory guard fixes (`guard()` re-entrancy via `_HELD_DEPTH`, fail-closed `read_memory()` returning `(0, 4)`, supervisor attempt accounting for exit 75, fast test HTTP isolation, `footprint -p` slow test).
 - **A7** `6d72492`: the Oops! download, schema, adapter, split, features, judge, probes and 11 scorecard rows.
 - **A7b** `d77584c`: Oops! report corrections (Clause 1 failed [0.472], Clause 2 held [0.015]; HTTP 429 distinguished from parse failures; wall-clock timings; 10 verified descriptions) and Gemini judge parse parity retries.
-- **A7c**: large local judge (`judge-large`, `gemma4:26b`, `vlm_judge_large`), `check_shared()` watchdog, test-only probe condition, 90% coverage rule for `action_best`, 33 GB declared peak (28.10 GB RSS measured), and Oops! test split evaluated (1,072 items, AUROC 0.708).
-- **`949c180`** `chore(a8)`: the A8 draft, committed as found at the maintainer's request (incomplete). A8 resumes from it.
+- **A8** `36a7769`: HoloAssist end-to-end H1 evaluation: canonical item IDs and split (3,000 train / 2,000 test, group-disjoint); audio presence check (+1.51 dB, Issue 6 filed; stopped audio extraction); SigLIP action-probe (AUROC 0.569 [0.542, 0.597]); qwen2.5vl:7b judge (AUROC 0.488 [0.466, 0.512]); gemma4:26b judge-large (AUROC 0.544 [0.528, 0.562]); react-spoke (AUROC 0.676 [0.655, 0.695]); react-full (AUROC 0.739 [0.716, 0.761]); action-probe:shuffled (AUROC 0.492 [0.461, 0.525], PASS); G1–G4 green.
+- **A9**: Wave A closeout and synthesis across Oops! and HoloAssist: headline dataset × condition table citing scorecard timestamps; per-clause predictions checked; caveats, anomalies, compute times (~28.5 h total), and Wave B recommendations documented at `docs/evals/2026-10-15_wave_a_summary.md`; G1–G4 green.
 - `shared/vlm_client.ollama_chat`'s enforced timeout is load-bearing (`LESSONS_v0.md`, "Operations"). Do not replace it with the `ollama` Python client.
 
 ### 5.2 Accepted equivalents (checked October 10; do not "fix" these back)
