@@ -326,7 +326,9 @@ def test_gemini_judge_429_exhaustion_raises(tmp_path: Path, monkeypatch):
     assert item.item_id in err_content
 
     # No successful answer cached
-    cache_files = [f for f in judge_dir.glob("*.jsonl") if f.name not in ("errors.jsonl", "progress.json")]
+    from shared.fsutil import data_glob
+    (judge_dir / "._errors.jsonl").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 4092)
+    cache_files = [f for f in data_glob(judge_dir, "*.jsonl") if f.name not in ("errors.jsonl", "progress.json")]
     for cf in cache_files:
         assert cf.stat().st_size == 0
 

@@ -12,6 +12,7 @@ from config import DATA_ROOT
 from harness.items import read_items
 from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
+from shared.fsutil import data_glob
 
 
 def prediction_check(rows: Dict[str, dict]) -> List[str]:
@@ -195,7 +196,7 @@ def compute_holoassist_wall_clocks(root: Path) -> Dict[str, str]:
         for mtag in ["qwen2.5vl_7b", "gemma4_26b"]:
             md = j_dir / mtag
             if md.exists():
-                j_files = list(md.glob("*.jsonl"))
+                j_files = data_glob(md, "*.jsonl")
                 total_s = 0.0
                 n_scored = 0
                 for jf in j_files:

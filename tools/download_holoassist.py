@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 
 from config import DATA_ROOT
+from shared.fsutil import data_glob
 
 
 HOLOASSIST_VIDEO_URL = "https://hl2data.z5.web.core.windows.net/holoassist-data-release/video_pitch_shifted.tar"
@@ -90,7 +91,7 @@ def main() -> None:
     check_disk_space(holoassist_dir, required_gb=50.0)
 
     if extracted_flag.exists():
-        vid_count = len(list(videos_dir.rglob("*.mp4")))
+        vid_count = len(data_glob(videos_dir, "*.mp4", recursive=True))
         print(f"HoloAssist pitch-shifted videos already extracted: {vid_count} mp4 files found.")
         update_progress(holoassist_dir, "verified")
         return
@@ -135,7 +136,7 @@ def main() -> None:
 
     # 3. Verify extracted files
     print("Verifying extracted video files...")
-    vid_count = len(list(videos_dir.rglob("*.mp4")))
+    vid_count = len(data_glob(videos_dir, "*.mp4", recursive=True))
     print(f"Found {vid_count} mp4 videos in {videos_dir}")
     if vid_count < 1000:
         raise RuntimeError(f"Expected >= 1000 mp4 videos, but found only {vid_count}!")

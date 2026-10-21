@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 
 from config import DATA_ROOT
+from shared.fsutil import data_glob
 
 
 OOPS_URL = "https://oops.cs.columbia.edu/data/video_and_anns.tar.gz"
@@ -111,8 +112,8 @@ def main() -> None:
         # 3. Verify
         print("Verifying extracted files...")
         # Check that videos and annotations exist
-        vid_count = len(list(oops_dir.rglob("*.mp4")))
-        json_count = len(list(oops_dir.rglob("*.json")))
+        vid_count = len(data_glob(oops_dir, "*.mp4", recursive=True))
+        json_count = len(data_glob(oops_dir, "*.json", recursive=True))
         print(f"Found {vid_count} mp4 videos and {json_count} json files")
         if vid_count == 0:
             raise RuntimeError("Extraction produced 0 mp4 videos!")
@@ -142,7 +143,7 @@ def main() -> None:
                 print(f"Extracting remaining inner video {inner_video}...")
                 subprocess.run(["tar", "-xzf", str(inner_video), "-C", str(oops_dir / "oops_dataset")], check=True)
                 inner_video.unlink()
-            vid_count = len(list(oops_dir.rglob("*.mp4")))
+            vid_count = len(data_glob(oops_dir, "*.mp4", recursive=True))
             print(f"Found {vid_count} mp4 videos")
         print("Oops! is already extracted and verified.")
         update_progress(oops_dir, "verified")

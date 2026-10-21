@@ -12,6 +12,7 @@ import numpy as np
 from config import DATA_ROOT
 from harness.items import read_items
 from harness.splits import load_split
+from shared.fsutil import data_glob
 
 
 def prediction_check(rows: Dict[str, dict]) -> List[str]:
@@ -130,7 +131,7 @@ def compute_oops_wall_clocks(root: Path) -> Dict[str, str]:
             if not model_dir.is_dir():
                 continue
             total_ms = 0.0
-            for jf in model_dir.glob("*.jsonl"):
+            for jf in data_glob(model_dir, "*.jsonl"):
                 if jf.name == "errors.jsonl":
                     continue
                 for line in jf.read_text(encoding="utf-8").splitlines():
@@ -193,7 +194,7 @@ def generate_oops_report(
                 continue
 
             # (a) Read answers only from <prompt_hash>.jsonl (exclude errors.jsonl)
-            ans_files = [f for f in model_dir.glob("*.jsonl") if f.name != "errors.jsonl"]
+            ans_files = [f for f in data_glob(model_dir, "*.jsonl") if f.name != "errors.jsonl"]
             total_answers = 0
             parse_failures = 0
             scored_test_count = 0
@@ -282,7 +283,7 @@ def generate_oops_report(
             "pre": {"100": 0, "90": 0, "80 or below": 0, "0": 0},
             "post": {"100": 0, "90": 0, "80 or below": 0, "0": 0},
         }
-        ans_files = [f for f in m_dir.glob("*.jsonl") if f.name != "errors.jsonl"]
+        ans_files = [f for f in data_glob(m_dir, "*.jsonl") if f.name != "errors.jsonl"]
         has_any = False
         for jf in ans_files:
             for line in jf.read_text(encoding="utf-8").splitlines():
