@@ -74,7 +74,7 @@ On data with known outcomes, observer reactions predict the outcome **and add in
 - **Prediction:**
   - On **visible-outcome** data (Oops! failures), (a) is strong and (c) ≈ (a).
   - On **hidden-outcome** data (verdict videos, HoloAssist mistakes), (b) > (a) and (c) > (a).
-- **Pass (proposed):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 **and** fusion − `action_best` ≥ +0.03 with the paired CI excluding 0.
+- **Pass (proposed; amended October 20, 2026, decision 20):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 **and** the ablation gain, fusion − `action-fusion` (the same model without the reaction features), ≥ +0.03 with the paired CI excluding 0. Fusion − `action_best` is still reported beside it.
 - **Kill:** if reactions add nothing over `action_best` on the **verdict data** (Wave B, the purest hidden-outcome test), the strong thesis is false. Stop, and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
 
 ### H2: Scale and transfer
@@ -92,7 +92,7 @@ Reaction-labeled human task video makes a robot **success detector** (the reward
 - **Offline (in scope, Wave D):**
   - **Data:** [RoboReward](https://huggingface.co/datasets/teetone/RoboReward) (CC-BY-4.0; 54,135 robot rollouts scored 1–5; a 2,831-item human-verified test split). Only real successes and failures are used; the counterfactual-instruction negatives are excluded, because our detector reads no instructions.
   - **Measure:** a data-efficiency curve, AUROC (success vs. failure) against the number of robot training labels (e.g. 50–1,000), **with vs. without** pre-training on reaction-labeled human task video (HoloAssist-style). Reference lines: RoboReward-8B and the VLM judge. **Never framed as beating RoboReward-8B.**
-  - **Start condition:** Wave A shows a positive, CI-excluding-0 Δ (reactions over `action_best`) on at least one dataset. Otherwise there is no signal to transfer.
+  - **Start condition (amended October 20, 2026, decision 20):** Wave A shows a positive, CI-excluding-0 **ablation gain** (fusion − `action-fusion`) on at least one dataset. Otherwise there is no signal to transfer.
 - **Online (later, not in scope):** a policy trained with the improved reward learns faster in simulation (needs a cloud CUDA GPU; `microduck_rl`/mjlab need CUDA) or on hardware. This is the final link; the 3-month paper stops one step before it.
 
 ---
@@ -156,6 +156,18 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **No reaction gain has been shown on any dataset, so Wave D's start condition is not met.** The kill rule is untouched: it is decided on Wave B only.
     - Issues 6 and 7 decide how HoloAssist's Δ is computed.
 
+**2026-10-20** (maintainer, selections in `ongoing_general_errors.md` and in chat):
+20. **Three selections:**
+    - **Issue 6 → A, built from a fresh sample.** The non-verbal voice test runs on an audible-session evaluation set (`holoassist_audible`, `02_data_sources.md`), drawn fresh within the sessions where the instructor is measurably audible.
+    - **Issue 7 → A.** A `step-prior` control (text only) enters `action_best` and fusion.
+    - **The pass bar's Δ becomes the ablation gain** (fusion − `action-fusion`, the same model without the reaction features), and so does Wave D's start condition. Fusion − `action_best` is still reported.
+
+    **Why the pass bar changed:** with fixed probe settings, the action-only combined model (judge + step-prior + 768 SigLIP features) scores 0.682 on HoloAssist, **−0.069 below the step-prior alone (0.751)**. The original Δ would therefore fail through dilution, whatever the reactions carry. The ablation holds the combiner fixed and isolates the reaction features.
+
+    **Disclosure:** the designer measured those two numbers on the existing `holoassist` test labels before this decision. The combiner itself was not changed, so the decision does not depend on which way they came out. On Oops! the ablation gain equals the old Δ: +0.015 [−0.001, 0.029].
+
+    **Still open:** the kill rule (decided on Wave B) still says "over `action_best`". The Wave B spec will restate it in terms of the ablation gain, for the maintainer to confirm.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issue 6** (which reaction channel HoloAssist's Δ uses, now that the instructor is audible in only about a third of sessions) and **Issue 7** (the step-name prior that beats every action-only control on HoloAssist) need your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are decided (entry 20) and are being implemented (guide items A11–A13). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

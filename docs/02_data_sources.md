@@ -146,6 +146,25 @@ These were left open by the item definition above. The A8 draft adapter chose th
   - What the H1 bar should be is **Issue 7**. Until it is decided, every HoloAssist result is reported with this caveat.
 - **The instructor is audible in only about a third of sessions** (audio presence check: median +1.51 dB; 6 of 20 sessions ≥ +3.5 dB, mostly quiet device setups). That is **Issue 6**.
 
+### Audible-session evaluation set: `holoassist_audible` (maintainer decision, October 20, 2026; Issue 6 option A, fresh sample)
+
+The question it answers: on the sessions where the instructor can actually be heard, does their non-verbal voice add information beyond the action-only model?
+- **Session audibility, measured once, label-blind:** `tools/check_audio_presence.py --all-sessions` (guide item A12).
+  - It runs on every annotated session that has a video (1,673), with the same measurement as the A8 check: the mean dBFS inside instructor-utterance spans minus the mean dBFS inside no-utterance gaps of ≥ 2 s.
+  - A session is **audible** iff that difference is **≥ +3.5 dB**.
+  - A session with no instructor utterance, or no qualifying gap, is **undefined** and excluded, with its reason recorded.
+  - The measurement reads the conversation annotations and the audio only, never `Action Correctness`.
+  - Output: `DATA_ROOT/runs/holoassist_session_audibility.jsonl` (one line per session).
+- **Items:** the same item definition as `holoassist` above (windows, `context_text`, labels with `otherwise` as a mistake, `meta.spoke`, `meta.transcript`), restricted to audible sessions.
+  - `item_id` = `"holoassist_audible:<video_name>:<event index>"`, and `meta.source_item_id` = `"holoassist:<video_name>:<event index>"`.
+  - `dataset` = `holoassist_audible`.
+- **Groups and split:** exactly the `holoassist` group partition: the session prefix, shuffled over all 1,758 annotated sessions with `default_rng(0)`, the first `round(0.7·n)` to train. Restricting to audible sessions never moves a group across the split. Written once to `splits/holoassist_audible.json`.
+- **A fresh sample:** within audible sessions, all mistakes plus an equal number of correct items (`default_rng(0)`), capped at 1,500 per class in train and 1,000 per class in test. It is drawn fresh, not as a subset of the 5,000 `holoassist` items.
+- **Expected size** (from the 20-session sample; a sanity range, not a target): 3,000–4,000 items, of which 1,000–1,300 are test.
+- **Conditions:** every §6 condition, including `step-prior`, `action-fusion`, the ablation Δ and `react-nonverbal|spoke=1`.
+  - The judges use the `holoassist` question verbatim, so the `prompt_hash` is identical. The caches are its own, under `judge/holoassist_audible/` and `features/holoassist_audible/`.
+- **Report it as a subset:** quieter tasks (device setups) are over-represented, and the rule was chosen after the 20-session check failed, though before any outcome was seen. Give its task mix next to `holoassist`'s.
+
 ## Oops!: visible-outcome contrast
 
 Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.

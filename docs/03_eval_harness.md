@@ -42,7 +42,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | field | type | meaning |
 |---|---|---|
 | `item_id` | str | `"<dataset>:<source-native id>:<index>"`, unique, stable across reruns |
-| `dataset` | str | `oops` \| `holoassist` \| `verdict` \| `bad` |
+| `dataset` | str | `oops` \| `holoassist` \| `holoassist_audible` \| `verdict` \| `bad` (`holoassist_audible`: the audible-session evaluation set, `02_data_sources.md`; added October 20, 2026) |
 | `group_id` | str | the person/session unit that must never straddle a split (§5) |
 | `video_path` | str | absolute path under `DATA_ROOT` |
 | `action_window_sec` | [float, float] | what the judge and the action probe see |
@@ -75,9 +75,13 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 
 - **`config_hash`:** the first 12 hex digits of the SHA-256 of the canonical JSON (sorted keys) of the run config. The config includes the encoder ids, judge model, prompt hash, probe hyperparameters and split file hash.
 - **`n_excluded`:** items dropped from this condition (missing feature, judge parse failure), always reported.
-- **The Δ row:**
+- **The ablation Δ row (the pass-bar Δ; added October 20, 2026, maintainer decision, `00_thesis.md` entry 20):**
+  - `condition` = `"fusion_minus_action_fusion"`, `metric` = `"delta_auroc"`, `notes` = `"ablation: reaction features removed"`.
+  - It is `AUROC(fusion) − AUROC(action-fusion)` (§6): the same model fit on the same items, with and without the reaction features. So it measures what the reactions add with the combiner held fixed.
+  - Its CI comes from paired group-bootstrap resamples over the test items where both scores are non-null.
+- **The Δ row** (kept and still reported: the practical comparison against the best single action-only control):
   - `condition` = `"fusion_minus_action_best"`, `metric` = `"delta_auroc"`.
-  - `action_best` is whichever of `judge` / `action-probe` (and `judge-large` and `judge-frontier`, per §8) has the higher test AUROC. That is conservative for our claim. Its `notes` are exactly `action_best=<condition>`.
+  - `action_best` is whichever action-only control has the highest test AUROC. The controls are `judge`, `action-probe`, `judge-large` and `judge-frontier` (at ≥ 90% coverage, §8), `action-fusion`, and on HoloAssist datasets `step-prior` (both added October 20, 2026, §6). That is conservative for our claim. Its `notes` are exactly `action_best=<condition>`.
   - Its CI is computed on paired group-bootstrap resamples (§7), over the test items where **both** scores are non-null. Its `n_items` is that intersection.
 - `python -m harness.scorecard` with no arguments prints the **latest** row per `(hypothesis, dataset, split, condition, metric)` as a table, with the newest first. `--history <dataset>` prints every row for one dataset in time order.
 
@@ -100,12 +104,27 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | `react-nonverbal` | emotion2vec+ embedding of the reaction-window audio; **no transcript** | Logistic regression |
 | `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | **Score = `1 − spoke`**: silence scores higher P(good), because `label = 1` means correct. The direction is fixed a priori from A4's label-level rates (an instructor spoke after 67.98% of mistakes vs. 30.87% of correct actions), never chosen on test. *HoloAssist only.* It answers "is the emotion signal more than 'they said something'?" |
 | `react-full` | Transcript text in the reaction window | TF-IDF (`ngram_range=(1,2)`, `min_df=2`) + logistic regression. *Only where the dataset provides transcripts* |
-| `fusion` | `[logit(judge), action-probe features, react-nonverbal features]` | Logistic regression |
+| `step-prior` | The step text only (`meta.verb`, `meta.noun`); **no frames** | **HoloAssist datasets only** *(added October 20, 2026, Issue 7 A)*. Score = the train-split P(label = 1 \| verb, noun), with hierarchical smoothing (below). It enters `action_best`. On Oops! (constant `context_text`) it is a `not run` row |
+| `fusion` | Oops!: `[logit(judge), action-probe features, react-nonverbal features]`. **HoloAssist datasets: `[logit(judge), logit(step-prior), action-probe features, react-nonverbal features]`** | Logistic regression |
+| `action-fusion` | `fusion`'s inputs **minus the reaction features** | Logistic regression, fit on **exactly fusion's train items** and scored on fusion's test items, so the two differ only in the reaction features. If fusion cannot run, it is fit on the items with judge and action features. It is an action-only control and enters `action_best` *(added October 20, 2026)* |
+
+**`step-prior`, exactly** *(Issue 7 A)*:
+- Let `p0` = the train base rate of `label = 1`.
+- Verb level: `p_v = (k_v + 5·p0) / (n_v + 5)`, where `k_v` and `n_v` are the train items with verb `v` that are good, and in total.
+- Verb + noun level: `p_vn = (k_vn + 5·p_v) / (n_vn + 5)`.
+- **Test items** use the full train counts. An unseen verb falls back to `p0`, and an unseen pair to `p_v`.
+- **Train items** (as a feature inside `fusion` and `action-fusion`) use **leave-one-out** counts at all three levels: the item's own label is removed first. Otherwise the feature would carry its own label.
+- `logit` clips it to [0.01, 0.99], like the judge.
+- **In the shuffled-label controls, `step-prior` is recomputed from the shuffled train labels.** A shuffled control never sees a feature derived from the true labels.
+- Designer reference values (October 20, the existing `holoassist` split, measured before any implementation):
+  - `step-prior` **0.751 [0.726, 0.774]**;
+  - `action-fusion` (judge + step-prior + SigLIP) **0.682 [0.658, 0.706]**;
+  - Oops! `action-fusion` (judge + SigLIP) **0.779**, with the ablation Δ **+0.015 [−0.001, 0.029]**.
 
 **HoloAssist-only diagnostic** *(added October 10, 2026)*: **`react-nonverbal|spoke=1`**.
 - It is the same fitted `react-nonverbal` probe, scored only on the test items with `meta.spoke = 1` (the instructor said *something*). Its `notes` are exactly `diagnostic: test items with spoke=1`.
 - **Why:** `react-spoke` already separates mistakes from correct actions, through whether the instructor talked at all. Inside the spoke-only subset, that cue is constant, so an AUROC above 0.5 there is the voice carrying information *beyond* "they said something". The comparison of `react-nonverbal` with `react-spoke` cannot show this on its own.
-- It is a diagnostic row: it never enters `fusion` or `action_best`.
+- It is a diagnostic row: it never enters `fusion` or `action_best`. It also applies to `holoassist_audible`.
 
 **Probe hyperparameters (fixed; never tuned on test):**
 - `sklearn.linear_model.LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")`.
@@ -207,12 +226,13 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 8. **Prediction checks follow fixed rules** *(moved here October 20, 2026, from the guide's A7b and A9b items)*. Reports print one line per clause, with the verdict computed by these rules and nothing else:
    - **Visible outcome (Oops!):**
      - Clause 1, "the judge is strong": one line per judge condition with a value. It **held** iff `ci_low > 0.5` **and** AUROC ≥ the action-probe's AUROC − 0.05.
-     - Clause 2, "Δ ≈ 0": it **held** iff the Δ CI contains 0.
+     - Clause 2, "Δ ≈ 0": it **held** iff the **ablation Δ** (`fusion_minus_action_fusion`) CI contains 0. The `fusion_minus_action_best` row is printed as a context line *(amended October 20, 2026)*.
      - Implemented by `tools/report_oops.py` `prediction_check`.
    - **Hidden outcome (HoloAssist, verdict videos):**
      - Clause 1, "reaction-only beats action_best": `react-nonverbal`'s `ci_low` > the `action_best` AUROC.
-     - Clause 2, "fusion beats action_best": Δ `ci_low > 0`.
-     - **The pass bar (proposed, `00_thesis.md`):** `react-nonverbal` ≥ 0.65 **and** Δ ≥ +0.03 with `ci_low > 0`.
+     - Clause 2, "reactions add to the action-only model": the **ablation Δ** `ci_low > 0`.
+     - **The pass bar (proposed, `00_thesis.md`; amended October 20, 2026):** `react-nonverbal` ≥ 0.65 **and** the ablation Δ ≥ +0.03 with `ci_low > 0`.
+     - **A context line, with no verdict:** `fusion_minus_action_best`, printed so that a fusion model losing to the best single control (e.g. `step-prior`) is shown plainly.
      - A clause whose rows did not run is `not tested`, never inferred.
      - `react-spoke` and `react-full` appear only as context lines without a verdict.
      - Implemented by `tools/report_holoassist.py` `prediction_check_hidden` (guide item A9b).

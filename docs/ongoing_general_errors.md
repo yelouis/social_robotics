@@ -14,9 +14,11 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 6 (October 15; options revised by the designer October 20):** the HoloAssist audio check failed (+1.51 dB against ≥ +3.5 dB), so the HoloAssist reaction-vs-action test (the Δ row) was never computed. Which reaction channel should HoloAssist's Δ use?
-  - **Issue 7 (new, October 20):** HoloAssist's step names leak the outcome. Knowing only the step's verb predicts the label at AUROC **0.721**, better than every action-only control, and `gemma4:26b`'s whole above-chance HoloAssist score comes from reading the verb "drop". What must the reactions beat?
-  - Issues 6 and 7 together define HoloAssist's H1 test. Nothing else in Wave A waits on them.
+  - **Issues 6 and 7 were decided October 20 (option A for both). Two sub-choices were made in chat:**
+    - a **fresh** audible-session sample;
+    - the pass bar measured as the **ablation gain**.
+
+    They are being implemented by guide items A11–A13 (`00_thesis.md` entry 20).
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4), Issue 3 (SSD space; October 8), and Issue 5 (large local judge `gemma4:26b` evaluated on Oops!, October 14, A7c).
@@ -202,7 +204,12 @@ Your selection: _____
 
 ### Issue 6: Instructor not audible over background manipulation in HoloAssist video audio (audio presence check: +1.51 dB vs >= +3.5 dB requirement)
 
-**Status**: ⚠️ Confirmed Unresolved — awaiting selection. Filed by the implementing agent in A8 (October 15), exactly as the guide required. **The options were revised by the designer on October 20**, after verification showed what the failure costs (facts 4–6). The agent's original options are kept at the end of this entry.
+**Status**: ✅ **Decided: option A, by the maintainer, October 20, 2026.**
+- **Sub-choice, made in chat:** build the audible set as a **fresh sample** (≈ 3,000–4,000 items, ≈ 1,000–1,300 of them test), not as a subset of the existing 5,000.
+- **Definition:** `02_data_sources.md` → "Audible-session evaluation set".
+- **Implementation:** guide items A12 (per-session audibility) and A13 (`holoassist_audible`). The entry moves to 🧪 Resolved when A13 lands.
+
+*Filed by the implementing agent in A8 (October 15), exactly as the guide required.* **The options were revised by the designer on October 20**, after verification showed what the failure costs (facts 4–6). The agent's original options are kept at the end of this entry.
 
 **What is blocked:** `react-nonverbal`, `fusion` and therefore **HoloAssist's Δ row**. The non-audio conditions (`judge`, `judge-large`, `action-probe`, `react-spoke`, `react-full`) are scored.
 
@@ -262,7 +269,7 @@ Your selection: _____
 
 **Recommendation:** **A**, optionally with **B** as a second row. A answers the question the thesis asks, on the data where it can be asked. B is cheap context, but reviewers will discount it.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 *The agent's original options (October 15), for the record:*
 - **A:** use `react-spoke`/`react-full` only and do not extract audio (now **D**);
@@ -273,7 +280,13 @@ Your selection: _____
 
 ### Issue 7: HoloAssist's step names leak the outcome; a step-name prior beats every action-only control
 
-**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 20, 2026, with a few lines over `DATA_ROOT/items/holoassist/items.jsonl` and `splits/holoassist.json`. It changes what the reactions must beat on HoloAssist, so it needs your decision.
+**Status**: ✅ **Decided: option A, by the maintainer, October 20, 2026.**
+- **Follow-up choice, made in chat: the pass bar uses the ablation gain.** That is fusion − `action-fusion`, the same model without the reaction features.
+- **Why it was needed:** the designer measured option A's intended combined model as written. Judge + step-prior + SigLIP scored 0.682, **−0.069 [−0.091, −0.047] below the step-prior alone (0.751)**. The high-dimensional inputs dilute the one strong feature, so "fusion − action_best" would fail whatever the reactions carry.
+- **Contract:** `03_eval_harness.md` §4 (the ablation Δ row) and §6 (`step-prior`, `action-fusion`, the exact formula).
+- **Implementation:** guide item A11. The entry moves to 🧪 Resolved when A11 lands.
+
+*Found in the designer's verification, October 20, 2026, with a few lines over `DATA_ROOT/items/holoassist/items.jsonl` and `splits/holoassist.json`.*
 
 **Facts (October 20, 2026):**
 1. **The judges are given the step:** `context_text` = `"Task: <task>. Step: <verb> <noun>."` (`02_data_sources.md` → HoloAssist). The spec chose this so the judge would know what the person was trying to do, like a dish's name in verdict videos.
@@ -315,7 +328,7 @@ Your selection: _____
 
 **Recommendation:** **A.** It is cheap, keeps every number already computed, and makes the HoloAssist Δ (whatever Issue 6 selects) a fair test.
 
-Your selection: _____
+Your selection: Proceed with Option A.
 
 ---
 
