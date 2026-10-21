@@ -397,6 +397,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A10 — Ignore exFAT AppleDouble (._*) files in every glob over SSD — git log --grep "(a10)" — src/shared/fsutil.py with data_glob; 4 tools files and test_judge updated; test_fsutil passes; G2 passed 3/3 times (64 passed); G1–G4 exit 0.
 - A9b — Correct Wave A summary and HoloAssist report — git log --grep "(a9b)" — prediction_check_hidden implemented per 03_eval_harness.md §11.8; test_report_holoassist passes; HoloAssist report and Wave A summary regenerated/corrected; G1–G3 exit 0 (67 fast passed).
 - A11 — The step-prior and action-fusion controls and ablation delta — git log --grep "(a11)" — step_prior_scores with hierarchical smoothing (m=5, LOO); action-fusion and ablation delta (fusion_minus_action_fusion) implemented; §1.5 reference values reproduced exactly (HoloAssist step-prior 0.751 [0.726, 0.774], action-fusion 0.682 [0.658, 0.706]; Oops! action-fusion 0.779, ablation delta +0.015 [-0.001, 0.029]); reports regenerated; G1–G3 exit 0.
+- A12 — Per-session instructor audibility over all 1,673 sessions — git log --grep "(a12)" — tools/check_audio_presence.py with --all-sessions; 1,673 annotated sessions with video measured detached (PPID 1, elapsed 418.4s); 548 audible (32.8%), 1,125 inaudible, 0 undefined; task breakdown documented in 02_data_sources.md; G1–G3 exit 0 (73 passed 3/3).
 
 
 ---

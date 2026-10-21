@@ -165,6 +165,36 @@ The question it answers: on the sessions where the instructor can actually be he
   - The judges use the `holoassist` question verbatim, so the `prompt_hash` is identical. The caches are its own, under `judge/holoassist_audible/` and `features/holoassist_audible/`.
 - **Report it as a subset:** quieter tasks (device setups) are over-represented, and the rule was chosen after the 20-session check failed, though before any outcome was seen. Give its task mix next to `holoassist`'s.
 
+#### Audibility (as measured, October 20, 2026)
+
+Measured over all 1,673 annotated sessions with video (`tools/check_audio_presence.py --all-sessions`; A12):
+- **Overall:** 1,673 sessions; **548 audible** (32.8%), **1,125 inaudible** (67.2%), **0 undefined**.
+- **By task:**
+
+| Task | Total | Audible | Inaudible | % Audible |
+|---|---|---|---|---|
+| setup camera | 129 | 93 | 36 | 72.1% |
+| setup gopro | 129 | 90 | 39 | 69.8% |
+| setup switch | 128 | 87 | 41 | 68.0% |
+| setup big printer | 106 | 60 | 46 | 56.6% |
+| setup small printer | 89 | 32 | 57 | 36.0% |
+| assemble stool | 96 | 29 | 67 | 30.2% |
+| assemble nightstand | 103 | 27 | 76 | 26.2% |
+| disassemble tray table | 121 | 26 | 95 | 21.5% |
+| disassemble nightstand | 111 | 23 | 88 | 20.7% |
+| disassemble stool | 116 | 20 | 96 | 17.2% |
+| assemble tray table | 109 | 18 | 91 | 16.5% |
+| change belt | 17 | 3 | 14 | 17.6% |
+| make coffee with nespresso machine | 97 | 15 | 82 | 15.5% |
+| make coffee with espresso machine | 41 | 6 | 35 | 14.6% |
+| disassemble utility cart | 81 | 8 | 73 | 9.9% |
+| assemble utility cart | 67 | 5 | 62 | 7.5% |
+| assemble computer | 71 | 5 | 66 | 7.0% |
+| fix motorcycle | 21 | 1 | 20 | 4.8% |
+| assemble laser scanner | 19 | 0 | 19 | 0.0% |
+| change circuit breaker | 22 | 0 | 22 | 0.0% |
+| **Total** | **1,673** | **548** | **1,125** | **32.8%** |
+
 ## Oops!: visible-outcome contrast
 
 Web "fail" videos with a marked failure onset. The reaction is mostly the filmer's audio: a laugh, a gasp, "oh no". Some clips carry compilation music instead.
