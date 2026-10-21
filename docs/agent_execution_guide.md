@@ -118,12 +118,12 @@
 
 ### 1.4 Gates (run bare October 20, 2026, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on `3f0b78d` | Result on A10 |
-|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | **Flaky:** 1 failed / 61 passed in 1 run of 3 (`test_gemini_judge_429_exhaustion_raises` globbed `._errors.jsonl`); 62 passed otherwise. **A10's target** | exit 0 · **64 passed** (3/3 runs passed: 35.4s, 35.5s, 35.3s) |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (134 s); `memguard --status`: 57.0 GB, pressure 1, lock free | exit 0 · **9 passed** (120 s); `memguard --status`: 53.1 GB, pressure 1, lock free |
+| # | Gate | Command | Result on `3f0b78d` | Result on A10 | Result on A9b |
+|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | **Flaky:** 1 failed / 61 passed in 1 run of 3 (`test_gemini_judge_429_exhaustion_raises` globbed `._errors.jsonl`); 62 passed otherwise. **A10's target** | exit 0 · **64 passed** (3/3 runs passed: 35.4s, 35.5s, 35.3s) | exit 0 · **67 passed** (3/3 runs passed: 37.1s, 35.4s, 35.4s) |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (134 s); `memguard --status`: 57.0 GB, pressure 1, lock free | exit 0 · **9 passed** (120 s); `memguard --status`: 53.1 GB, pressure 1, lock free | — (fast battery only) |
 
 ### 1.5 Results so far, and the reference values A11 must reproduce
 

@@ -437,6 +437,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Findings:** A9b (summary and report corrections), A10 (AppleDouble hardening), the Issue 6 options revised, Issue 7 filed, and the Issue 5 note corrected.
   - **Design updated:** `02_data_sources.md` → HoloAssist (the step-prior caveat, and the 85 sessions that are in no official split list).
 - A10 — Ignore exFAT AppleDouble (._*) files in every glob over SSD — git log --grep "(a10)" — src/shared/fsutil.py with data_glob; 4 tools files and test_judge updated; test_fsutil passes; G2 passed 3/3 times (64 passed); G1–G4 exit 0.
+- A9b — Correct Wave A summary and HoloAssist report — git log --grep "(a9b)" — prediction_check_hidden implemented per 03_eval_harness.md §11.8; test_report_holoassist passes; HoloAssist report and Wave A summary regenerated/corrected; G1–G3 exit 0 (67 fast passed).
 
 
 ---

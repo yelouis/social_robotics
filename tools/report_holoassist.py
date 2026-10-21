@@ -15,95 +15,134 @@ from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
 from shared.fsutil import data_glob
 
 
-def prediction_check(rows: Dict[str, dict]) -> List[str]:
-    """Check hypothesis predictions against scorecard rows for HoloAssist (hidden-outcome).
+def fmt_row(r: Optional[dict]) -> str:
+    if not r:
+        return "not run"
+    val = r.get("value")
+    if val is not None:
+        lo = r.get("ci_low")
+        hi = r.get("ci_high")
+        if lo is not None and hi is not None:
+            return f"{val:.3f} [{lo:.3f}, {hi:.3f}]"
+        return f"{val:.3f}"
+    return r.get("notes", "not run")
+
+
+def prediction_check_hidden(rows: Dict[str, dict]) -> List[str]:
+    """Check hypothesis predictions against scorecard rows for hidden-outcome data per 03_eval_harness.md §11.8.
 
     Returns lines in order:
-    1. One Clause 1 line per judge condition with a non-null value, in the order
-       `judge`, `judge-large`, `judge-frontier`:
-       Reports AUROC and whether the judge was at chance or above chance.
-    2. Clause 2 line for reactions adding incremental signal over action_best (Delta > 0):
-       Held iff ci_low > 0.
-    3. H1 pass bar line (reaction-only >= 0.65 and Delta >= +0.03 with ci_low > 0).
-    4. For each judge condition whose value is null:
-       - **<condition>:** <its notes>
+    1. Clause 1, "reaction-only beats action_best"
+    2. Clause 2, "reactions add to the action-only model"
+    3. H1 pass bar (proposed, 00_thesis.md)
+    4. Context, no verdict
+    5. Caveat
     """
-    judge_conditions = ["judge", "judge-large", "judge-frontier"]
-    clause1_lines: List[str] = []
-    null_lines: List[str] = []
+    lines: List[str] = []
 
-    for cond in judge_conditions:
-        if cond in rows:
-            r = rows[cond]
-            val = r.get("value")
-            if val is not None:
-                ci_low = r.get("ci_low")
-                ci_high = r.get("ci_high")
-                n_items = r.get("n_items", 0)
-                above_chance = ci_low is not None and ci_low > 0.50
-                verdict = "above chance" if above_chance else "at chance"
-                clause1_lines.append(
-                    f'- **Clause 1, "VLM judge baseline" ({cond}):** AUROC {val:.3f} [{ci_low:.3f}, {ci_high:.3f}] '
-                    f'({n_items} scored) → {verdict}'
-                )
-            else:
-                notes = r.get("notes", "")
-                null_lines.append(f"- **{cond}:** {notes}")
-
-    clause2_lines: List[str] = []
-    delta_row = rows.get("fusion_minus_action_best")
-    d_val = None
-    d_low = None
-    best_name = "action-probe"
-    if delta_row:
-        d_val = delta_row.get("value")
-        d_low = delta_row.get("ci_low")
-        d_high = delta_row.get("ci_high")
-        notes = delta_row.get("notes", "")
+    # 1. Clause 1: react-nonverbal vs action_best
+    r_react = rows.get("react-nonverbal")
+    r_delta_ab = rows.get("fusion_minus_action_best")
+    action_best_name = "action-probe"
+    if r_delta_ab:
+        notes = r_delta_ab.get("notes", "")
         if "action_best=" in notes:
-            best_name = notes.split("action_best=")[1].split(";")[0].strip()
-        elif ";" in notes:
-            best_name = notes.split(";")[0].strip()
-        else:
-            best_name = notes.strip()
+            action_best_name = notes.split("action_best=")[1].split(";")[0].strip()
 
-        held = (d_low is not None and d_low > 0.0)
-        verdict = "held (statistically significant gain)" if held else "did not hold (CI covers zero or below)"
-        if d_val is not None and d_low is not None and d_high is not None:
-            clause2_lines.append(
-                f'- **Clause 2, "reactions add incremental signal over action_best" (Δ > 0):** '
-                f'Δ {d_val:.3f} [{d_low:.3f}, {d_high:.3f}] (action_best = {best_name}) → {verdict}'
-            )
-        else:
-            clause2_lines.append(
-                f'- **Clause 2, "reactions add incremental signal over action_best" (Δ > 0):** '
-                f'not run ({notes})'
-            )
+    r_ab = rows.get(action_best_name)
+    ab_val = r_ab.get("value") if r_ab else None
+    ab_val_str = f"{ab_val:.3f}" if ab_val is not None else (fmt_row(r_ab) if r_ab else "not run")
 
-    # Pass bar check
-    reaction_conds = ["react-spoke", "react-full", "react-nonverbal"]
-    react_vals = [
-        (c, rows[c].get("value"))
-        for c in reaction_conds
-        if c in rows and rows[c].get("value") is not None
-    ]
-    pass_bar_lines: List[str] = []
-    if react_vals and d_val is not None and d_low is not None:
-        best_react_cond, best_react_val = max(react_vals, key=lambda x: x[1])
-        met = (best_react_val >= 0.65) and (d_val >= 0.03) and (d_low > 0.0)
-        verdict = "MET" if met else "NOT MET"
-        pass_bar_lines.append(
-            f'- **H1 proposed pass bar (reaction-only ≥ 0.65 and Δ ≥ +0.03 with CI > 0):** '
-            f'best reaction ({best_react_cond}) = {best_react_val:.3f}, Δ = {d_val:.3f} [{d_low:.3f}, {delta_row.get("ci_high", 0.0):.3f}] → {verdict}'
+    if r_react is None or r_react.get("value") is None:
+        nv_notes = r_react.get("notes", "not run") if r_react else "not run"
+        c1_verdict = f"not tested: {nv_notes}"
+        c1_nv_str = nv_notes
+    else:
+        nv_val = r_react["value"]
+        nv_lo = r_react.get("ci_low")
+        c1_nv_str = fmt_row(r_react)
+        if ab_val is not None and nv_lo is not None:
+            held = nv_lo > ab_val
+            c1_verdict = "held" if held else "did not hold"
+        else:
+            c1_verdict = "not tested: action_best missing"
+
+    lines.append(
+        f'- **Clause 1, "reaction-only beats action_best":** react-nonverbal {c1_nv_str} vs {action_best_name} {ab_val_str} → {c1_verdict}'
+    )
+
+    # 2. Clause 2: ablation Delta (fusion_minus_action_fusion)
+    r_ablation = rows.get("fusion_minus_action_fusion")
+    if r_ablation is None:
+        c2_body = "not run"
+        c2_verdict = "not tested: no fusion_minus_action_fusion row"
+    elif r_ablation.get("value") is None:
+        notes = r_ablation.get("notes", "")
+        c2_body = notes if notes else "not run"
+        c2_verdict = f"not tested: {notes or 'no fusion_minus_action_fusion row'}"
+    else:
+        c2_body = fmt_row(r_ablation)
+        lo = r_ablation.get("ci_low")
+        held = lo is not None and lo > 0
+        c2_verdict = "held" if held else "did not hold"
+
+    lines.append(
+        f'- **Clause 2, "reactions add to the action-only model":** ablation Δ {c2_body} → {c2_verdict}'
+    )
+
+    # 3. H1 pass bar
+    react_has_val = (r_react is not None and r_react.get("value") is not None)
+    ablation_has_val = (r_ablation is not None and r_ablation.get("value") is not None)
+    if not react_has_val or not ablation_has_val:
+        missing = []
+        if not react_has_val:
+            missing.append("react-nonverbal")
+        if not ablation_has_val:
+            missing.append("ablation Δ")
+        pb_verdict = f"not testable: {', '.join(missing)}"
+    else:
+        nv_val = r_react["value"]
+        ab_val = r_ablation["value"]
+        ab_lo = r_ablation.get("ci_low")
+        met = (nv_val >= 0.65) and (ab_val >= 0.03) and (ab_lo is not None and ab_lo > 0.0)
+        pb_verdict = "met" if met else "not met"
+
+    lines.append(
+        f'- **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → {pb_verdict}'
+    )
+
+    # 4. Context, no verdict
+    ctx_parts = []
+    ctx_parts.append(f"fusion − action_best {fmt_row(rows.get('fusion_minus_action_best'))}")
+    ctx_parts.append(f"judge {fmt_row(rows.get('judge'))}")
+    ctx_parts.append(f"judge-large {fmt_row(rows.get('judge-large'))}")
+    ctx_parts.append(f"action-probe {fmt_row(rows.get('action-probe'))}")
+    if "step-prior" in rows:
+        ctx_parts.append(f"step-prior {fmt_row(rows.get('step-prior'))}")
+    if "action-fusion" in rows:
+        ctx_parts.append(f"action-fusion {fmt_row(rows.get('action-fusion'))}")
+    ctx_parts.append(f"react-spoke {fmt_row(rows.get('react-spoke'))} (diagnostic: did the instructor speak)")
+    ctx_parts.append(f"react-full {fmt_row(rows.get('react-full'))} (leakage condition: the instructor's words; never a headline, §11.2)")
+
+    lines.append(f"- **Context, no verdict:** {'; '.join(ctx_parts)}.")
+
+    # 5. Caveat
+    if "step-prior" in rows and rows["step-prior"].get("value") is not None:
+        sp_r = fmt_row(rows["step-prior"])
+        lines.append(
+            f'- **Caveat:** HoloAssist step text carries outcome information ({sp_r}), per 02_data_sources.md → HoloAssist → As built (A8); '
+            f'judge-large scores 0.489 on test items whose verb is not "drop".'
         )
     else:
-        best_str = f"best reaction = {max(react_vals, key=lambda x: x[1])[1]:.3f} ({max(react_vals, key=lambda x: x[1])[0]})" if react_vals else "no reaction condition run"
-        pass_bar_lines.append(
-            f'- **H1 proposed pass bar (reaction-only ≥ 0.65 and Δ ≥ +0.03 with CI > 0):** '
-            f'{best_str}, Δ is undefined (fusion not run) → NOT MET'
+        lines.append(
+            '- **Caveat:** HoloAssist step text carries outcome information (02_data_sources.md → HoloAssist → As built (A8)); '
+            'judge-large scores 0.489 on test items whose verb is not "drop".'
         )
 
-    return clause1_lines + clause2_lines + pass_bar_lines + null_lines
+    return lines
+
+
+prediction_check = prediction_check_hidden
 
 
 def compute_distribution(
@@ -275,6 +314,8 @@ def generate_holoassist_report(
     scorecard_path: Optional[Path] = None,
     audio_presence_path: Optional[Path] = None,
     out_path: Optional[Path] = None,
+    corrected_date: Optional[str] = None,
+    updated_date: Optional[str] = None,
 ) -> Path:
     root = data_root or DATA_ROOT
     today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -386,6 +427,10 @@ def generate_holoassist_report(
     # Build report lines
     report_lines: List[str] = []
     report_lines.append(f"# HoloAssist H1 Evaluation Report ({today})")
+    if corrected_date:
+        report_lines.append(f"*Corrected {corrected_date} (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a \"best reaction\". The numbers are unchanged.*")
+    if updated_date:
+        report_lines.append(f"*Updated {updated_date} (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*")
     report_lines.append("")
     report_lines.append("> [!NOTE]")
     report_lines.append("> **Caveat 1 (Pitch-Shifted Audio):**")
@@ -611,6 +656,8 @@ def generate_holoassist_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate HoloAssist H1 evaluation report")
     parser.add_argument("--date", default=None, help="Date string YYYY-MM-DD")
+    parser.add_argument("--corrected-date", default=None, help="Correction date if regenerating an earlier report")
+    parser.add_argument("--updated-date", default=None, help="Update date")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", type=Path, help="Scorecard path")
     parser.add_argument("--audio-presence", default=None, type=Path, help="Audio presence summary path")
     parser.add_argument("--output", default=None, type=Path, help="Output markdown path")
@@ -621,6 +668,8 @@ def main() -> None:
         scorecard_path=args.scorecard,
         audio_presence_path=args.audio_presence,
         out_path=args.output,
+        corrected_date=args.corrected_date,
+        updated_date=args.updated_date,
     )
 
 

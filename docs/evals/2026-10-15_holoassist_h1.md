@@ -1,4 +1,5 @@
 # HoloAssist H1 Evaluation Report (2026-10-15)
+*Corrected 2026-10-20 (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a "best reaction". The numbers are unchanged.*
 
 > [!NOTE]
 > **Caveat 1 (Pitch-Shifted Audio):**
@@ -20,11 +21,11 @@
 
 ## 2. Executive Summary & Prediction Check
 
-- **Clause 1, "VLM judge baseline" (judge):** AUROC 0.488 [0.466, 0.512] (2000 scored) → at chance
-- **Clause 1, "VLM judge baseline" (judge-large):** AUROC 0.544 [0.528, 0.562] (2000 scored) → above chance
-- **Clause 2, "reactions add incremental signal over action_best" (Δ > 0):** not run (action_best=action-probe; not run: fusion not run)
-- **H1 proposed pass bar (reaction-only ≥ 0.65 and Δ ≥ +0.03 with CI > 0):** best reaction = 0.739 (react-full), Δ is undefined (fusion not run) → NOT MET
-- **judge-frontier:** not run: no cache file /Volumes/Extreme SSD/social_robotics/judge/holoassist/gemini-3.6-flash/4f0760a8e441.jsonl
+- **Clause 1, "reaction-only beats action_best":** react-nonverbal not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large vs action-probe 0.569 → not tested: not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large
+- **Clause 2, "reactions add to the action-only model":** ablation Δ not run → not tested: no fusion_minus_action_fusion row
+- **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not testable: react-nonverbal, ablation Δ
+- **Context, no verdict:** fusion − action_best action_best=action-probe; not run: fusion not run; judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
+- **Caveat:** HoloAssist step text carries outcome information (02_data_sources.md → HoloAssist → As built (A8)); judge-large scores 0.489 on test items whose verb is not "drop".
 
 ## 3. Conditions Table (Test Split, N=2,000)
 
