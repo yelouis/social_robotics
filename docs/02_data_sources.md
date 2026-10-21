@@ -134,8 +134,17 @@ These were left open by the item definition above. The A8 draft adapter chose th
 
 - **Total sessions extracted on Extreme SSD:** 2,111 session directories under `raw/holoassist/videos/`, matching every session in the official split lists (`train-v1_2.txt` [1,466], `val-v1_2.txt` [207], `test-v1_2.txt` [438]).
 - **Directory layout:** `raw/holoassist/videos/<session>/Export_py/Video_pitchshift.mp4` (all 2,111 sessions have this exact path). The video archive (`1f4f68b9...`, 184 GB) was deleted after extraction per SSD space invariants.
-- **Annotated session coverage:** Of the 1,758 sessions in `data-annotation-trainval-v1_1.json`, exactly **1,673 sessions** have an extracted video. The remaining **85 sessions** are not present in the official video release archive.
+- **Annotated session coverage:** Of the 1,758 sessions in `data-annotation-trainval-v1_1.json`, exactly **1,673 sessions** have an extracted video. The remaining **85 sessions** are not present in the official video release archive, **and none of them is in any official split list** (designer, October 20). They appear to be annotated sessions that were withheld from the release, so skipping them is correct.
 - **Handling of missing videos:** Missing videos are skipped honestly by the item builder with reason `missing_video` (6,589 candidate action instances skipped across the 85 sessions; recorded in `DATA_ROOT/items/holoassist/stats.json`), never silently ignored.
+
+### As built (A8): what the results showed about the item definition (designer, October 20, 2026)
+
+- **The step text carries outcome information.** `context_text` includes the step verb and noun.
+  - **One verb is an outcome:** `drop`, 435 of the 5,000 items, is a mistake 95% of the time.
+  - **A step prior beats every action-only control:** the per-verb mistake rate learned on train scores **0.721** on test (verb + noun 0.727). Without the `drop` items it still scores 0.666, because the class-balanced sample has different step mixes per class.
+  - **`judge-large` is reading the verb:** its 0.544 is entirely the `drop` items (0.489 on the rest). The 7B judge does not use it (0.468 on the rest).
+  - What the H1 bar should be is **Issue 7**. Until it is decided, every HoloAssist result is reported with this caveat.
+- **The instructor is audible in only about a third of sessions** (audio presence check: median +1.51 dB; 6 of 20 sessions ≥ +3.5 dB, mostly quiet device setups). That is **Issue 6**.
 
 ## Oops!: visible-outcome contrast
 

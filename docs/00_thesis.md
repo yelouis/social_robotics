@@ -149,6 +149,13 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 **2026-10-10** (maintainer):
 18. **Issue 5 → option B: a larger local judge instead of paid frontier calls.** `gemma4:26b` (already installed, vision-capable) is added as the condition `judge-large`, on the test split only. It enters `action_best` at ≥ 90% coverage. It is shared with `animated_infographics`, so it runs with that project's runner options and is never unloaded by us (`03_eval_harness.md` §8). The frontier judge stays on the free tier.
 
+**2026-10-20** (designer, verification of A6c–A9):
+19. **Wave A's results as they stand:**
+    - **Oops!:** Δ +0.015 [−0.002, 0.029], so the predicted Δ ≈ 0 held. The judges did not reach the "strong" bar: 7B 0.472, 26B 0.708, both below action-probe 0.779 − 0.05.
+    - **HoloAssist:** the action-only controls are weak (action-probe 0.569; judges 0.488 and 0.544). `react-spoke` reaches 0.676. But **no HoloAssist Δ exists yet**, and a step-name prior (0.721) beats every action-only control.
+    - **No reaction gain has been shown on any dataset, so Wave D's start condition is not met.** The kill rule is untouched: it is decided on Wave B only.
+    - Issues 6 and 7 decide how HoloAssist's Δ is computed.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is decided: option B, a larger local judge (`judge-large`). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issue 6** (which reaction channel HoloAssist's Δ uses, now that the instructor is audible in only about a third of sessions) and **Issue 7** (the step-name prior that beats every action-only control on HoloAssist) need your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

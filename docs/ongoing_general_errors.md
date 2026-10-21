@@ -14,7 +14,9 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 6 (October 15):** HoloAssist audio presence check failed (+1.51 dB vs >= +3.5 dB requirement). Awaiting selection on audio channel handling.
+  - **Issue 6 (October 15; options revised by the designer October 20):** the HoloAssist audio check failed (+1.51 dB against ≥ +3.5 dB), so the HoloAssist reaction-vs-action test (the Δ row) was never computed. Which reaction channel should HoloAssist's Δ use?
+  - **Issue 7 (new, October 20):** HoloAssist's step names leak the outcome. Knowing only the step's verb predicts the label at AUROC **0.721**, better than every action-only control, and `gemma4:26b`'s whole above-chance HoloAssist score comes from reading the verb "drop". What must the reactions beat?
+  - Issues 6 and 7 together define HoloAssist's H1 test. Nothing else in Wave A waits on them.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4), Issue 3 (SSD space; October 8), and Issue 5 (large local judge `gemma4:26b` evaluated on Oops!, October 14, A7c).
@@ -31,7 +33,38 @@
     - it says the prediction "holds" although the judge, which was predicted to be strong, scored 0.472;
     - it counts `errors.jsonl` rows (HTTP 429) as "parse failures";
     - it has no wall-clock times, and its example descriptions are template text.
-- **In progress:** **A8 (HoloAssist).** At the maintainer's request, the draft was committed as found in `949c180` (incomplete). The video download finished October 10 at 13:01: 2,111 videos, archive deleted. The draft needs the corrections listed in guide item A8.
+- **In progress (October 10):** **A8 (HoloAssist).** At the maintainer's request, the draft was committed as found in `949c180` (incomplete). The video download finished October 10 at 13:01: 2,111 videos, archive deleted. The draft needs the corrections listed in guide item A8.
+
+**October 20, 2026: designer verification of A6c, A7b, A7c, A8 and A9** (battery re-run bare; each item's code and outputs read against its contract).
+- **Verified correct:**
+  - **A6c:** the October 10 nested-guard probe now resumes in 0.00 s and leaves the lock free; reads fail closed; deferrals no longer use supervisor attempts.
+  - **A7b:** the generated Oops! report applies the clause rule correctly.
+  - **A7c:**
+    - the Oops! re-score left every earlier value identical to 4 decimals;
+    - all 77 `unload` events in `memguard.log` through October 15 are our 7B judge's; `gemma4:26b` was never unloaded;
+    - through October 15, the shared-model check stopped the large judge cleanly 10 times under memory pressure.
+  - **A8:** every draft correction landed:
+    - the `holoassist:` ids;
+    - `--force-split`;
+    - a computed group-overlap count;
+    - `missing_duration`;
+    - the slow markers;
+    - the audio check without sentinels;
+    - Issue 6 filed exactly as specified.
+  - **The October 19 crash report** names no process of ours (it is a per-process-limit kill of `IMTranscoderAgent`).
+- **Landed with defects, all fixed by guide item A9b:**
+  - **The A9 summary** (`docs/evals/2026-10-15_wave_a_summary.md`) has wrong statements:
+    - **the bootstrap:** it says "10,000 cluster-bootstrap draws". The code draws 1,000 resamples; 10,000 is only the draw ceiling;
+    - **the large judge's verdict:** it marks `judge-large` "held" on Oops! (0.708). By the pinned rule (`ci_low > 0.5` and AUROC ≥ action-probe − 0.05 = 0.729) it **did not hold**, which is what the generated report says;
+    - **query and error counts:** it reports "zero API errors across 7,708 VLM queries". The real counts are 10,780 local answers plus 1,024 Gemini 429s and 2 ffmpeg errors;
+    - **compute time:** it puts the HoloAssist 7B judge at 56,986 s; the cache sums to 40,657 s;
+    - **the leakage condition:** it headlines `react-full` (transcripts, the leakage condition) as proof that "reaction signal exists and overcomes action probes", against `03_eval_harness.md` §11.2 and with no paired Δ.
+  - **The HoloAssist report** uses `react-full` as the "best reaction" in its pass-bar line.
+  - **The Issue 5 resolution note** said Clause 1 "now holds" for `judge-large`. That note is corrected below.
+- **New defect (A10):** the external SSD is exFAT. macOS attaches a `com.apple.provenance` attribute to new files, so exFAT grows `._<name>` AppleDouble files beside them.
+  - A test that globs `*.jsonl` failed 1 of 3 fast-suite runs with `TMPDIR` on the SSD, as §0.2 of the guide requires.
+  - Five production globs over `DATA_ROOT` have the same exposure.
+- **New decisions for the maintainer:** Issue 7, plus revised options for Issue 6.
 
 ---
 
@@ -169,7 +202,9 @@ Your selection: _____
 
 ### Issue 6: Instructor not audible over background manipulation in HoloAssist video audio (audio presence check: +1.51 dB vs >= +3.5 dB requirement)
 
-**Status:** ⚠️ Awaiting selection. **Blocks HoloAssist audio channel (`react-nonverbal` and `fusion`).** Non-audio conditions (`judge`, `judge-large`, `action-probe`, `react-spoke`, `react-full`) are unaffected.
+**Status**: ⚠️ Confirmed Unresolved — awaiting selection. Filed by the implementing agent in A8 (October 15), exactly as the guide required. **The options were revised by the designer on October 20**, after verification showed what the failure costs (facts 4–6). The agent's original options are kept at the end of this entry.
+
+**What is blocked:** `react-nonverbal`, `fusion` and therefore **HoloAssist's Δ row**. The non-audio conditions (`judge`, `judge-large`, `action-probe`, `react-spoke`, `react-full`) are scored.
 
 **Facts (October 15, 2026):**
 1. **Audio presence check failed the $\ge +3.5$ dB threshold:** `tools/check_audio_presence.py` was run on 20 randomly sampled sessions (`default_rng(0)`, sorted by `video_name`, restricted to sessions with $\ge 1$ instructor utterance and $\ge 1$ no-utterance gap $\ge 2$ s, where video exists).
@@ -181,27 +216,104 @@ Your selection: _____
 3. **Execution guide requirement (§3 A8.1):**
    > *"Requirement: a median per-session difference $\ge +3.5$ dB. If it fails, **STOP**, and file **Issue 6** ('instructor not audible in the video audio') with options A (`react-spoke`/`react-full` from annotations only) and B (drop HoloAssist's audio channel), and a `Your selection: _____` line. Continue only with what does not use audio."*
 
-**Option A (recommended): Use `react-spoke` and `react-full` from annotations only; do not extract `e2v-plus-large` on HoloAssist**
-- *Pros:*
-  - `react-spoke` (binary timing of instructor utterance) and `react-full` (TF-IDF on instructor transcripts) are completely uncorrupted by headset microphone manipulation noise;
-  - A4 showed strong signal: instructors intervened on 67.98% of mistakes vs 30.87% of correct actions;
-  - avoids spending ~1.5 h extracting 5,000 `emotion2vec+` embeddings on noise-dominated audio.
-- *Cons:*
-  - `react-nonverbal` is reported as `not run: audio presence check failed (+1.51 dB < +3.5 dB; Issue 6)` and `fusion` is omitted or based on `react-spoke`/`react-full`.
+4. **Per-session spread (designer, from `DATA_ROOT/runs/holoassist_audio_presence.json`):**
+   - **6 of the 20 sessions pass +3.5 dB on their own:**
+     - five device setups: `z129 dslr` +14.3, `z094 switch` +8.4, `z195 gopro` +8.0, `z167 gopro` +5.4, `z035 printer_big` +4.5;
+     - one stool disassembly: `z124 marius` +5.9.
+   - Two more are just under: `z108 gladom` +3.47 and `z189 printer_big` +3.15.
+   - The furniture sessions (`knarrevik`, `gladom`, `rashult`) range from −10.4 to +3.5 dB. The other device sessions (`R076`/`R099` DSLR, `nespresso`, `ATV`) sit at +0.5 to +1.7 dB.
+   - So the instructor is audible in roughly a third of sessions, mostly the quieter device tasks.
+5. **What it costs today:** HoloAssist was Wave A's only hidden-outcome test, and its Δ row reads `not run: fusion not run`.
+   - Oops!'s Δ is +0.015 [−0.002, 0.029], which includes 0.
+   - So **Wave A has not shown a reaction gain on any dataset.** The start condition for Wave D (the offline robot check, DW5: "Wave A shows reaction signal on ≥ 1 dataset", `00_thesis.md` H3) is **not met**.
+   - The kill rule is unaffected: it is decided on Wave B's verdict videos only.
+6. **Any HoloAssist Δ also depends on Issue 7.** A step-name prior beats every action-only control used so far. Decide both before the Δ is computed.
 
-**Option B: Drop HoloAssist's audio channel entirely**
+**Option A (recommended): Measure audibility in every session, then run the non-verbal channel only where the instructor is audible**
+- Compute the presence difference for every annotated session that has video (1,673), with the existing tool and rule, on audio levels only and **before any probe is fit**. Keep the sessions at ≥ +3.5 dB.
+- Extract `e2v-plus-large` for the items in those sessions. Report `react-nonverbal`, `react-nonverbal|spoke=1`, `fusion` and the Δ on that subset, each row's `notes` naming the subset rule and its size.
 - *Pros:*
-  - Strict separation: HoloAssist evaluates action video and VLM judges only.
+  - it tests the thesis's actual channel (non-verbal voice) where it exists;
+  - the filter is blind to labels, and its threshold was fixed before any outcome was seen;
+  - it is cheap: about 1–2 h of session audio levels plus minutes of `emotion2vec+`.
 - *Cons:*
-  - Discards `react-spoke` and `react-full`, which are verified independent ground-truth annotations of instructor guidance.
+  - **the subset is smaller and skewed:** about a third of sessions, mostly camera, console, printer and GoPro setups. Expect roughly 600 test items and a wider CI;
+  - the rule was chosen after the check failed (though not after any outcome was seen), so it must be reported as such.
 
-**Option C: Proceed with `e2v-plus-large` extraction anyway, reporting the +1.51 dB presence caveat**
+**Option B: Use the annotated speech timing (`spoke`) as HoloAssist's reaction channel in fusion, on all items**
+- `fusion-spoke` = [`logit(judge)`, action-probe features, `spoke`], with its own Δ against `action_best`.
 - *Pros:*
-  - Preserves exact probe condition table as originally drafted.
+  - minutes of work; all 2,000 test items;
+  - whether a supervisor spoke up is a behavioral reaction a robot could observe.
 - *Cons:*
-  - `react-nonverbal` will capture screwdriver clatter and table bangs rather than instructor affect (similar to Oops! failure audio).
+  - it comes from human-annotated utterance spans, not from an automatic detector;
+  - it is crude: whether someone spoke, not how they sounded;
+  - 56% of mistakes are by definition "corrected by instructor verbally", so a reviewer may call the gain near-definitional. A4 still holds: the labels were not derived from speech;
+  - it is not the face/voice signal the thesis is about.
+- **It can be combined with A** (separate, clearly named rows).
 
-**Recommendation:** Option A. `react-spoke` and `react-full` provide clean, noise-free reactions from the instructor annotations.
+**Option C: Extract `e2v-plus-large` on all items anyway, with the +1.51 dB caveat** (the agent's original option C)
+- *Pros:* the condition table as originally specified, on the full set.
+- *Cons:* in most sessions the audio is the performer's tool noise, so the Δ would measure manipulation sounds (as on Oops!) and could not be read as a reaction effect.
+
+**Option D: No HoloAssist Δ.** Keep the current rows, with `react-spoke` and `react-full` as descriptive only (the agent's original options A and B).
+- *Pros:* no work; no risk of over-claiming.
+- *Cons:* Wave A ends with no hidden-outcome Δ. Wave D can then start only on Wave B's results.
+
+**Recommendation:** **A**, optionally with **B** as a second row. A answers the question the thesis asks, on the data where it can be asked. B is cheap context, but reviewers will discount it.
+
+Your selection: _____
+
+*The agent's original options (October 15), for the record:*
+- **A:** use `react-spoke`/`react-full` only and do not extract audio (now **D**);
+- **B:** drop HoloAssist's audio channel (now inside **D**);
+- **C:** extract anyway (now **C**).
+
+---
+
+### Issue 7: HoloAssist's step names leak the outcome; a step-name prior beats every action-only control
+
+**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 20, 2026, with a few lines over `DATA_ROOT/items/holoassist/items.jsonl` and `splits/holoassist.json`. It changes what the reactions must beat on HoloAssist, so it needs your decision.
+
+**Facts (October 20, 2026):**
+1. **The judges are given the step:** `context_text` = `"Task: <task>. Step: <verb> <noun>."` (`02_data_sources.md` → HoloAssist). The spec chose this so the judge would know what the person was trying to do, like a dish's name in verdict videos.
+2. **One verb is an outcome, not a step:** `drop` (435 of the 5,000 items, 182 in test) is a mistake 95% of the time. The leakage test banned `mistake`, `correct`, `wrong`, `error`, `fix` and `instead`, but not outcome-type verbs.
+3. **A step-name prior beats every action-only control.**
+   - Method: the per-verb mistake rate learned on the train split (smoothed toward the train base rate), scored on test.
+   - With all items: verb only **0.721**, verb + noun **0.727**, task only 0.613.
+   - Without the `drop` items it still scores **0.666** (verb + noun 0.682). The class-balanced sample has different step mixes per class: the mistake share is `touch` 0.79, `pull` 0.74, `press` 0.70 and `open` 0.70, against `disassemble` 0.20 and `withdraw` 0.29.
+   - For comparison: `action-probe` 0.569, `judge` 0.488, `judge-large` 0.544, `react-spoke` 0.676.
+4. **`judge-large`'s HoloAssist signal is the leak.**
+   - On the 1,818 test items without `drop` it scores **0.489** (chance). On the 182 `drop` items its mean P(good) is 0.30, against 0.92 elsewhere.
+   - The 7B judge barely uses it (0.468 without `drop`).
+5. **The reaction signal survives without `drop`:** `react-spoke` scores **0.733** on the non-`drop` test items (0.676 on all).
+6. **Why it matters:** the H1 Δ is the reactions' gain over the best *action-only* control. Knowing which step was performed is action-only information, and it is stronger than any action-only control used so far. A Δ against `action-probe` (0.569) would overstate what reactions add.
+
+**Option A (recommended): Add a `step-prior` action-only control, and give it to fusion too**
+- `step-prior` = the train-split mistake rate per (verb, noun), backing off to the verb and then to the base rate, smoothed with 5 pseudo-counts. It is text only, with no frames. HoloAssist only.
+- It enters `action_best`, and `logit(step-prior)` is added to `fusion`'s inputs, so fusion is not handicapped against it.
+- The judges' input is unchanged.
+- *Pros:*
+  - an honest bar: the reactions must beat "knowing what step it was";
+  - cheap: minutes, with no new extraction or judge runs;
+  - a robot knows which step it was commanded to do, so the control is realistic.
+- *Cons:*
+  - it raises the bar the reactions must clear;
+  - `drop` stays in the judges' input. It is disclosed, and it is harmless to the Δ because `step-prior` absorbs it.
+
+**Option B: Remove outcome-type verbs, then rebuild**
+- Drop the `drop` items, re-sample, rebuild the items and the split, and re-run features and both judges (~13 h).
+- *Pros:* the clearest leak is removed from the items and the judge's input.
+- *Cons:*
+  - expensive;
+  - the item definition changes after results were seen;
+  - the remaining verbs still carry a 0.666 prior, so A's control is still needed for a fair Δ.
+
+**Option C: Keep everything; report the 0.721 step prior as a caveat only**
+- *Pros:* no work.
+- *Cons:* any HoloAssist reaction gain is measured against a weaker action-only control than one a reviewer can build in a few lines.
+
+**Recommendation:** **A.** It is cheap, keeps every number already computed, and makes the HoloAssist Δ (whatever Issue 6 selects) a fair test.
 
 Your selection: _____
 
@@ -232,6 +344,10 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
    - **Problem**: The 7B local judge (`qwen2.5vl:7b`) scored at chance on Oops! (AUROC 0.472 [0.440, 0.498]), while the frontier judge (`gemini-3.6-flash`) was blocked by free-tier daily rate limits (20 req/day). The central control ("just ask an LLM") lacked a strong measurement.
    - **Solution**: Option B (larger local judge) was selected by the maintainer and implemented in A7c. `gemma4:26b` (`vlm_judge_large`) was evaluated on all 1,072 Oops! test split items under memory guard (`sr_judge_large_load`, declared peak 33 GB, measured 28.10 GB RSS).
    - **Outcome**: 1,072 items scored, 0 excluded, 0 parse failures, 0 API errors (41.8 min wall-clock). `judge-large` AUROC is **0.708 [0.684, 0.731]**, showing that a sufficiently large local VLM reliably recognizes visible failures (answer distribution: 78.0% 100s on pre-failure, 63.4% 0s on post-failure). Because `action-probe` (SigLIP) achieves 0.779, `action_best` remains `action-probe`, and $\Delta = +0.015$ [-0.002, 0.029] is completely unchanged. Clause 1 of the thesis prediction now holds for `judge-large` ($0.708 > 0.50$).
+   - **Designer correction (October 20)**: "Clause 1 … now holds for `judge-large` (0.708 > 0.50)" was wrong.
+     - The pinned rule (`03_eval_harness.md` §11.8) is: held iff `ci_low > 0.5` **and** AUROC ≥ action-probe − 0.05 = 0.729. So it **did not hold**, which is what the generated Oops! report correctly prints.
+     - On HoloAssist, `judge-large`'s 0.544 comes entirely from reading the verb "drop" (0.489 on the other test items; Issue 7).
+     - The resolution itself stands: the large judge exists, it is measured, and it is the stronger local control on visible failures.
 
 ---
 
@@ -263,6 +379,8 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
 - **L9: This Mac is shared, and its memory is not ours.** On October 9, 2026 (19:50–19:52) it ran out of memory: the `animated_infographics` agent ran four image-generation gates at once (two at about 27 GB each), Ollama's `llama-server` held 10.5 GB, and this project's A5/A6 slow tests loaded models in the same window. macOS killed its own services. **Every model load is now admitted through a machine-wide heavy lock shared by both projects, and every long loop backs off between items** (`03_eval_harness.md` §12; guide item A6b).
 - **L10: A report can contradict its own table.** The A7 report declared "the prediction holds" from the Δ row alone, while its own table showed that the other half of the prediction (a strong judge) had failed at AUROC 0.472. A prediction check names **every clause** of the prediction and its measured value, one line each. Report text that summarizes numbers is generated from the rows, never hard-coded, and is checked against them.
 - **L11: A lock that its own holder can re-enter needs to know it.** The memory guard's between-item path re-enters `guard()` and then calls a reload that enters `guard()` again. A non-re-entrant file lock then waits on itself for 30 min, while blocking the other project. Its unit test passed only because it stubbed `reload()` with a function that never takes the lock (L8). Test the composed path with the real callables.
+- **L12: An annotation's own vocabulary can carry the label.** HoloAssist's step verb `drop` is a mistake 95% of the time, and a train-split verb prior scores 0.721 on test, beating every action-only control. A banned-word list cannot catch this. For any text an item carries (`context_text`, step names, task names), fit a text-only prior on train and report its test AUROC before trusting the action-only controls.
+- **L13: The SSD is exFAT, and macOS tags new files.** A `com.apple.provenance` attribute on a new file makes exFAT write a hidden `._<name>` twin. Any `glob("*.jsonl")` or `rglob("*.mp4")` over `DATA_ROOT` or a temp dir on the SSD can pick it up. One test failed 1 run in 3 that way. Skip names starting with `._` everywhere a glob touches the SSD.
 
 ---
 
@@ -296,6 +414,15 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A7c — Large local judge (judge-large, gemma4:26b) on Oops! — git log --grep "(a7c)" — Issue 5 resolved with option B; declared peak 33 GB (28.10 GB RSS measured); gemma4:26b evaluated on 1,072 Oops! test items (0 parse failures, 0 errors, 41.8 min wall-clock); answer distribution shows clean binary separation (pre: 78% 100s; post: 63.4% 0s); judge-large AUROC=0.708 [0.684, 0.731] (vs 0.472 for 7B judge); action_best remains action-probe (0.779); delta=+0.015 unchanged; G1–G4 pass.
 - A8 — HoloAssist end-to-end H1 evaluation — git log --grep "(a8)" — Audio presence check failed (+1.51 dB vs >= +3.5 dB; Issue 6 filed; stopped audio extraction); split regenerated with canonical item_ids (3,000 train / 2,000 test balanced); siglip extracted (5,000 items, 2,779 s); qwen2.5vl:7b scored 5,000 items (AUROC 0.488 [0.466, 0.512]); gemma4:26b scored 2,000 test items (AUROC 0.544 [0.528, 0.562]); action-probe AUROC 0.569 [0.542, 0.597]; react-spoke AUROC 0.676 [0.655, 0.695]; react-full AUROC 0.739 [0.716, 0.761]; action-probe:shuffled AUROC 0.492 [0.461, 0.525] (PASS); report and TSV generated; G1–G4 exit 0.
 - A9 — Re-measure; close out Wave A — git log --grep "(a9)" — Full Wave A synthesis across Oops! and HoloAssist; headline dataset x condition table citing scorecard timestamps; per-clause predictions checked; caveats, anomalies, compute times (~28.5 h total), and Wave B design recommendations documented at docs/evals/2026-10-15_wave_a_summary.md; G1–G4 green.
+  - *Designer correction (October 20):* the summary has wrong statements (the bootstrap count, the `judge-large` verdict, the error counts, the 7B HoloAssist judge time) and headlines `react-full` against §11.2. These are corrected by guide item A9b.
+- R5 — Designer verification of A6c–A9 (October 20, 2026), with the battery run bare on `3f0b78d`:
+  - **G1–G4 results:**
+    - G1 exit 0;
+    - G2 62 passed without the SSD temp dir, but 1 run in 3 failed (61 passed, 1 failed) with `TMPDIR` on the SSD: the exFAT AppleDouble problem, L13;
+    - G3 4/4;
+    - G4 9 passed (134 s).
+  - **Findings:** A9b (summary and report corrections), A10 (AppleDouble hardening), the Issue 6 options revised, Issue 7 filed, and the Issue 5 note corrected.
+  - **Design updated:** `02_data_sources.md` → HoloAssist (the step-prior caveat, and the 85 sessions that are in no official split list).
 
 
 ---
@@ -304,9 +431,9 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 
 | Id | Work | Trigger to start |
 |---|---|---|
-| DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec |
+| DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec. Wave A is closed once guide items A9b and A10 land; Issues 6 and 7 do not block Wave B |
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 20): not met.** Oops!'s Δ CI includes 0, and HoloAssist's Δ was not run (Issues 6 and 7) |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |

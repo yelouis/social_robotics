@@ -203,6 +203,19 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 4. **H2 targets are never training data** (BAD, ERR@HRI; HoloAssist when used as an H2 target).
 5. **Kill and pass criteria are written before results** ([`00_thesis.md`](00_thesis.md)). They change only through a dated decision-log entry.
 6. **`context_text` never reveals the outcome.** Each adapter's choice is stated in [`02_data_sources.md`](02_data_sources.md).
+7. **Text priors are measured, not assumed** *(added October 20, 2026)*. Wherever items carry text that varies (`context_text`, step or task names), fit a text-only prior on the train split (the label rate per string, smoothed toward the base rate) and report its test AUROC beside the action-only controls. HoloAssist's verb prior scored 0.721 and was found only after the results were in (Issue 7; L12).
+8. **Prediction checks follow fixed rules** *(moved here October 20, 2026, from the guide's A7b and A9b items)*. Reports print one line per clause, with the verdict computed by these rules and nothing else:
+   - **Visible outcome (Oops!):**
+     - Clause 1, "the judge is strong": one line per judge condition with a value. It **held** iff `ci_low > 0.5` **and** AUROC ≥ the action-probe's AUROC − 0.05.
+     - Clause 2, "Δ ≈ 0": it **held** iff the Δ CI contains 0.
+     - Implemented by `tools/report_oops.py` `prediction_check`.
+   - **Hidden outcome (HoloAssist, verdict videos):**
+     - Clause 1, "reaction-only beats action_best": `react-nonverbal`'s `ci_low` > the `action_best` AUROC.
+     - Clause 2, "fusion beats action_best": Δ `ci_low > 0`.
+     - **The pass bar (proposed, `00_thesis.md`):** `react-nonverbal` ≥ 0.65 **and** Δ ≥ +0.03 with `ci_low > 0`.
+     - A clause whose rows did not run is `not tested`, never inferred.
+     - `react-spoke` and `react-full` appear only as context lines without a verdict.
+     - Implemented by `tools/report_holoassist.py` `prediction_check_hidden` (guide item A9b).
 
 ## 12. Memory guard (added October 10, 2026)
 
