@@ -5,7 +5,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -185,7 +185,9 @@ def build_holoassist_items(
     train_cap: int = 1500,
     test_cap: int = 1000,
     seed: int = 0,
-) -> Tuple[List[Item], Dict[str, Any]]:
+    dataset: str = "holoassist",
+    session_allowlist: Optional[Set[str]] = None,
+) -> Tuple[List[Item], Dict[str, Any], Dict[str, str]]:
     hd = holoassist_dir or get_holoassist_dir()
     ld = labels_dir or get_labels_dir(hd)
     sessions = load_raw_annotations(ld)
@@ -197,6 +199,7 @@ def build_holoassist_items(
         "invalid_action_window": 0,
         "invalid_reaction_window": 0,
         "missing_video": 0,
+        "not_audible": 0,
     }
 
     # 1. Collect all valid candidates
@@ -228,6 +231,7 @@ def build_holoassist_items(
 
         vpath = get_holoassist_video_path(vname, hd)
         has_video = vpath.exists()
+        is_allowed = session_allowlist is None or vname in session_allowlist
 
         for idx, e in enumerate(sess.get("events", [])):
             if e.get("label") != "Fine grained action":
@@ -245,6 +249,10 @@ def build_holoassist_items(
                 label = 0
             else:
                 skip_counts["missing_correctness_attr"] += 1
+                continue
+
+            if not is_allowed:
+                skip_counts["not_audible"] += 1
                 continue
 
             a_s = float(e.get("start", 0.0))
@@ -278,11 +286,23 @@ def build_holoassist_items(
             noun = attrs.get("Noun", "").strip()
             context_text = f"Task: {task}. Step: {verb} {noun}."
             eid = e.get("id", idx)
-            item_id = f"holoassist:{vname}:{idx}"
+            item_id = f"{dataset}:{vname}:{idx}"
+
+            meta: Dict[str, Any] = {
+                "event_id": eid,
+                "spoke": spoke,
+                "transcript": transcript,
+                "session": vname,
+                "task": task,
+                "verb": verb,
+                "noun": noun,
+            }
+            if session_allowlist is not None:
+                meta["source_item_id"] = f"holoassist:{vname}:{idx}"
 
             item = Item(
                 item_id=item_id,
-                dataset="holoassist",
+                dataset=dataset,
                 group_id=group_id,
                 video_path=str(vpath.resolve()),
                 action_window_sec=[round(a_s, 3), round(a_e, 3)],
@@ -290,15 +310,7 @@ def build_holoassist_items(
                 label=label,
                 label_source="holoassist.Action Correctness",
                 context_text=context_text,
-                meta={
-                    "event_id": eid,
-                    "spoke": spoke,
-                    "transcript": transcript,
-                    "session": vname,
-                    "task": task,
-                    "verb": verb,
-                    "noun": noun,
-                },
+                meta=meta,
             )
             candidates.append(item)
 
@@ -404,8 +416,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="HoloAssist source adapter and dataset builder")
     parser.add_argument("--stats", action="store_true", help="Print HoloAssist label statistics")
     parser.add_argument("--build", action="store_true", help="Build items, stats, and group split")
+    parser.add_argument("--dataset", default="holoassist", help="Dataset name to build")
+    parser.add_argument("--audible-from", type=Path, default=None, help="JSONL file with session audibility results")
     parser.add_argument("--no-check-paths", action="store_true", help="Do not require video files to exist on disk")
-    parser.add_argument("--force-split", action="store_true", help="Force overwrite of splits/holoassist.json")
+    parser.add_argument("--force-split", action="store_true", help="Force overwrite of splits/<dataset>.json")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for sampling")
     args = parser.parse_args()
 
@@ -417,14 +431,27 @@ def main() -> None:
         return
 
     if args.build:
-        print("Building HoloAssist items...")
+        session_allowlist = None
+        if args.audible_from:
+            session_allowlist = set()
+            with open(args.audible_from, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        rec = json.loads(line)
+                        if rec.get("audible") is True:
+                            session_allowlist.add(rec["video_name"])
+            print(f"Loaded {len(session_allowlist)} audible sessions from {args.audible_from}.")
+
+        print(f"Building {args.dataset} items...")
         items, stats, split_map = build_holoassist_items(
+            dataset=args.dataset,
+            session_allowlist=session_allowlist,
             check_paths=not args.no_check_paths,
             seed=args.seed,
         )
         print(f"Built {len(items)} items ({stats['train_items']} train, {stats['test_items']} test).")
 
-        out_dir = DATA_ROOT / "items" / "holoassist"
+        out_dir = DATA_ROOT / "items" / args.dataset
         out_dir.mkdir(parents=True, exist_ok=True)
         items_path = out_dir / "items.jsonl"
         stats_path = out_dir / "stats.json"
@@ -434,10 +461,10 @@ def main() -> None:
             json.dump(stats, f, indent=2)
         print(f"Wrote {items_path} and {stats_path}")
 
-        print("Generating group-disjoint split splits/holoassist.json...")
+        print(f"Generating group-disjoint split splits/{args.dataset}.json...")
         split_data = make_group_split(
             items,
-            "holoassist",
+            args.dataset,
             official=split_map,
             source="grouped_70_30",
             seed=args.seed,

@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
+import sys
 
-from tools.report_holoassist import prediction_check_hidden
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools.report_holoassist import generate_holoassist_report, prediction_check_hidden  # noqa: E402
 
 
 def test_prediction_check_hidden_real_rows():
@@ -85,3 +90,136 @@ def test_prediction_check_hidden_falsifying_react_full():
     pb = next(line for line in lines if "H1 pass bar" in line)
     assert "not testable" in pb
     assert "met" not in pb.split("→")[1]
+
+
+def test_generate_holoassist_report_audible_synthetic(tmp_path):
+    """Test generate_holoassist_report with dataset='holoassist_audible'."""
+    # Write a mock scorecard
+    sc_file = tmp_path / "scorecard.jsonl"
+    mock_rows = [
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "action-probe",
+            "metric": "auroc",
+            "value": 0.58,
+            "ci_low": 0.55,
+            "ci_high": 0.61,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "step-prior",
+            "metric": "auroc",
+            "value": 0.72,
+            "ci_low": 0.69,
+            "ci_high": 0.75,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "react-nonverbal",
+            "metric": "auroc",
+            "value": 0.68,
+            "ci_low": 0.65,
+            "ci_high": 0.71,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "fusion",
+            "metric": "auroc",
+            "value": 0.75,
+            "ci_low": 0.72,
+            "ci_high": 0.78,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "action-fusion",
+            "metric": "auroc",
+            "value": 0.69,
+            "ci_low": 0.66,
+            "ci_high": 0.72,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "fusion_minus_action_fusion",
+            "metric": "delta_auroc",
+            "value": 0.06,
+            "ci_low": 0.03,
+            "ci_high": 0.09,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "ablation: reaction features removed",
+        },
+        {
+            "hypothesis": "H1",
+            "dataset": "holoassist_audible",
+            "split": "test",
+            "condition": "fusion_minus_action_best",
+            "metric": "delta_auroc",
+            "value": 0.03,
+            "ci_low": 0.00,
+            "ci_high": 0.06,
+            "n_items": 1420,
+            "n_groups": 53,
+            "n_excluded": 0,
+            "config_hash": "abc",
+            "notes": "action_best=step-prior",
+        },
+    ]
+    with open(sc_file, "w", encoding="utf-8") as f:
+        for r in mock_rows:
+            f.write(json.dumps(r) + "\n")
+
+    out_md = tmp_path / "report.md"
+    rep_path = generate_holoassist_report(
+        dataset="holoassist_audible",
+        date_str="2026-10-20",
+        data_root=tmp_path,
+        scorecard_path=sc_file,
+        out_path=out_md,
+    )
+
+    assert rep_path.exists()
+    content = rep_path.read_text(encoding="utf-8")
+    assert "HoloAssist (Audible Sessions) H1 Evaluation Report" in content or "HoloAssist Audible" in content
+    assert "The subset" in content or "The Subset" in content
+    assert "Clause 1" in content
+    assert "Clause 2" in content
+

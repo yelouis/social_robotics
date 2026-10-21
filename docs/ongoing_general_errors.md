@@ -202,82 +202,6 @@ Your selection: _____
 
 ---
 
-### Issue 6: Instructor not audible over background manipulation in HoloAssist video audio (audio presence check: +1.51 dB vs >= +3.5 dB requirement)
-
-**Status**: ✅ **Decided: option A, by the maintainer, October 20, 2026.**
-- **Sub-choice, made in chat:** build the audible set as a **fresh sample** (≈ 3,000–4,000 items, ≈ 1,000–1,300 of them test), not as a subset of the existing 5,000.
-- **Definition:** `02_data_sources.md` → "Audible-session evaluation set".
-- **Implementation:** guide items A12 (per-session audibility) and A13 (`holoassist_audible`). The entry moves to 🧪 Resolved when A13 lands.
-
-*Filed by the implementing agent in A8 (October 15), exactly as the guide required.* **The options were revised by the designer on October 20**, after verification showed what the failure costs (facts 4–6). The agent's original options are kept at the end of this entry.
-
-**What is blocked:** `react-nonverbal`, `fusion` and therefore **HoloAssist's Δ row**. The non-audio conditions (`judge`, `judge-large`, `action-probe`, `react-spoke`, `react-full`) are scored.
-
-**Facts (October 15, 2026):**
-1. **Audio presence check failed the $\ge +3.5$ dB threshold:** `tools/check_audio_presence.py` was run on 20 randomly sampled sessions (`default_rng(0)`, sorted by `video_name`, restricted to sessions with $\ge 1$ instructor utterance and $\ge 1$ no-utterance gap $\ge 2$ s, where video exists).
-   - **Median per-session difference:** **+1.51 dB** (requirement: $\ge +3.5$ dB). Verdict: **FAIL**. Summary saved to `DATA_ROOT/runs/holoassist_audio_presence.json`.
-2. **Breakdown across tasks:**
-   - In quiet manipulation tasks (e.g. `z129-aug-11-22-dslr`, `z094-july-11-22-switch`, `z195-sep-17-22-gopro`), instructor utterances are clearly audible and substantially louder than silence (+14.32 dB, +8.41 dB, +8.05 dB).
-   - In noisy manipulation tasks involving tools and furniture assembly/disassembly (e.g. `z202-sep-23-22-knarrevik_disassemble`, `z046-june-24-22-knarrevik_disassemble`, `z175-sep-05-22-gladom_disassemble`), long unannotated periods contain loud table thuds, metal clattering, screwdriver ratchets, and part handling (-41 to -45 dBFS). This is louder than the instructor's pitch-shifted voice (-50 to -55 dBFS), yielding differences down to -10.36 dB.
-   - The microphone is on the wearer's HoloLens headset, so hands-on tool noise inches from the mic physically overwhelms the instructor's voice (who is sitting at a remote screen or further away).
-3. **Execution guide requirement (§3 A8.1):**
-   > *"Requirement: a median per-session difference $\ge +3.5$ dB. If it fails, **STOP**, and file **Issue 6** ('instructor not audible in the video audio') with options A (`react-spoke`/`react-full` from annotations only) and B (drop HoloAssist's audio channel), and a `Your selection: _____` line. Continue only with what does not use audio."*
-
-4. **Per-session spread (designer, from `DATA_ROOT/runs/holoassist_audio_presence.json`):**
-   - **6 of the 20 sessions pass +3.5 dB on their own:**
-     - five device setups: `z129 dslr` +14.3, `z094 switch` +8.4, `z195 gopro` +8.0, `z167 gopro` +5.4, `z035 printer_big` +4.5;
-     - one stool disassembly: `z124 marius` +5.9.
-   - Two more are just under: `z108 gladom` +3.47 and `z189 printer_big` +3.15.
-   - The furniture sessions (`knarrevik`, `gladom`, `rashult`) range from −10.4 to +3.5 dB. The other device sessions (`R076`/`R099` DSLR, `nespresso`, `ATV`) sit at +0.5 to +1.7 dB.
-   - So the instructor is audible in roughly a third of sessions, mostly the quieter device tasks.
-5. **What it costs today:** HoloAssist was Wave A's only hidden-outcome test, and its Δ row reads `not run: fusion not run`.
-   - Oops!'s Δ is +0.015 [−0.002, 0.029], which includes 0.
-   - So **Wave A has not shown a reaction gain on any dataset.** The start condition for Wave D (the offline robot check, DW5: "Wave A shows reaction signal on ≥ 1 dataset", `00_thesis.md` H3) is **not met**.
-   - The kill rule is unaffected: it is decided on Wave B's verdict videos only.
-6. **Any HoloAssist Δ also depends on Issue 7.** A step-name prior beats every action-only control used so far. Decide both before the Δ is computed.
-
-**Option A (recommended): Measure audibility in every session, then run the non-verbal channel only where the instructor is audible**
-- Compute the presence difference for every annotated session that has video (1,673), with the existing tool and rule, on audio levels only and **before any probe is fit**. Keep the sessions at ≥ +3.5 dB.
-- Extract `e2v-plus-large` for the items in those sessions. Report `react-nonverbal`, `react-nonverbal|spoke=1`, `fusion` and the Δ on that subset, each row's `notes` naming the subset rule and its size.
-- *Pros:*
-  - it tests the thesis's actual channel (non-verbal voice) where it exists;
-  - the filter is blind to labels, and its threshold was fixed before any outcome was seen;
-  - it is cheap: about 1–2 h of session audio levels plus minutes of `emotion2vec+`.
-- *Cons:*
-  - **the subset is smaller and skewed:** about a third of sessions, mostly camera, console, printer and GoPro setups. Expect roughly 600 test items and a wider CI;
-  - the rule was chosen after the check failed (though not after any outcome was seen), so it must be reported as such.
-
-**Option B: Use the annotated speech timing (`spoke`) as HoloAssist's reaction channel in fusion, on all items**
-- `fusion-spoke` = [`logit(judge)`, action-probe features, `spoke`], with its own Δ against `action_best`.
-- *Pros:*
-  - minutes of work; all 2,000 test items;
-  - whether a supervisor spoke up is a behavioral reaction a robot could observe.
-- *Cons:*
-  - it comes from human-annotated utterance spans, not from an automatic detector;
-  - it is crude: whether someone spoke, not how they sounded;
-  - 56% of mistakes are by definition "corrected by instructor verbally", so a reviewer may call the gain near-definitional. A4 still holds: the labels were not derived from speech;
-  - it is not the face/voice signal the thesis is about.
-- **It can be combined with A** (separate, clearly named rows).
-
-**Option C: Extract `e2v-plus-large` on all items anyway, with the +1.51 dB caveat** (the agent's original option C)
-- *Pros:* the condition table as originally specified, on the full set.
-- *Cons:* in most sessions the audio is the performer's tool noise, so the Δ would measure manipulation sounds (as on Oops!) and could not be read as a reaction effect.
-
-**Option D: No HoloAssist Δ.** Keep the current rows, with `react-spoke` and `react-full` as descriptive only (the agent's original options A and B).
-- *Pros:* no work; no risk of over-claiming.
-- *Cons:* Wave A ends with no hidden-outcome Δ. Wave D can then start only on Wave B's results.
-
-**Recommendation:** **A**, optionally with **B** as a second row. A answers the question the thesis asks, on the data where it can be asked. B is cheap context, but reviewers will discount it.
-
-Your selection: Proceed with Option A.
-
-*The agent's original options (October 15), for the record:*
-- **A:** use `react-spoke`/`react-full` only and do not extract audio (now **D**);
-- **B:** drop HoloAssist's audio channel (now inside **D**);
-- **C:** extract anyway (now **C**).
-
----
-
 ## 🧪 Resolved Issues & Implementation Refinements
 
 Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
@@ -319,6 +243,17 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - Oops! `action-fusion`: 0.779 [0.754, 0.805].
      - Oops! ablation $\Delta$: +0.015 [−0.001, 0.029].
      - Reports regenerated (`docs/evals/2026-10-10_oops_h1.md`, `docs/evals/2026-10-15_holoassist_h1.md`). Battery G1–G3 green.
+5. **Issue 6: Instructor not audible over background manipulation in HoloAssist video audio (Resolved - October 21, A12 & A13)**:
+   - **Problem**: The audio presence check failed on the full HoloAssist dataset (+1.51 dB vs $\ge +3.5$ dB requirement) due to loud manipulation noises on the headset mic during tool-heavy assembly/disassembly tasks, blocking the non-verbal reaction channel and HoloAssist's $\Delta$ computation.
+   - **Solution**: Option A (audible-session evaluation set, fresh sample) was selected by the maintainer.
+     - A12 measured audibility label-blind across all 1,673 annotated sessions with video (`tools/check_audio_presence.py --all-sessions`): 548 audible (32.8%), 1,125 inaudible (67.2%), 0 undefined.
+     - A13 built `holoassist_audible` as a fresh sample (4,420 items: 3,000 train / 1,420 test across 53 test groups) from the 548 audible sessions and evaluated it end-to-end under memory guard.
+   - **Outcome**:
+     - `react-nonverbal` achieves AUROC **0.654 [0.626, 0.675]** (meeting the $\ge 0.65$ bar).
+     - Diagnostic `react-nonverbal|spoke=1` scores **0.582 [0.548, 0.612]** on the 837 test items where the instructor spoke.
+     - `action-fusion` achieves **0.650 [0.599, 0.694]** and full `fusion` achieves **0.671 [0.618, 0.713]**.
+     - **Ablation $\Delta$ (`fusion_minus_action_fusion`):** **+0.021 [0.006, 0.034]** — **`ci_low > 0` (Held)**! Reactions demonstrably add information to the action-only model on hidden outcomes.
+     - All 5 shuffled controls cover 0.50 (chance). Report generated at `docs/evals/2026-10-21_holoassist_audible_h1.md`.
 
 ---
 
@@ -398,6 +333,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A9b — Correct Wave A summary and HoloAssist report — git log --grep "(a9b)" — prediction_check_hidden implemented per 03_eval_harness.md §11.8; test_report_holoassist passes; HoloAssist report and Wave A summary regenerated/corrected; G1–G3 exit 0 (67 fast passed).
 - A11 — The step-prior and action-fusion controls and ablation delta — git log --grep "(a11)" — step_prior_scores with hierarchical smoothing (m=5, LOO); action-fusion and ablation delta (fusion_minus_action_fusion) implemented; §1.5 reference values reproduced exactly (HoloAssist step-prior 0.751 [0.726, 0.774], action-fusion 0.682 [0.658, 0.706]; Oops! action-fusion 0.779, ablation delta +0.015 [-0.001, 0.029]); reports regenerated; G1–G3 exit 0.
 - A12 — Per-session instructor audibility over all 1,673 sessions — git log --grep "(a12)" — tools/check_audio_presence.py with --all-sessions; 1,673 annotated sessions with video measured detached (PPID 1, elapsed 418.4s); 548 audible (32.8%), 1,125 inaudible, 0 undefined; task breakdown documented in 02_data_sources.md; G1–G3 exit 0 (73 passed 3/3).
+- A13 — The audible-session evaluation set holoassist_audible, a fresh sample, run end to end — git log --grep "(a13)" — 4,420 items sampled from 548 audible sessions (3,000 train / 1,420 test across 53 groups); siglip, e2v, qwen2.5vl:7b (train/test), gemma4:26b (test) evaluated end-to-end (0 exclusions, 0 errors); react-nonverbal AUROC 0.654 [0.626, 0.675]; action-fusion AUROC 0.650 [0.599, 0.694]; fusion AUROC 0.671 [0.618, 0.713]; ablation Δ +0.021 [0.006, 0.034] (ci_low > 0, Held); all 5 shuffled controls cover 0.50; report and TSV generated; G1–G4 exit 0.
 
 
 ---

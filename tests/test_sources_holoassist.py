@@ -163,6 +163,157 @@ def test_holoassist_builder_synthetic(tmp_path: Path):
     assert stats["straddling_groups"] == 0
 
 
+def test_holoassist_builder_with_allowlist_synthetic(tmp_path: Path):
+    """Test build_holoassist_items with dataset='holoassist_audible' and session_allowlist."""
+    synth_sessions = [
+        {
+            "video_name": "R001-1-GoPro",
+            "taskType": "setup gopro",
+            "videoMetadata": {"duration": {"seconds": 60.0}},
+            "events": [
+                {
+                    "label": "Conversation",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Conversation Purpose": "instructor-guidance",
+                        "Transcription": "turn it on",
+                    },
+                },
+                {
+                    "id": 101,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 4.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "turn",
+                        "Noun": "power",
+                    },
+                },
+                {
+                    "id": 102,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 7.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, corrected by student",
+                        "Verb": "press",
+                        "Noun": "shutter",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R002-1-Switch",
+            "taskType": "setup switch",
+            "videoMetadata": {"duration": {"seconds": 50.0}},
+            "events": [
+                {
+                    "id": 201,
+                    "label": "Fine grained action",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "insert",
+                        "Noun": "cartridge",
+                    },
+                },
+                {
+                    "id": 202,
+                    "label": "Fine grained action",
+                    "start": 4.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "otherwise",
+                        "Verb": "close",
+                        "Noun": "flap",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R003-1-Coffee",
+            "taskType": "make coffee",
+            "videoMetadata": {"duration": {"seconds": 40.0}},
+            "events": [
+                {
+                    "id": 301,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "pour",
+                        "Noun": "water",
+                    },
+                },
+                {
+                    "id": 302,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, not corrected",
+                        "Verb": "press",
+                        "Noun": "brew",
+                    },
+                },
+            ],
+        },
+    ]
+
+    ann_file = tmp_path / "data-annotation-trainval-v1_1.json"
+    ann_file.write_text(json.dumps(synth_sessions), encoding="utf-8")
+
+    # 1. Build without allowlist (full)
+    items_full, stats_full, split_map_full = build_holoassist_items(
+        labels_dir=tmp_path,
+        check_paths=False,
+        train_cap=10,
+        test_cap=10,
+        seed=0,
+    )
+
+    # 2. Build with allowlist (only R001 and R002 allowed, R003 skipped as not_audible)
+    allowlist = {"R001-1-GoPro", "R002-1-Switch"}
+    items_aud, stats_aud, split_map_aud = build_holoassist_items(
+        dataset="holoassist_audible",
+        session_allowlist=allowlist,
+        labels_dir=tmp_path,
+        check_paths=False,
+        train_cap=10,
+        test_cap=10,
+        seed=0,
+    )
+
+    errs = validate_items(items_aud, check_paths=False)
+    assert not errs, f"Validation errors: {errs}"
+
+    # All items have dataset='holoassist_audible' and prefix
+    assert len(items_aud) > 0
+    assert all(it.dataset == "holoassist_audible" for it in items_aud)
+    assert all(it.item_id.startswith("holoassist_audible:") for it in items_aud)
+
+    # meta.source_item_id is set to holoassist:<vname>:<idx>
+    for it in items_aud:
+        assert it.meta.get("source_item_id") is not None
+        assert it.meta["source_item_id"].startswith("holoassist:")
+        assert it.meta["source_item_id"] == it.item_id.replace("holoassist_audible:", "holoassist:")
+
+    # R003 actions were skipped with not_audible
+    assert stats_aud["actions_skipped"]["not_audible"] == 2
+    assert not any("R003" in it.item_id for it in items_aud)
+
+    # Group assignment is identical for allowed items
+    for it in items_aud:
+        orig_id = it.meta["source_item_id"]
+        assert split_map_aud[it.item_id] == split_map_full[orig_id], (
+            f"Group assignment changed for {it.item_id}!"
+        )
+
+
 @pytest.mark.slow
 def test_holoassist_builder_and_group_disjointness():
     items, stats, split_map = build_holoassist_items(

@@ -200,13 +200,13 @@ def compute_distribution(
     return dist
 
 
-def compute_holoassist_wall_clocks(root: Path) -> Dict[str, str]:
+def compute_holoassist_wall_clocks(root: Path, dataset: str = "holoassist") -> Dict[str, str]:
     timings: Dict[str, str] = {
         "Download": "197.8 GB archive; downloaded and extracted by October 10 at 13:01 (archive deleted)",
     }
 
     # Features
-    feat_dir = root / "features" / "holoassist"
+    feat_dir = root / "features" / dataset
     if feat_dir.exists():
         for enc in ["siglip-b16-224", "e2v-plus-large"]:
             idx_file = feat_dir / enc / "index.jsonl"
@@ -230,7 +230,7 @@ def compute_holoassist_wall_clocks(root: Path) -> Dict[str, str]:
         timings["Features: e2v-plus-large"] = "not run / pending"
 
     # Judges
-    j_dir = root / "judge" / "holoassist"
+    j_dir = root / "judge" / dataset
     if j_dir.exists():
         for mtag in ["qwen2.5vl_7b", "gemma4_26b"]:
             md = j_dir / mtag
@@ -260,6 +260,54 @@ def compute_holoassist_wall_clocks(root: Path) -> Dict[str, str]:
         timings["Judge: gemma4_26b"] = "not run / pending"
 
     return timings
+
+
+def compute_task_mix_comparison(root: Path) -> List[str]:
+    h_items_file = root / "items" / "holoassist" / "items.jsonl"
+    ha_items_file = root / "items" / "holoassist_audible" / "items.jsonl"
+    if not h_items_file.exists() or not ha_items_file.exists():
+        return []
+
+    from collections import Counter
+
+    h_counts: Counter = Counter()
+    for line in h_items_file.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                rec = json.loads(line)
+                t = rec.get("meta", {}).get("task", "")
+                if t:
+                    h_counts[t] += 1
+            except Exception:
+                pass
+
+    ha_counts: Counter = Counter()
+    for line in ha_items_file.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                rec = json.loads(line)
+                t = rec.get("meta", {}).get("task", "")
+                if t:
+                    ha_counts[t] += 1
+            except Exception:
+                pass
+
+    all_tasks = sorted(set(h_counts.keys()) | set(ha_counts.keys()))
+    h_tot = sum(h_counts.values()) or 1
+    ha_tot = sum(ha_counts.values()) or 1
+
+    lines = [
+        "| Task | HoloAssist Items | % | HoloAssist-Audible Items | % |",
+        "|---|---|---|---|---|",
+    ]
+    for t in all_tasks:
+        c_h = h_counts[t]
+        p_h = (c_h / h_tot) * 100
+        c_ha = ha_counts[t]
+        p_ha = (c_ha / ha_tot) * 100
+        lines.append(f"| `{t}` | {c_h} | {p_h:.1f}% | {c_ha} | {p_ha:.1f}% |")
+    lines.append(f"| **Total** | **{h_tot}** | **100.0%** | **{ha_tot}** | **100.0%** |")
+    return lines
 
 
 VERIFIED_EXAMPLE_DESCRIPTIONS: Dict[str, str] = {
@@ -305,11 +353,45 @@ VERIFIED_EXAMPLE_DESCRIPTIONS: Dict[str, str] = {
         "The performer holds an open Canon EOS 1300D body with exposed sensor/mirror in their right hand, and the zoom lens in their left hand, "
         "inspecting them while trying to figure out how to align the lens mount (instructor guides: 'To the black mark in match on the camera and the lens.')."
     ),
+    # holoassist_audible Examples (A13)
+    # 5 Correct Examples
+    "holoassist_audible:z056-june-28-22-knarrevik_assemble:91": (
+        "The performer assembles a black metal frame on a white table, holding a silver L-shaped Allen wrench in their right hand and inserting the short end into a black hex screw head on a vertical strut while steadying the strut with their left hand."
+    ),
+    "holoassist_audible:z073-july-01-22-dslr:5": (
+        "A hand in a red sleeve grasps a black Nikon DSLR camera with an attached lens cap and neck strap, lifting it upright off a white tabletop into the center of the frame."
+    ),
+    "holoassist_audible:z099-july-13-22-switch:71": (
+        "Both hands hold a black Nintendo Switch console with blue and red Joy-Cons attached, resting it upright on its bottom edge on a white desk next to a detached grip controller and game cards."
+    ),
+    "holoassist_audible:z129-aug-11-22-rashult_assemble:157": (
+        "While assembling a black curved metal cart frame on a white table scattered with screws and caster wheels, the performer steadies a joint with their left hand and brings forward a blue-handled screwdriver with their right hand toward the frame."
+    ),
+    "holoassist_audible:z171-sep-03-22-knarrevik_assemble:14": (
+        "The performer works over a black metal nightstand assembly on a white desk, using their fingers to thread a black screw by hand into a pre-drilled corner hole of the metal frame next to loose screws and an Allen key."
+    ),
+    # 5 Mistake Examples
+    "holoassist_audible:z092-july-11-22-gopro:64": (
+        "The performer holds a small black GoPro camera body upright on a table with their left hand, using their right thumb and index finger to press and fidget with the narrow edge of an open compartment at the top."
+    ),
+    "holoassist_audible:z109-july-27-22-switch:27": (
+        "The performer holds the black Nintendo Switch console body facing away in their left hand, using their right hand to slide a bright red Joy-Con downward onto the console's right-side mounting rail."
+    ),
+    "holoassist_audible:z114-aug-03-22-printer_big:33": (
+        "In front of a large office multifunction printer, the performer grips the upper front white panel door near the top corners with both hands and pulls it forward to hinge it open."
+    ),
+    "holoassist_audible:z157-aug-27-22-rashult_disassemble:88": (
+        "While holding a black-handled screwdriver near the vertical metal tubes of a cart frame on a desk, a small metallic screw slips from the hand and drops downward onto the desk surface near an open wrench and caster parts."
+    ),
+    "holoassist_audible:z185-sep-09-22-dslr:18": (
+        "The performer holds a black Canon EOS 1300D DSLR camera fitted with a large zoom lens on a white table next to a detached battery pack, with their left thumb searching across the camera body's side panel near the lens mount."
+    ),
 }
 
 
 def generate_holoassist_report(
     date_str: Optional[str] = None,
+    dataset: str = "holoassist",
     data_root: Optional[Path] = None,
     scorecard_path: Optional[Path] = None,
     audio_presence_path: Optional[Path] = None,
@@ -322,14 +404,14 @@ def generate_holoassist_report(
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
     ap_file = audio_presence_path or (root / "runs" / "holoassist_audio_presence.json")
 
-    # 1. Read latest scorecard rows for HoloAssist
+    # 1. Read latest scorecard rows for dataset
     rows: List[Dict[str, Any]] = []
     if sc_file.exists():
         for line in sc_file.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     r = json.loads(line)
-                    if r.get("dataset") == "holoassist":
+                    if r.get("dataset") == dataset:
                         rows.append(r)
                 except Exception:
                     pass
@@ -356,8 +438,8 @@ def generate_holoassist_report(
         "qwen": {"total": 0, "parse_failures": 0, "api_errors": 0, "ffmpeg_errors": 0},
         "gemma": {"total": 0, "parse_failures": 0, "api_errors": 0, "ffmpeg_errors": 0},
     }
-    j_dir = root / "judge" / "holoassist"
-    p_hash = prompt_hash(DATASET_QUESTIONS["holoassist"])
+    j_dir = root / "judge" / dataset
+    p_hash = prompt_hash(DATASET_QUESTIONS[dataset])
 
     if j_dir.exists():
         for mtag, key in [("qwen2.5vl_7b", "qwen"), ("gemma4_26b", "gemma")]:
@@ -388,9 +470,9 @@ def generate_holoassist_report(
                             pass
 
     # 4. 10 example items (5 correct, 5 mistake, default_rng(0))
-    items_path = root / "items" / "holoassist" / "items.jsonl"
+    items_path = root / "items" / dataset / "items.jsonl"
     all_items = read_items(items_path) if items_path.exists() else []
-    split_data = load_split("holoassist", path_dir="splits") if Path("splits/holoassist.json").exists() else {}
+    split_data = load_split(dataset, path_dir="splits") if Path(f"splits/{dataset}.json").exists() else {}
     test_set = set(split_data.get("test", []))
     test_items = [it for it in all_items if it.item_id in test_set]
 
@@ -426,7 +508,11 @@ def generate_holoassist_report(
 
     # Build report lines
     report_lines: List[str] = []
-    report_lines.append(f"# HoloAssist H1 Evaluation Report ({today})")
+    if dataset == "holoassist_audible":
+        report_lines.append(f"# HoloAssist (Audible Sessions) H1 Evaluation Report ({today})")
+    else:
+        report_lines.append(f"# HoloAssist H1 Evaluation Report ({today})")
+
     if corrected_date:
         report_lines.append(f"*Corrected {corrected_date} (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a \"best reaction\". The numbers are unchanged.*")
     if updated_date:
@@ -442,6 +528,21 @@ def generate_holoassist_report(
     report_lines.append("> instructor–performer pairs. If an individual participant participated in more than one pair,")
     report_lines.append("> they may appear in both train and test splits. The dataset metadata cannot rule this out.")
     report_lines.append("")
+
+    if dataset == "holoassist_audible":
+        report_lines.append("## The subset: Audible-Session Evaluation Set")
+        report_lines.append("")
+        report_lines.append("- **Audible-session rule:** Sessions with median instructor speech dBFS minus silent gap (>= 2 s) dBFS >= +3.5 dB (measured label-blind in A12; `tools/check_audio_presence.py --all-sessions`).")
+        report_lines.append("- **Session and item yield:**")
+        report_lines.append("  - All HoloAssist: 1,758 sessions (1,673 with video); 5,000 items sampled (3,000 train / 2,000 test).")
+        report_lines.append("  - Audible HoloAssist: 548 audible sessions; 4,420 items sampled (3,000 train / 1,420 test across 53 test groups).")
+        report_lines.append("- **Task mix comparison:**")
+        report_lines.append("  Quieter device setups (camera, GoPro, Switch, printers) are over-represented in the audible set compared to the full dataset, while noisy furniture assembly tasks are reduced:")
+        report_lines.append("")
+        task_mix_lines = compute_task_mix_comparison(root)
+        for tml in task_mix_lines:
+            report_lines.append(tml)
+        report_lines.append("")
 
     report_lines.append("## 1. Instructor-Audio Presence Check (§A8.2)")
     report_lines.append("")
@@ -461,12 +562,13 @@ def generate_holoassist_report(
 
     report_lines.append("## 2. Executive Summary & Prediction Check")
     report_lines.append("")
-    check_lines = prediction_check(latest_rows)
+    check_lines = prediction_check_hidden(latest_rows)
     for cl in check_lines:
         report_lines.append(cl)
     report_lines.append("")
 
-    report_lines.append("## 3. Conditions Table (Test Split, N=2,000)")
+    n_test_display = len(test_items) if test_items else 2000
+    report_lines.append(f"## 3. Conditions Table (Test Split, N={n_test_display:,})")
     report_lines.append("")
     report_lines.append("| Condition | Metric | Value | 95% CI | N (included) | N (excluded) | Notes |")
     report_lines.append("|---|---|---|---|---|---|---|")
@@ -483,7 +585,7 @@ def generate_holoassist_report(
             ci_s = f"[{r['ci_low']:.3f}, {r['ci_high']:.3f}]" if r["ci_low"] is not None and r["ci_high"] is not None else "—"
             report_lines.append(f"| `{r['condition']}` | {r['metric']} | {val_s} | {ci_s} | {r['n_items']} | {r['n_excluded']} | {r['notes']} |")
         else:
-            report_lines.append(f"| `{c}` | auroc | null | — | 2000 | 2000 | not run |")
+            report_lines.append(f"| `{c}` | auroc | null | — | {n_test_display} | {n_test_display} | not run |")
     report_lines.append("")
 
     report_lines.append("## 4. Voice Signal vs. Presence of Speech (`react-spoke` vs. `react-nonverbal|spoke=1`)")
@@ -548,7 +650,7 @@ def generate_holoassist_report(
     )
     report_lines.append("")
 
-    dist_qwen = compute_distribution("holoassist", "qwen2.5vl_7b", p_hash, root)
+    dist_qwen = compute_distribution(dataset, "qwen2.5vl_7b", p_hash, root)
     if dist_qwen:
         report_lines.append("### `qwen2.5vl:7b` Answer Distribution on Test Split:")
         report_lines.append("")
@@ -559,7 +661,7 @@ def generate_holoassist_report(
             report_lines.append(f"| `{k}` (label={'1' if k=='correct' else '0'}) | {d['100']} | {d['90']} | {d['<=80']} | {d['0']} | {d['total']} |")
         report_lines.append("")
 
-    dist_gemma = compute_distribution("holoassist", "gemma4_26b", p_hash, root)
+    dist_gemma = compute_distribution(dataset, "gemma4_26b", p_hash, root)
     if dist_gemma:
         report_lines.append("### `gemma4:26b` Answer Distribution on Test Split:")
         report_lines.append("")
@@ -572,7 +674,7 @@ def generate_holoassist_report(
 
     report_lines.append("## 7. Compute & Wall-Clock Times")
     report_lines.append("")
-    timings = compute_holoassist_wall_clocks(root)
+    timings = compute_holoassist_wall_clocks(root, dataset=dataset)
     for stage, t_str in timings.items():
         report_lines.append(f"- **{stage}:** {t_str}")
     report_lines.append("")
@@ -646,11 +748,11 @@ def generate_holoassist_report(
             f"{jq if jq is not None else ''}\t{jg if jg is not None else ''}\t{desc}"
         )
 
-    target_path = out_path or (Path("docs/evals") / f"{today}_holoassist_h1.md")
+    target_path = out_path or (Path("docs/evals") / f"{today}_{dataset}_h1.md")
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text("\n".join(report_lines), encoding="utf-8")
 
-    tsv_path = target_path.parent / f"{today}_holoassist_examples.tsv"
+    tsv_path = target_path.parent / f"{today}_{dataset}_examples.tsv"
     tsv_path.write_text("\n".join(examples_tsv_rows), encoding="utf-8")
     print(f"Generated HoloAssist report at {target_path} and TSV at {tsv_path}")
     return target_path
@@ -658,6 +760,7 @@ def generate_holoassist_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate HoloAssist H1 evaluation report")
+    parser.add_argument("--dataset", default="holoassist", help="Dataset name to report on (holoassist or holoassist_audible)")
     parser.add_argument("--date", default=None, help="Date string YYYY-MM-DD")
     parser.add_argument("--corrected-date", default=None, help="Correction date if regenerating an earlier report")
     parser.add_argument("--updated-date", default=None, help="Update date")
@@ -667,6 +770,7 @@ def main() -> None:
     args = parser.parse_args()
 
     generate_holoassist_report(
+        dataset=args.dataset,
         date_str=args.date,
         scorecard_path=args.scorecard,
         audio_presence_path=args.audio_presence,
