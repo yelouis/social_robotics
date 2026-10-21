@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: Wave A completion (A10 → A9b → A11 → A12 → A13 → A14), October 20, 2026
+# Social Robotics — Agent Execution Guide (Queue Complete: waiting on Issue 1 (Wave B) and the Wave D spec)
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -35,7 +35,7 @@
 - *"No need to open up a new branch, just push to the repo."*
 - **October 20, 2026:** Issue 6 → **A**, with a **fresh sample**; Issue 7 → **A**; the pass bar uses **the ablation gain** (`00_thesis.md` entry 20).
 
-**Status:** **Active Build: Wave A completion.** Next is **A10**. No maintainer decision blocks this queue. Issue 1 gates Wave B only.
+**Status:** **Queue Complete: waiting on Issue 1 (Wave B) and the Wave D spec.**
 
 **Every path, number, field name, formula and literal string in this guide and in `03_eval_harness.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
 
@@ -118,12 +118,12 @@
 
 ### 1.4 Gates (run bare October 20, 2026, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on `3f0b78d` | Result on A10 | Result on A9b | Result on A11 | Result on A12 | Result on A13 |
-|---|---|---|---|---|---|---|---|---|
-| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | **Flaky:** 1 failed / 61 passed in 1 run of 3 (`test_gemini_judge_429_exhaustion_raises` globbed `._errors.jsonl`); 62 passed otherwise. **A10's target** | exit 0 · **64 passed** (3/3 runs passed: 35.4s, 35.5s, 35.3s) | exit 0 · **67 passed** (3/3 runs passed: 37.1s, 35.4s, 35.4s) | exit 0 · **71 passed** (3/3 runs passed: 56.7s, 54.2s, 55.3s) | exit 0 · **73 passed** (3/3 runs passed: 54.8s, 54.1s, 53.9s) | exit 0 · **75 passed** (3/3 runs passed: 55.4s, 56.3s, 53.9s) |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (134 s); `memguard --status`: 57.0 GB, pressure 1, lock free | exit 0 · **9 passed** (120 s); `memguard --status`: 53.1 GB, pressure 1, lock free | — (fast battery only) | — (fast battery only) | — (fast battery only) | exit 0 · **9 passed** (90 s); `memguard --status`: 51.2 GB, pressure 1, lock free |
+| # | Gate | Command | Result on `3f0b78d` | Result on A10 | Result on A9b | Result on A11 | Result on A12 | Result on A13 | Result on A14 |
+|---|---|---|---|---|---|---|---|---|---|
+| G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean | exit 0 · clean |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | **Flaky:** 1 failed / 61 passed in 1 run of 3 (`test_gemini_judge_429_exhaustion_raises` globbed `._errors.jsonl`); 62 passed otherwise. **A10's target** | exit 0 · **64 passed** (3/3 runs passed: 35.4s, 35.5s, 35.3s) | exit 0 · **67 passed** (3/3 runs passed: 37.1s, 35.4s, 35.4s) | exit 0 · **71 passed** (3/3 runs passed: 56.7s, 54.2s, 55.3s) | exit 0 · **73 passed** (3/3 runs passed: 54.8s, 54.1s, 53.9s) | exit 0 · **75 passed** (3/3 runs passed: 55.4s, 56.3s, 53.9s) | exit 0 · **75 passed** (3/3 runs passed: 54.8s, 54.1s, 53.6s) |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS | exit 0 · 4 PASS |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (134 s); `memguard --status`: 57.0 GB, pressure 1, lock free | exit 0 · **9 passed** (120 s); `memguard --status`: 53.1 GB, pressure 1, lock free | — (fast battery only) | — (fast battery only) | — (fast battery only) | exit 0 · **9 passed** (90 s); `memguard --status`: 51.2 GB, pressure 1, lock free | exit 0 · **9 passed** (69 s); `memguard --status`: 30.1 GB, pressure 1, lock free |
 
 ### 1.5 Results so far, and the reference values A11 must reproduce
 

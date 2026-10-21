@@ -125,3 +125,112 @@ All metrics are AUROC or $\Delta\text{AUROC}$ on the held-out test splits. 95% C
 ## 7. Wave D start condition
 
 Not met in this pass. Oops!'s Δ CI includes 0; HoloAssist's Δ was not run. Re-evaluated in A14 by the amended rule (ablation gain, 00_thesis.md entry 20).
+
+---
+
+## 8. Completion (2026-10-21): step-prior, ablation gain, audible-session HoloAssist
+
+### 8.1 Headline Table (Dataset × Condition)
+
+All values, 95% CIs, item counts, exclusions, and scorecard timestamps from the latest scorecard rows (`results/scorecard.jsonl`):
+
+| Dataset | Condition | Metric | Value | 95% CI | N (included) | N (excluded) | Scorecard Timestamp |
+|---|---|---|---|---|---|---|---|
+| `oops` | `judge` | auroc | 0.472 | [0.440, 0.498] | 1072 | 0 | `2026-10-21T04:12:36Z` |
+| `oops` | `judge-large` | auroc | 0.708 | [0.684, 0.731] | 1072 | 0 | `2026-10-21T04:12:36Z` |
+| `oops` | `judge-frontier` | auroc | 0.704 | [0.544, 0.821] | 50 | 1022 | `2026-10-21T04:12:36Z` |
+| `oops` | `action-probe` | auroc | 0.779 | [0.754, 0.805] | 1072 | 0 | `2026-10-21T04:12:37Z` |
+| `oops` | `react-nonverbal` | auroc | 0.711 | [0.684, 0.740] | 1072 | 0 | `2026-10-21T04:12:37Z` |
+| `oops` | `react-spoke` | auroc | null | — | 1072 | 1072 | `2026-10-21T04:12:37Z` |
+| `oops` | `react-full` | auroc | null | — | 1072 | 1072 | `2026-10-21T04:12:37Z` |
+| `oops` | `step-prior` | auroc | null | — | 1072 | 1072 | `2026-10-21T04:12:37Z` |
+| `oops` | `action-fusion` | auroc | 0.778 | [0.754, 0.805] | 1072 | 0 | `2026-10-21T04:12:38Z` |
+| `oops` | `fusion` | auroc | 0.793 | [0.771, 0.816] | 1072 | 0 | `2026-10-21T04:12:38Z` |
+| `oops` | `fusion_minus_action_fusion` | delta_auroc | 0.015 | [-0.001, 0.029] | 1072 | 0 | `2026-10-21T04:12:39Z` |
+| `oops` | `fusion_minus_action_best` | delta_auroc | 0.015 | [-0.002, 0.029] | 1072 | 0 | `2026-10-21T04:12:40Z` |
+| `holoassist` | `judge` | auroc | 0.488 | [0.466, 0.512] | 2000 | 0 | `2026-10-21T04:12:57Z` |
+| `holoassist` | `judge-large` | auroc | 0.544 | [0.528, 0.562] | 2000 | 0 | `2026-10-21T04:12:58Z` |
+| `holoassist` | `judge-frontier` | auroc | null | — | 2000 | 2000 | `2026-10-21T04:12:58Z` |
+| `holoassist` | `action-probe` | auroc | 0.569 | [0.542, 0.597] | 2000 | 0 | `2026-10-21T04:12:58Z` |
+| `holoassist` | `react-nonverbal` | auroc | null | — | 2000 | 2000 | `2026-10-21T04:12:58Z` |
+| `holoassist` | `react-nonverbal|spoke=1` | auroc | null | — | 955 | 955 | `2026-10-21T04:12:58Z` |
+| `holoassist` | `react-spoke` | auroc | 0.676 | [0.655, 0.695] | 2000 | 0 | `2026-10-21T04:12:59Z` |
+| `holoassist` | `react-full` | auroc | 0.739 | [0.716, 0.761] | 2000 | 0 | `2026-10-21T04:12:59Z` |
+| `holoassist` | `step-prior` | auroc | 0.751 | [0.726, 0.774] | 2000 | 0 | `2026-10-21T04:13:00Z` |
+| `holoassist` | `action-fusion` | auroc | 0.681 | [0.657, 0.706] | 2000 | 0 | `2026-10-21T04:13:00Z` |
+| `holoassist` | `fusion` | auroc | null | — | 2000 | 2000 | `2026-10-21T04:13:00Z` |
+| `holoassist` | `fusion_minus_action_fusion` | delta_auroc | null | — | 2000 | 2000 | `2026-10-21T04:13:00Z` |
+| `holoassist` | `fusion_minus_action_best` | delta_auroc | null | — | 2000 | 2000 | `2026-10-21T04:13:01Z` |
+| `holoassist_audible` | `judge` | auroc | 0.528 | [0.499, 0.560] | 1420 | 0 | `2026-10-21T16:50:20Z` |
+| `holoassist_audible` | `judge-large` | auroc | 0.516 | [0.499, 0.533] | 1420 | 0 | `2026-10-21T16:50:20Z` |
+| `holoassist_audible` | `judge-frontier` | auroc | null | — | 1420 | 1420 | `2026-10-21T16:50:21Z` |
+| `holoassist_audible` | `action-probe` | auroc | 0.576 | [0.526, 0.623] | 1420 | 0 | `2026-10-21T16:50:21Z` |
+| `holoassist_audible` | `react-nonverbal` | auroc | 0.654 | [0.626, 0.675] | 1420 | 0 | `2026-10-21T16:50:22Z` |
+| `holoassist_audible` | `react-nonverbal|spoke=1` | auroc | 0.582 | [0.548, 0.612] | 837 | 0 | `2026-10-21T16:50:22Z` |
+| `holoassist_audible` | `react-spoke` | auroc | 0.665 | [0.636, 0.691] | 1420 | 0 | `2026-10-21T16:50:23Z` |
+| `holoassist_audible` | `react-full` | auroc | 0.759 | [0.728, 0.791] | 1420 | 0 | `2026-10-21T16:50:23Z` |
+| `holoassist_audible` | `step-prior` | auroc | 0.737 | [0.712, 0.765] | 1420 | 0 | `2026-10-21T16:50:24Z` |
+| `holoassist_audible` | `action-fusion` | auroc | 0.650 | [0.599, 0.694] | 1420 | 0 | `2026-10-21T16:50:25Z` |
+| `holoassist_audible` | `fusion` | auroc | 0.671 | [0.618, 0.713] | 1420 | 0 | `2026-10-21T16:50:25Z` |
+| `holoassist_audible` | `fusion_minus_action_fusion` | delta_auroc | 0.021 | [0.006, 0.034] | 1420 | 0 | `2026-10-21T16:50:26Z` |
+| `holoassist_audible` | `fusion_minus_action_best` | delta_auroc | -0.065 | [-0.113, -0.025] | 1420 | 0 | `2026-10-21T16:50:27Z` |
+
+### 8.2 Prediction-Check Lines (Verbatim)
+
+**Oops! (`prediction_check`, from `docs/evals/2026-10-10_oops_h1.md`):**
+- **Clause 1, "the judge is strong" (judge):** AUROC 0.472 [0.440, 0.498] (1072 scored) → did not hold
+- **Clause 1, "the judge is strong" (judge-large):** AUROC 0.708 [0.684, 0.731] (1072 scored) → did not hold
+- **Clause 1, "the judge is strong" (judge-frontier):** AUROC 0.704 [0.544, 0.821] (50 scored) → did not hold
+- **Clause 2, "Δ ≈ 0":** ablation Δ 0.015 [-0.001, 0.029] → held
+- **Context, no verdict:** fusion − action_best 0.015 [-0.002, 0.029]
+
+**HoloAssist (`prediction_check_hidden`, from `docs/evals/2026-10-15_holoassist_h1.md`):**
+- **Clause 1, "reaction-only beats action_best":** react-nonverbal not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) vs step-prior 0.751 → not tested: not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
+- **Clause 2, "reactions add to the action-only model":** ablation Δ not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) → not tested: not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
+- **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not testable: react-nonverbal, ablation Δ
+- **Context, no verdict:** fusion − action_best action_best=step-prior; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20); judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; step-prior 0.751 [0.726, 0.774]; action-fusion 0.681 [0.657, 0.706]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
+- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 on test items whose verb is not "drop".
+
+**HoloAssist-Audible (`prediction_check_hidden`, from `docs/evals/2026-10-21_holoassist_audible_h1.md`):**
+- **Clause 1, "reaction-only beats action_best":** react-nonverbal 0.654 [0.626, 0.675] vs step-prior 0.737 → did not hold
+- **Clause 2, "reactions add to the action-only model":** ablation Δ 0.021 [0.006, 0.034] → held
+- **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not met
+- **Context, no verdict:** fusion − action_best -0.065 [-0.113, -0.025]; judge 0.528 [0.499, 0.560]; judge-large 0.516 [0.499, 0.533]; action-probe 0.576 [0.526, 0.623]; step-prior 0.737 [0.712, 0.765]; action-fusion 0.650 [0.599, 0.694]; react-spoke 0.665 [0.636, 0.691] (diagnostic: did the instructor speak); react-full 0.759 [0.728, 0.791] (leakage condition: the instructor's words; never a headline, §11.2).
+- **Caveat:** HoloAssist step text carries outcome information (0.737 [0.712, 0.765]); judge-large scores 0.489 on test items whose verb is not "drop".
+
+### 8.3 Caveats
+
+1. **Subset Caveat (Task Mix Shift):**
+   The audible-session evaluation set (`holoassist_audible`) filters sessions by instructor audibility ($\ge +3.5$ dB median voice-over-silence). Quieter device setups are heavily over-represented compared to the full HoloAssist dataset:
+   - Camera setups: 72.3% pass rate (16.1% of audible set vs 6.5% of full dataset)
+   - GoPro setups: 70.1% pass rate (17.6% of audible set vs 7.9% of full dataset)
+   - Switch setups: 68.1% pass rate (15.5% of audible set vs 7.1% of full dataset)
+   In contrast, noisy tool-heavy furniture assembly tasks had low pass rates (utility cart: 7.5% pass rate, 3.6% of audible set vs 11.5% of full dataset; circuit breaker: 0% pass rate, 0 items). This filtering rule was chosen after the initial 20-session presence check failed, but strictly before any model evaluations or outcome labels were seen.
+
+2. **Pitch-Shift Caveat:**
+   The HoloAssist dataset audio is pitch-shifted by the dataset authors for participant privacy. All paralinguistic acoustic features (`emotion2vec+`) and energy metrics are evaluated on altered voices.
+
+3. **Group Independence Caveat (Pair, Not Person):**
+   Session groups are derived from prefixes before `-` (e.g. `R0027`), representing distinct instructor–performer pairs. If an individual participant took part in multiple pairs, they may appear in both train and test splits, as the dataset metadata does not identify individual performers or instructors across different pairs.
+
+### 8.4 Wave D Start Condition
+
+**Status: MET.**
+
+Rule (`agent_execution_guide.md` A14; `00_thesis.md` H3 amended): Met iff some dataset's `fusion_minus_action_fusion` has `ci_low > 0`.
+
+- Dataset: `holoassist_audible`
+- Condition: `fusion_minus_action_fusion` (ablation Δ)
+- Value: **+0.021 [0.006, 0.034]** (`ci_low = 0.006 > 0`)
+- Row timestamp: **`2026-10-21T16:50:26Z`**
+
+Reactions demonstrably add incremental information beyond the action-only model on hidden outcomes with a 95% confidence interval strictly excluding zero. Therefore, the Wave D robot check may start once the Wave D specification is written by the designer.
+
+### 8.5 Compute Time per Stage for A13 (Recounted from Caches)
+
+- **Visual Features (`siglip-b16-224`):** 2,269.4 s (37.8 min across 4,420 items)
+- **Audio Features (`e2v-plus-large`):** 888.3 s (14.8 min across 4,420 items)
+- **Local Judge (`qwen2.5vl:7b`):** 36,172.9 s (602.9 min across 4,420 items)
+- **Large Local Judge (`gemma4:26b`):** 2,926.1 s (48.8 min across 1,420 test items)
+- **Probes & Report Generation:** < 1 min
+- **Total A13 Pipeline Compute Time:** **~11.8 h**
