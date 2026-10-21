@@ -42,6 +42,15 @@ def test_prediction_check_oops_real_values():
             "n_items": 1072,
             "notes": "",
         },
+        "fusion_minus_action_fusion": {
+            "condition": "fusion_minus_action_fusion",
+            "metric": "delta_auroc",
+            "value": 0.015,
+            "ci_low": -0.001,
+            "ci_high": 0.029,
+            "n_items": 1072,
+            "notes": "ablation: reaction features removed",
+        },
         "fusion_minus_action_best": {
             "condition": "fusion_minus_action_best",
             "metric": "delta_auroc",
@@ -59,7 +68,9 @@ def test_prediction_check_oops_real_values():
     # Clause 1 for judge: did not hold
     assert '- **Clause 1, "the judge is strong" (judge):** AUROC 0.472 [0.440, 0.498] (1072 scored) → did not hold' in text
     # Clause 2: held
-    assert '- **Clause 2, "Δ ≈ 0":** Δ 0.015 [-0.002, 0.029] (action_best = action-probe) → held' in text
+    assert '- **Clause 2, "Δ ≈ 0":** ablation Δ 0.015 [-0.001, 0.029] → held' in text
+    # Context line
+    assert '- **Context, no verdict:** fusion − action_best 0.015 [-0.002, 0.029]' in text
     # Null condition listed with notes
     assert "- **judge-frontier:** not run: GOOGLE_API_KEY daily quota exhausted (20 req/day on Free Tier)" in text
 
@@ -89,6 +100,15 @@ def test_prediction_check_strong_judge_nonzero_delta():
             "n_items": 1000,
             "notes": "",
         },
+        "fusion_minus_action_fusion": {
+            "condition": "fusion_minus_action_fusion",
+            "metric": "delta_auroc",
+            "value": 0.050,
+            "ci_low": 0.020,
+            "ci_high": 0.080,
+            "n_items": 1000,
+            "notes": "ablation: reaction features removed",
+        },
         "fusion_minus_action_best": {
             "condition": "fusion_minus_action_best",
             "metric": "delta_auroc",
@@ -106,4 +126,6 @@ def test_prediction_check_strong_judge_nonzero_delta():
     # Clause 1 for judge: held
     assert '- **Clause 1, "the judge is strong" (judge):** AUROC 0.850 [0.800, 0.900] (1000 scored) → held' in text
     # Clause 2: did not hold
-    assert '- **Clause 2, "Δ ≈ 0":** Δ 0.050 [0.020, 0.080] (action_best = judge) → did not hold' in text
+    assert '- **Clause 2, "Δ ≈ 0":** ablation Δ 0.050 [0.020, 0.080] → did not hold' in text
+    # Context line
+    assert '- **Context, no verdict:** fusion − action_best 0.050 [0.020, 0.080]' in text

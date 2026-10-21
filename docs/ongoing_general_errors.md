@@ -278,60 +278,6 @@ Your selection: Proceed with Option A.
 
 ---
 
-### Issue 7: HoloAssist's step names leak the outcome; a step-name prior beats every action-only control
-
-**Status**: ✅ **Decided: option A, by the maintainer, October 20, 2026.**
-- **Follow-up choice, made in chat: the pass bar uses the ablation gain.** That is fusion − `action-fusion`, the same model without the reaction features.
-- **Why it was needed:** the designer measured option A's intended combined model as written. Judge + step-prior + SigLIP scored 0.682, **−0.069 [−0.091, −0.047] below the step-prior alone (0.751)**. The high-dimensional inputs dilute the one strong feature, so "fusion − action_best" would fail whatever the reactions carry.
-- **Contract:** `03_eval_harness.md` §4 (the ablation Δ row) and §6 (`step-prior`, `action-fusion`, the exact formula).
-- **Implementation:** guide item A11. The entry moves to 🧪 Resolved when A11 lands.
-
-*Found in the designer's verification, October 20, 2026, with a few lines over `DATA_ROOT/items/holoassist/items.jsonl` and `splits/holoassist.json`.*
-
-**Facts (October 20, 2026):**
-1. **The judges are given the step:** `context_text` = `"Task: <task>. Step: <verb> <noun>."` (`02_data_sources.md` → HoloAssist). The spec chose this so the judge would know what the person was trying to do, like a dish's name in verdict videos.
-2. **One verb is an outcome, not a step:** `drop` (435 of the 5,000 items, 182 in test) is a mistake 95% of the time. The leakage test banned `mistake`, `correct`, `wrong`, `error`, `fix` and `instead`, but not outcome-type verbs.
-3. **A step-name prior beats every action-only control.**
-   - Method: the per-verb mistake rate learned on the train split (smoothed toward the train base rate), scored on test.
-   - With all items: verb only **0.721**, verb + noun **0.727**, task only 0.613.
-   - Without the `drop` items it still scores **0.666** (verb + noun 0.682). The class-balanced sample has different step mixes per class: the mistake share is `touch` 0.79, `pull` 0.74, `press` 0.70 and `open` 0.70, against `disassemble` 0.20 and `withdraw` 0.29.
-   - For comparison: `action-probe` 0.569, `judge` 0.488, `judge-large` 0.544, `react-spoke` 0.676.
-4. **`judge-large`'s HoloAssist signal is the leak.**
-   - On the 1,818 test items without `drop` it scores **0.489** (chance). On the 182 `drop` items its mean P(good) is 0.30, against 0.92 elsewhere.
-   - The 7B judge barely uses it (0.468 without `drop`).
-5. **The reaction signal survives without `drop`:** `react-spoke` scores **0.733** on the non-`drop` test items (0.676 on all).
-6. **Why it matters:** the H1 Δ is the reactions' gain over the best *action-only* control. Knowing which step was performed is action-only information, and it is stronger than any action-only control used so far. A Δ against `action-probe` (0.569) would overstate what reactions add.
-
-**Option A (recommended): Add a `step-prior` action-only control, and give it to fusion too**
-- `step-prior` = the train-split mistake rate per (verb, noun), backing off to the verb and then to the base rate, smoothed with 5 pseudo-counts. It is text only, with no frames. HoloAssist only.
-- It enters `action_best`, and `logit(step-prior)` is added to `fusion`'s inputs, so fusion is not handicapped against it.
-- The judges' input is unchanged.
-- *Pros:*
-  - an honest bar: the reactions must beat "knowing what step it was";
-  - cheap: minutes, with no new extraction or judge runs;
-  - a robot knows which step it was commanded to do, so the control is realistic.
-- *Cons:*
-  - it raises the bar the reactions must clear;
-  - `drop` stays in the judges' input. It is disclosed, and it is harmless to the Δ because `step-prior` absorbs it.
-
-**Option B: Remove outcome-type verbs, then rebuild**
-- Drop the `drop` items, re-sample, rebuild the items and the split, and re-run features and both judges (~13 h).
-- *Pros:* the clearest leak is removed from the items and the judge's input.
-- *Cons:*
-  - expensive;
-  - the item definition changes after results were seen;
-  - the remaining verbs still carry a 0.666 prior, so A's control is still needed for a fair Δ.
-
-**Option C: Keep everything; report the 0.721 step prior as a caveat only**
-- *Pros:* no work.
-- *Cons:* any HoloAssist reaction gain is measured against a weaker action-only control than one a reviewer can build in a few lines.
-
-**Recommendation:** **A.** It is cheap, keeps every number already computed, and makes the HoloAssist Δ (whatever Issue 6 selects) a fair test.
-
-Your selection: Proceed with Option A.
-
----
-
 ## 🧪 Resolved Issues & Implementation Refinements
 
 Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
@@ -361,6 +307,18 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - The pinned rule (`03_eval_harness.md` §11.8) is: held iff `ci_low > 0.5` **and** AUROC ≥ action-probe − 0.05 = 0.729. So it **did not hold**, which is what the generated Oops! report correctly prints.
      - On HoloAssist, `judge-large`'s 0.544 comes entirely from reading the verb "drop" (0.489 on the other test items; Issue 7).
      - The resolution itself stands: the large judge exists, it is measured, and it is the stronger local control on visible failures.
+4. **Issue 7: HoloAssist's step names leak the outcome; step-prior control and ablation delta (Resolved - October 20, A11)**:
+   - **Problem**: HoloAssist's step names leak the outcome (`drop` is a mistake 95% of the time). A text-only train-split step prior scores 0.751 on test, beating every action-only control. Furthermore, combining high-dimensional inputs with step-prior dilutes the signal (action-fusion scores 0.682, −0.069 below step-prior alone), making `fusion − action_best` fail regardless of reaction signal.
+   - **Solution**: Option A selected by the maintainer. Implemented in A11:
+     - `step_prior_scores` with hierarchical Bayesian smoothing ($m=5$, base rate $p_0 \to$ verb $p_v \to$ verb+noun $p_{vn}$) and leave-one-out (LOO) on train.
+     - `action-fusion` control (judge + action-probe + step-prior) and `fusion_minus_action_fusion` (ablation $\Delta$).
+     - Shuffled-label controls (`step-prior:shuffled`, `action-fusion:shuffled`, `fusion:shuffled`) recompute step-prior from permuted train labels so no label leakage occurs.
+   - **Outcome**: Exact reference value reproduction (§1.5):
+     - HoloAssist `step-prior`: 0.751 [0.726, 0.774].
+     - HoloAssist `action-fusion`: 0.682 [0.658, 0.706].
+     - Oops! `action-fusion`: 0.779 [0.754, 0.805].
+     - Oops! ablation $\Delta$: +0.015 [−0.001, 0.029].
+     - Reports regenerated (`docs/evals/2026-10-10_oops_h1.md`, `docs/evals/2026-10-15_holoassist_h1.md`). Battery G1–G3 green.
 
 ---
 
@@ -438,6 +396,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Design updated:** `02_data_sources.md` → HoloAssist (the step-prior caveat, and the 85 sessions that are in no official split list).
 - A10 — Ignore exFAT AppleDouble (._*) files in every glob over SSD — git log --grep "(a10)" — src/shared/fsutil.py with data_glob; 4 tools files and test_judge updated; test_fsutil passes; G2 passed 3/3 times (64 passed); G1–G4 exit 0.
 - A9b — Correct Wave A summary and HoloAssist report — git log --grep "(a9b)" — prediction_check_hidden implemented per 03_eval_harness.md §11.8; test_report_holoassist passes; HoloAssist report and Wave A summary regenerated/corrected; G1–G3 exit 0 (67 fast passed).
+- A11 — The step-prior and action-fusion controls and ablation delta — git log --grep "(a11)" — step_prior_scores with hierarchical smoothing (m=5, LOO); action-fusion and ablation delta (fusion_minus_action_fusion) implemented; §1.5 reference values reproduced exactly (HoloAssist step-prior 0.751 [0.726, 0.774], action-fusion 0.682 [0.658, 0.706]; Oops! action-fusion 0.779, ablation delta +0.015 [-0.001, 0.029]); reports regenerated; G1–G3 exit 0.
 
 
 ---

@@ -130,7 +130,7 @@ def prediction_check_hidden(rows: Dict[str, dict]) -> List[str]:
     if "step-prior" in rows and rows["step-prior"].get("value") is not None:
         sp_r = fmt_row(rows["step-prior"])
         lines.append(
-            f'- **Caveat:** HoloAssist step text carries outcome information ({sp_r}), per 02_data_sources.md → HoloAssist → As built (A8); '
+            f'- **Caveat:** HoloAssist step text carries outcome information ({sp_r}); '
             f'judge-large scores 0.489 on test items whose verb is not "drop".'
         )
     else:
@@ -474,7 +474,7 @@ def generate_holoassist_report(
     cond_order = [
         "judge", "judge-large", "judge-frontier", "action-probe",
         "react-nonverbal", "react-nonverbal|spoke=1", "react-spoke", "react-full",
-        "fusion", "fusion_minus_action_best",
+        "step-prior", "fusion", "action-fusion", "fusion_minus_action_fusion", "fusion_minus_action_best",
     ]
     for c in cond_order:
         r = latest_rows.get(c)
@@ -515,7 +515,10 @@ def generate_holoassist_report(
     report_lines.append("| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |")
     report_lines.append("|---|---|---|---|---|---|")
 
-    for c in ["action-probe:shuffled", "react-nonverbal:shuffled", "fusion:shuffled"]:
+    shuffled_conditions = [
+        "action-probe:shuffled", "react-nonverbal:shuffled", "step-prior:shuffled", "action-fusion:shuffled", "fusion:shuffled"
+    ]
+    for c in shuffled_conditions:
         r = latest_rows.get(c)
         if r:
             val_s = f"{r['value']:.3f}" if r["value"] is not None else "null"

@@ -23,8 +23,10 @@ def prediction_check(rows: Dict[str, dict]) -> List[str]:
        `judge`, `judge-large`, `judge-frontier`:
        Held iff ci_low > 0.5 and AUROC >= action_probe_auroc - 0.05.
     2. Clause 2 line for Delta approx 0:
-       Held iff ci_low <= 0 <= ci_high.
-    3. For each judge condition whose value is null:
+       Reads `fusion_minus_action_fusion` (held iff ci_low <= 0 <= ci_high).
+    3. Context line:
+       - **Context, no verdict:** fusion − action_best <v> [<lo>, <hi>]
+    4. For each judge condition whose value is null:
        - **<condition>:** <its notes>
     """
     judge_conditions = ["judge", "judge-large", "judge-frontier"]
@@ -61,26 +63,40 @@ def prediction_check(rows: Dict[str, dict]) -> List[str]:
                 null_lines.append(f"- **{cond}:** {notes}")
 
     clause2_lines: List[str] = []
+    ablation_row = rows.get("fusion_minus_action_fusion")
+    if ablation_row:
+        d_val = ablation_row.get("value")
+        d_low = ablation_row.get("ci_low")
+        d_high = ablation_row.get("ci_high")
+        notes = ablation_row.get("notes", "")
+        if d_val is not None and d_low is not None and d_high is not None:
+            held = (d_low <= 0 <= d_high)
+            verdict = "held" if held else "did not hold"
+            clause2_lines.append(
+                f'- **Clause 2, "Δ ≈ 0":** ablation Δ {d_val:.3f} [{d_low:.3f}, {d_high:.3f}] → {verdict}'
+            )
+        else:
+            clause2_lines.append(
+                f'- **Clause 2, "Δ ≈ 0":** ablation Δ {notes or "not run"} → not tested'
+            )
+
+    context_lines: List[str] = []
     delta_row = rows.get("fusion_minus_action_best")
     if delta_row:
         d_val = delta_row.get("value")
         d_low = delta_row.get("ci_low")
         d_high = delta_row.get("ci_high")
         notes = delta_row.get("notes", "")
-        if "action_best=" in notes:
-            best_name = notes.split("action_best=")[1].split(";")[0].strip()
-        elif ";" in notes:
-            best_name = notes.split(";")[0].strip()
-        else:
-            best_name = notes.strip()
-        held = (d_low is not None and d_high is not None and d_low <= 0 <= d_high)
-        verdict = "held" if held else "did not hold"
         if d_val is not None and d_low is not None and d_high is not None:
-            clause2_lines.append(
-                f'- **Clause 2, "Δ ≈ 0":** Δ {d_val:.3f} [{d_low:.3f}, {d_high:.3f}] (action_best = {best_name}) → {verdict}'
+            context_lines.append(
+                f"- **Context, no verdict:** fusion − action_best {d_val:.3f} [{d_low:.3f}, {d_high:.3f}]"
+            )
+        else:
+            context_lines.append(
+                f"- **Context, no verdict:** fusion − action_best {notes or 'not run'}"
             )
 
-    return clause1_lines + clause2_lines + null_lines
+    return clause1_lines + clause2_lines + context_lines + null_lines
 
 
 def compute_oops_wall_clocks(root: Path) -> Dict[str, str]:
@@ -157,10 +173,11 @@ def generate_oops_report(
     out_path: Optional[Path] = None,
     descriptions_path: Optional[Path] = None,
     corrected_date: Optional[str] = None,
+    updated_date: Optional[str] = None,
 ) -> Path:
     root = data_root or DATA_ROOT
     today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    corr_date = corrected_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    corr_date = corrected_date or "2026-10-15"
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
 
     # 1. Read scorecard rows for Oops
@@ -360,13 +377,17 @@ def generate_oops_report(
         f"# Oops! H1 Evaluation Report ({today})",
         f"*Corrected {corr_date} (A7b): prediction check split by clause; judge error counts reclassified; wall-clock times and example descriptions added. The numbers are unchanged.*",
         f"*Updated {corr_date} (A7c): judge-large added (Issue 5, option B).*",
+    ]
+    if updated_date:
+        lines.append(f"*Updated {updated_date} (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*")
+    lines.extend([
         "",
         "## 1. Executive Summary & Prediction Check",
         "",
         "**Prediction Check:**",
         "> *Prediction:* In fail videos where failures are plainly visible in the action frames, the VLM judge is expected to perform strongly, and non-verbal reactions should add little or no incremental signal over the action-only baseline ($\\Delta \\approx 0$).",
         "",
-    ]
+    ])
 
     # Prediction check lines
     pred_lines = prediction_check(latest_rows)
@@ -388,7 +409,10 @@ def generate_oops_report(
         "react-nonverbal",
         "react-spoke",
         "react-full",
+        "step-prior",
         "fusion",
+        "action-fusion",
+        "fusion_minus_action_fusion",
         "fusion_minus_action_best",
     ]
     for c in core_conditions:
@@ -413,7 +437,13 @@ def generate_oops_report(
         "| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |",
         "|---|---|---|---|---|---|",
     ])
-    shuffled_conditions = ["action-probe:shuffled", "react-nonverbal:shuffled", "fusion:shuffled"]
+    shuffled_conditions = [
+        "action-probe:shuffled",
+        "react-nonverbal:shuffled",
+        "step-prior:shuffled",
+        "action-fusion:shuffled",
+        "fusion:shuffled",
+    ]
     for c in shuffled_conditions:
         r = latest_rows.get(c)
         if r:
@@ -421,7 +451,12 @@ def generate_oops_report(
             ci_low = r.get("ci_low")
             ci_high = r.get("ci_high")
             ci_s = f"[{ci_low:.3f}, {ci_high:.3f}]" if ci_low is not None and ci_high is not None else "—"
-            covers_05 = "PASS (Yes)" if (ci_low is not None and ci_high is not None and ci_low <= 0.5 <= ci_high) else "FAIL (No)"
+            if r.get("value") is None:
+                covers_05 = "— (not run)"
+            elif ci_low is not None and ci_high is not None and ci_low <= 0.5 <= ci_high:
+                covers_05 = "PASS (Yes)"
+            else:
+                covers_05 = "FAIL (No)"
             lines.append(f"| `{r['condition']}` | {r['metric']} | {val_s} | {ci_s} | {covers_05} | {r.get('notes', '')} |")
     lines.append("")
 
@@ -493,6 +528,7 @@ def generate_oops_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Oops! H1 evaluation report")
     parser.add_argument("--date", default=None, help="Report date (YYYY-MM-DD)")
+    parser.add_argument("--updated-date", default=None, help="Update date (YYYY-MM-DD)")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", help="Scorecard JSONL path")
     parser.add_argument("--out", default=None, help="Output markdown path")
     parser.add_argument("--descriptions", default="docs/evals/2026-10-10_oops_examples.tsv", help="Path to TSV containing example descriptions")
@@ -501,6 +537,7 @@ def main() -> None:
 
     generate_oops_report(
         date_str=args.date,
+        updated_date=args.updated_date,
         data_root=Path(args.data_root) if args.data_root else None,
         scorecard_path=Path(args.scorecard) if args.scorecard else None,
         out_path=Path(args.out) if args.out else None,

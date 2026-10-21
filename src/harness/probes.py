@@ -17,10 +17,85 @@ from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
 
 
+HOLOASSIST_DATASETS = ("holoassist", "holoassist_audible")
+
+
 def logit(prob: np.ndarray) -> np.ndarray:
     """Computes logit clipping P to [0.01, 0.99] per 03_eval_harness.md §6."""
     clipped = np.clip(prob, 0.01, 0.99)
     return np.log(clipped / (1.0 - clipped))
+
+
+def step_prior_scores(
+    train_items: List[Item],
+    target_items: List[Item],
+    train_labels: np.ndarray,
+    loo: bool = False,
+) -> np.ndarray:
+    """Computes train-split P(correct | verb, noun) with hierarchical smoothing (m=5) per 03_eval_harness.md §6.
+
+    Levels: base rate -> verb -> (verb, noun), m=5.
+    If loo=True, each item in target_items (assumed to be train_items) has its own label
+    removed at all three levels.
+    """
+    N = len(train_items)
+    K = int(np.sum(train_labels))
+    p0 = K / N if N > 0 else 0.5
+
+    n_verb: Dict[str, int] = {}
+    k_verb: Dict[str, int] = {}
+    n_vn: Dict[Tuple[str, str], int] = {}
+    k_vn: Dict[Tuple[str, str], int] = {}
+
+    for it, y in zip(train_items, train_labels):
+        v = it.meta.get("verb", "")
+        n = it.meta.get("noun", "")
+        vn = (v, n)
+        n_verb[v] = n_verb.get(v, 0) + 1
+        k_verb[v] = k_verb.get(v, 0) + int(y == 1)
+        n_vn[vn] = n_vn.get(vn, 0) + 1
+        k_vn[vn] = k_vn.get(vn, 0) + int(y == 1)
+
+    scores = np.zeros(len(target_items), dtype=np.float64)
+
+    if loo:
+        for i, (it, y) in enumerate(zip(target_items, train_labels)):
+            v = it.meta.get("verb", "")
+            n = it.meta.get("noun", "")
+            vn = (v, n)
+
+            N_loo = N - 1
+            K_loo = K - int(y == 1)
+            p0_loo = K_loo / N_loo if N_loo > 0 else 0.5
+
+            n_v_loo = n_verb.get(v, 0) - 1
+            k_v_loo = k_verb.get(v, 0) - int(y == 1)
+            p_v_loo = (k_v_loo + 5.0 * p0_loo) / (n_v_loo + 5.0)
+
+            n_vn_loo = n_vn.get(vn, 0) - 1
+            k_vn_loo = k_vn.get(vn, 0) - int(y == 1)
+            p_vn_loo = (k_vn_loo + 5.0 * p_v_loo) / (n_vn_loo + 5.0)
+
+            scores[i] = p_vn_loo
+    else:
+        for j, it in enumerate(target_items):
+            v = it.meta.get("verb", "")
+            n = it.meta.get("noun", "")
+            vn = (v, n)
+
+            if v in n_verb:
+                p_v = (k_verb[v] + 5.0 * p0) / (n_verb[v] + 5.0)
+            else:
+                p_v = p0
+
+            if vn in n_vn:
+                p_vn = (k_vn[vn] + 5.0 * p_v) / (n_vn[vn] + 5.0)
+            else:
+                p_vn = p_v
+
+            scores[j] = p_vn
+
+    return scores
 
 
 def load_features_for_items(
@@ -271,6 +346,8 @@ def run_probes(
         "probe_class_weight": "balanced",
         "probe_max_iter": 2000,
         "split_sha256": split_data["sha256"],
+        "step_prior": {"levels": ["base", "verb", "verb+noun"], "m": 5, "loo_train": True},
+        "ablation": "fusion_minus_action_fusion",
     }
     c_hash = config_hash(cfg)
 
@@ -385,7 +462,7 @@ def run_probes(
         ))
 
     # 4b. HoloAssist diagnostic: react-nonverbal|spoke=1
-    if dataset == "holoassist":
+    if dataset in HOLOASSIST_DATASETS:
         spoke_mask_te = np.array([bool(it.meta.get("spoke", 0)) for it in test_items], dtype=bool)
         n_spoke_items = int(np.sum(spoke_mask_te))
         spoke_groups = [groups_test[i] for i in range(len(test_items)) if spoke_mask_te[i]]
@@ -443,7 +520,7 @@ def run_probes(
             n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
             config_hash=c_hash, notes="not run: no annotations of reactor speech in Oops!",
         ))
-    else:
+    elif dataset in HOLOASSIST_DATASETS:
         # react-spoke: binary feature did reactor speak in reaction window
         # Direction: silence=1.0 (correct), speech=0.0 (mistake)
         spoke_scores = np.array([1.0 - float(it.meta.get("spoke", 0)) for it in test_items])
@@ -492,32 +569,80 @@ def run_probes(
                 config_hash=c_hash, notes="not run: annotations carry no transcripts",
             ))
 
-    # 6. Condition: fusion [logit(judge), action, react]
+    # 5b. Condition: step-prior
+    step_prior_point = None
+    step_prior_test_scores = None
+    step_prior_train_loo = None
+
+    if dataset in HOLOASSIST_DATASETS:
+        step_prior_train_loo = step_prior_scores(train_items, train_items, y_train, loo=True)
+        step_prior_test_scores = step_prior_scores(train_items, test_items, y_train, loo=False)
+        sp_res = auroc_ci(y_test, step_prior_test_scores, groups_test)
+        step_prior_point = sp_res.point
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="step-prior", metric="auroc",
+            value=sp_res.point, ci_low=sp_res.ci_low, ci_high=sp_res.ci_high,
+            n_items=n_total_test - sp_res.n_excluded, n_groups=n_groups_test, n_excluded=sp_res.n_excluded,
+            config_hash=c_hash, notes="text-only: train-split P(correct | verb, noun), hierarchical smoothing m=5",
+        ))
+    elif dataset == "oops":
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="step-prior", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="not run: context_text is constant on Oops! (one string for every item)",
+        ))
+
+    # 6. Condition: fusion
     fusion_tr_mask = valid_j_tr & valid_act_tr & valid_re_tr
     fusion_te_mask = valid_j_te & valid_act_te & valid_re_te
 
     fu_point = None
-    if np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1:
+    fusion_test_probs = np.full(len(test_items), np.nan)
+    fusion_notes = ""
+
+    fusion_runnable = np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1
+    if fusion_runnable:
         logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
-        X_fusion_tr_raw = np.hstack([
-            logit_j_tr[:, None],
-            X_action_train[fusion_tr_mask],
-            X_react_train[fusion_tr_mask],
-        ])
+        if dataset in HOLOASSIST_DATASETS:
+            logit_sp_tr = logit(step_prior_train_loo[fusion_tr_mask])
+            X_fusion_tr_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr[:, None],
+                X_action_train[fusion_tr_mask],
+                X_react_train[fusion_tr_mask],
+            ])
+        elif dataset == "oops":
+            X_fusion_tr_raw = np.hstack([
+                logit_j_tr[:, None],
+                X_action_train[fusion_tr_mask],
+                X_react_train[fusion_tr_mask],
+            ])
+
         fusion_scaler = StandardScaler().fit(X_fusion_tr_raw)
         X_fusion_tr = fusion_scaler.transform(X_fusion_tr_raw)
 
         clf_fusion = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
         clf_fusion.fit(X_fusion_tr, y_train[fusion_tr_mask])
 
-        fusion_test_probs = np.full(len(test_items), np.nan)
         if np.any(fusion_te_mask):
             logit_j_te = logit(judge_test_scores[fusion_te_mask])
-            X_fusion_te_raw = np.hstack([
-                logit_j_te[:, None],
-                X_action_test[fusion_te_mask],
-                X_react_test[fusion_te_mask],
-            ])
+            if dataset in HOLOASSIST_DATASETS:
+                logit_sp_te = logit(step_prior_test_scores[fusion_te_mask])
+                X_fusion_te_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_react_test[fusion_te_mask],
+                ])
+            elif dataset == "oops":
+                X_fusion_te_raw = np.hstack([
+                    logit_j_te[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_react_test[fusion_te_mask],
+                ])
             X_fusion_te = fusion_scaler.transform(X_fusion_te_raw)
             fusion_test_probs[fusion_te_mask] = clf_fusion.predict_proba(X_fusion_te)[:, 1]
 
@@ -531,7 +656,6 @@ def run_probes(
             config_hash=c_hash, notes="",
         ))
     else:
-        fusion_test_probs = np.full(len(test_items), np.nan)
         missing_reasons = []
         if not np.any(valid_j_tr):
             missing_reasons.append("judge not run on train")
@@ -540,12 +664,110 @@ def run_probes(
         if not np.any(valid_re_tr):
             missing_reasons.append("react-nonverbal not run on train")
         reason_str = ", ".join(missing_reasons) if missing_reasons else "no overlapping items across modalities"
+        fusion_notes = f"not run: {reason_str}"
         rows.append(make_row(
             hypothesis="H1", dataset=dataset, split=split_name,
             condition="fusion", metric="auroc",
             value=None, ci_low=None, ci_high=None,
             n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=fusion_notes,
+        ))
+
+    # 6b. Condition: action-fusion (fusion's inputs minus the reaction features)
+    # When fusion can run, fit on exactly fusion_tr_mask and score on fusion_te_mask.
+    # When fusion cannot run, fit on valid_j & valid_act.
+    act_fu_point = None
+    act_fu_test_probs = np.full(len(test_items), np.nan)
+
+    if fusion_runnable:
+        act_fu_tr_mask = fusion_tr_mask
+        act_fu_te_mask = fusion_te_mask
+    else:
+        act_fu_tr_mask = valid_j_tr & valid_act_tr
+        act_fu_te_mask = valid_j_te & valid_act_te
+
+    act_fu_runnable = np.any(act_fu_tr_mask) and len(set(y_train[act_fu_tr_mask])) > 1
+
+    if act_fu_runnable:
+        logit_j_tr_af = logit(judge_train_scores[act_fu_tr_mask])
+        if dataset in HOLOASSIST_DATASETS:
+            logit_sp_tr_af = logit(step_prior_train_loo[act_fu_tr_mask])
+            X_act_fu_tr_raw = np.hstack([
+                logit_j_tr_af[:, None],
+                logit_sp_tr_af[:, None],
+                X_action_train[act_fu_tr_mask],
+            ])
+        elif dataset == "oops":
+            X_act_fu_tr_raw = np.hstack([
+                logit_j_tr_af[:, None],
+                X_action_train[act_fu_tr_mask],
+            ])
+
+        act_fu_scaler = StandardScaler().fit(X_act_fu_tr_raw)
+        X_act_fu_tr = act_fu_scaler.transform(X_act_fu_tr_raw)
+
+        clf_act_fu = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_act_fu.fit(X_act_fu_tr, y_train[act_fu_tr_mask])
+
+        if np.any(act_fu_te_mask):
+            logit_j_te_af = logit(judge_test_scores[act_fu_te_mask])
+            if dataset in HOLOASSIST_DATASETS:
+                logit_sp_te_af = logit(step_prior_test_scores[act_fu_te_mask])
+                X_act_fu_te_raw = np.hstack([
+                    logit_j_te_af[:, None],
+                    logit_sp_te_af[:, None],
+                    X_action_test[act_fu_te_mask],
+                ])
+            elif dataset == "oops":
+                X_act_fu_te_raw = np.hstack([
+                    logit_j_te_af[:, None],
+                    X_action_test[act_fu_te_mask],
+                ])
+            X_act_fu_te = act_fu_scaler.transform(X_act_fu_te_raw)
+            act_fu_test_probs[act_fu_te_mask] = clf_act_fu.predict_proba(X_act_fu_te)[:, 1]
+
+        act_fu_res = auroc_ci(y_test, act_fu_test_probs, groups_test)
+        act_fu_point = act_fu_res.point
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion", metric="auroc",
+            value=act_fu_res.point, ci_low=act_fu_res.ci_low, ci_high=act_fu_res.ci_high,
+            n_items=n_total_test - act_fu_res.n_excluded, n_groups=n_groups_test, n_excluded=act_fu_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        missing_reasons = []
+        if not np.any(valid_j_tr):
+            missing_reasons.append("judge not run on train")
+        if not np.any(valid_act_tr):
+            missing_reasons.append("action-probe not run on train")
+        reason_str = ", ".join(missing_reasons) if missing_reasons else "no overlapping items across modalities"
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
             config_hash=c_hash, notes=f"not run: {reason_str}",
+        ))
+
+    # 6c. Condition: fusion_minus_action_fusion (ablation Delta)
+    if fusion_runnable and act_fu_runnable and fu_point is not None and act_fu_point is not None:
+        d_abl_res = delta_auroc_ci(y_test, act_fu_test_probs, fusion_test_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_fusion", metric="delta_auroc",
+            value=d_abl_res.point, ci_low=d_abl_res.ci_low, ci_high=d_abl_res.ci_high,
+            n_items=n_total_test - d_abl_res.n_excluded, n_groups=n_groups_test, n_excluded=d_abl_res.n_excluded,
+            config_hash=c_hash, notes="ablation: reaction features removed",
+        ))
+    else:
+        fu_reason = fusion_notes or "fusion not run"
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_fusion", metric="delta_auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: fusion not run ({fu_reason})",
         ))
 
     # 7. Condition: fusion_minus_action_best
@@ -559,6 +781,10 @@ def run_probes(
         action_candidates.append(("judge-frontier", frontier_test_scores, front_point))
     if act_point is not None:
         action_candidates.append(("action-probe", act_test_probs, act_point))
+    if dataset in HOLOASSIST_DATASETS and step_prior_point is not None:
+        action_candidates.append(("step-prior", step_prior_test_scores, step_prior_point))
+    if act_fu_point is not None:
+        action_candidates.append(("action-fusion", act_fu_test_probs, act_fu_point))
 
     valid_candidates = [c for c in action_candidates if c[2] is not None]
     if valid_candidates:
@@ -641,13 +867,130 @@ def run_probes(
             config_hash=c_hash, notes="shuffled-label control; not run: react-nonverbal not run",
         ))
 
-    # fusion:shuffled
-    if np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1:
+    # step-prior:shuffled (recomputed from y_train_shuffled)
+    if dataset in HOLOASSIST_DATASETS:
+        sp_sh_train_loo = step_prior_scores(train_items, train_items, y_train_shuffled, loo=True)
+        sp_sh_test_scores = step_prior_scores(train_items, test_items, y_train_shuffled, loo=False)
+        spsh_res = auroc_ci(y_test, sp_sh_test_scores, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="step-prior:shuffled", metric="auroc",
+            value=spsh_res.point, ci_low=spsh_res.ci_low, ci_high=spsh_res.ci_high,
+            n_items=n_total_test - spsh_res.n_excluded, n_groups=n_groups_test, n_excluded=spsh_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    elif dataset == "oops":
+        sp_sh_train_loo = None
+        sp_sh_test_scores = None
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="step-prior:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: context_text is constant on Oops! (one string for every item)",
+        ))
+
+    # action-fusion:shuffled (step-prior recomputed from y_train_shuffled)
+    if act_fu_runnable:
+        logit_j_tr_af = logit(judge_train_scores[act_fu_tr_mask])
+        if dataset in HOLOASSIST_DATASETS:
+            logit_sp_tr_af_sh = logit(sp_sh_train_loo[act_fu_tr_mask])
+            X_act_fu_tr_sh_raw = np.hstack([
+                logit_j_tr_af[:, None],
+                logit_sp_tr_af_sh[:, None],
+                X_action_train[act_fu_tr_mask],
+            ])
+        elif dataset == "oops":
+            X_act_fu_tr_sh_raw = np.hstack([
+                logit_j_tr_af[:, None],
+                X_action_train[act_fu_tr_mask],
+            ])
+
+        act_fu_sh_scaler = StandardScaler().fit(X_act_fu_tr_sh_raw)
+        X_act_fu_tr_sh = act_fu_sh_scaler.transform(X_act_fu_tr_sh_raw)
+
+        clf_act_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        clf_act_fu_sh.fit(X_act_fu_tr_sh, y_train_shuffled[act_fu_tr_mask])
+
+        act_fu_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(act_fu_te_mask):
+            logit_j_te_af = logit(judge_test_scores[act_fu_te_mask])
+            if dataset in HOLOASSIST_DATASETS:
+                logit_sp_te_af_sh = logit(sp_sh_test_scores[act_fu_te_mask])
+                X_act_fu_te_sh_raw = np.hstack([
+                    logit_j_te_af[:, None],
+                    logit_sp_te_af_sh[:, None],
+                    X_action_test[act_fu_te_mask],
+                ])
+            elif dataset == "oops":
+                X_act_fu_te_sh_raw = np.hstack([
+                    logit_j_te_af[:, None],
+                    X_action_test[act_fu_te_mask],
+                ])
+            X_act_fu_te_sh = act_fu_sh_scaler.transform(X_act_fu_te_sh_raw)
+            act_fu_sh_probs[act_fu_te_mask] = clf_act_fu_sh.predict_proba(X_act_fu_te_sh)[:, 1]
+
+        afush_res = auroc_ci(y_test, act_fu_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion:shuffled", metric="auroc",
+            value=afush_res.point, ci_low=afush_res.ci_low, ci_high=afush_res.ci_high,
+            n_items=n_total_test - afush_res.n_excluded, n_groups=n_groups_test, n_excluded=afush_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: action-fusion not run",
+        ))
+
+    # fusion:shuffled (step-prior recomputed from y_train_shuffled)
+    if fusion_runnable:
+        logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
+        if dataset in HOLOASSIST_DATASETS:
+            logit_sp_tr_sh = logit(sp_sh_train_loo[fusion_tr_mask])
+            X_fusion_tr_sh_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr_sh[:, None],
+                X_action_train[fusion_tr_mask],
+                X_react_train[fusion_tr_mask],
+            ])
+        elif dataset == "oops":
+            X_fusion_tr_sh_raw = np.hstack([
+                logit_j_tr[:, None],
+                X_action_train[fusion_tr_mask],
+                X_react_train[fusion_tr_mask],
+            ])
+
+        fu_sh_scaler = StandardScaler().fit(X_fusion_tr_sh_raw)
+        X_fu_tr_sh = fu_sh_scaler.transform(X_fusion_tr_sh_raw)
+
         clf_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-        clf_fu_sh.fit(X_fusion_tr, y_train_shuffled[fusion_tr_mask])
+        clf_fu_sh.fit(X_fu_tr_sh, y_train_shuffled[fusion_tr_mask])
+
         fu_sh_probs = np.full(len(test_items), np.nan)
         if np.any(fusion_te_mask):
-            fu_sh_probs[fusion_te_mask] = clf_fu_sh.predict_proba(X_fusion_te)[:, 1]
+            logit_j_te = logit(judge_test_scores[fusion_te_mask])
+            if dataset in HOLOASSIST_DATASETS:
+                logit_sp_te_sh = logit(sp_sh_test_scores[fusion_te_mask])
+                X_fusion_te_sh_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te_sh[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_react_test[fusion_te_mask],
+                ])
+            elif dataset == "oops":
+                X_fusion_te_sh_raw = np.hstack([
+                    logit_j_te[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_react_test[fusion_te_mask],
+                ])
+            X_fu_te_sh = fu_sh_scaler.transform(X_fusion_te_sh_raw)
+            fu_sh_probs[fusion_te_mask] = clf_fu_sh.predict_proba(X_fu_te_sh)[:, 1]
+
         fsh_res = auroc_ci(y_test, fu_sh_probs, groups_test)
         rows.append(make_row(
             hypothesis="H1", dataset=dataset, split=split_name,

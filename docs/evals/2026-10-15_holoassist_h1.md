@@ -1,5 +1,6 @@
 # HoloAssist H1 Evaluation Report (2026-10-15)
 *Corrected 2026-10-20 (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a "best reaction". The numbers are unchanged.*
+*Updated 2026-10-21 (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*
 
 > [!NOTE]
 > **Caveat 1 (Pitch-Shifted Audio):**
@@ -21,26 +22,29 @@
 
 ## 2. Executive Summary & Prediction Check
 
-- **Clause 1, "reaction-only beats action_best":** react-nonverbal not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large vs action-probe 0.569 → not tested: not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large
-- **Clause 2, "reactions add to the action-only model":** ablation Δ not run → not tested: no fusion_minus_action_fusion row
+- **Clause 1, "reaction-only beats action_best":** react-nonverbal not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) vs step-prior 0.751 → not tested: not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
+- **Clause 2, "reactions add to the action-only model":** ablation Δ not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) → not tested: not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
 - **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not testable: react-nonverbal, ablation Δ
-- **Context, no verdict:** fusion − action_best action_best=action-probe; not run: fusion not run; judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
-- **Caveat:** HoloAssist step text carries outcome information (02_data_sources.md → HoloAssist → As built (A8)); judge-large scores 0.489 on test items whose verb is not "drop".
+- **Context, no verdict:** fusion − action_best action_best=step-prior; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20); judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; step-prior 0.751 [0.726, 0.774]; action-fusion 0.681 [0.657, 0.706]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
+- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 on test items whose verb is not "drop".
 
 ## 3. Conditions Table (Test Split, N=2,000)
 
 | Condition | Metric | Value | 95% CI | N (included) | N (excluded) | Notes |
 |---|---|---|---|---|---|---|
-| `judge` | auroc | 0.488 | [0.466, 0.512] | 2000 | 0 |  |
-| `judge-large` | auroc | 0.544 | [0.528, 0.562] | 2000 | 0 |  |
-| `judge-frontier` | auroc | null | — | 2000 | 2000 | not run: no cache file /Volumes/Extreme SSD/social_robotics/judge/holoassist/gemini-3.6-flash/4f0760a8e441.jsonl |
-| `action-probe` | auroc | 0.569 | [0.542, 0.597] | 2000 | 0 |  |
-| `react-nonverbal` | auroc | null | — | 2000 | 2000 | not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large |
-| `react-nonverbal|spoke=1` | auroc | null | — | 955 | 955 | diagnostic: test items with spoke=1; not run: react-nonverbal not run (not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large) |
-| `react-spoke` | auroc | 0.676 | [0.655, 0.695] | 2000 | 0 |  |
-| `react-full` | auroc | 0.739 | [0.716, 0.761] | 2000 | 0 |  |
-| `fusion` | auroc | null | — | 2000 | 2000 | not run: react-nonverbal not run on train |
-| `fusion_minus_action_best` | delta_auroc | null | — | 2000 | 2000 | action_best=action-probe; not run: fusion not run |
+| `judge` | auroc | 0.488 | [0.466, 0.512] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `judge-large` | auroc | 0.544 | [0.528, 0.562] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `judge-frontier` | auroc | null | — | 2000 | 2000 | not run: no cache file /Volumes/Extreme SSD/social_robotics/judge/holoassist/gemini-3.6-flash/4f0760a8e441.jsonl; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `action-probe` | auroc | 0.569 | [0.542, 0.597] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `react-nonverbal` | auroc | null | — | 2000 | 2000 | not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `react-nonverbal|spoke=1` | auroc | null | — | 955 | 955 | diagnostic: test items with spoke=1; not run: react-nonverbal not run (not run: 0 of 3000 items cached in /Volumes/Extreme SSD/social_robotics/features/holoassist/e2v-plus-large); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `react-spoke` | auroc | 0.676 | [0.655, 0.695] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `react-full` | auroc | 0.739 | [0.716, 0.761] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `step-prior` | auroc | 0.751 | [0.726, 0.774] | 2000 | 0 | text-only: train-split P(correct | verb, noun), hierarchical smoothing m=5; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `fusion` | auroc | null | — | 2000 | 2000 | not run: react-nonverbal not run on train; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `action-fusion` | auroc | 0.681 | [0.657, 0.706] | 2000 | 0 | rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `fusion_minus_action_fusion` | delta_auroc | null | — | 2000 | 2000 | not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `fusion_minus_action_best` | delta_auroc | null | — | 2000 | 2000 | action_best=step-prior; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
 
 ## 4. Voice Signal vs. Presence of Speech (`react-spoke` vs. `react-nonverbal|spoke=1`)
 
@@ -52,9 +56,11 @@ Validation requirement: every `:shuffled` condition must have a 95% CI covering 
 
 | Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |
 |---|---|---|---|---|---|
-| `action-probe:shuffled` | auroc | 0.492 | [0.461, 0.525] | PASS (Yes) | shuffled-label control |
-| `react-nonverbal:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: react-nonverbal not run |
-| `fusion:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: fusion not run |
+| `action-probe:shuffled` | auroc | 0.492 | [0.461, 0.525] | PASS (Yes) | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `react-nonverbal:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: react-nonverbal not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `step-prior:shuffled` | auroc | 0.464 | [0.440, 0.489] | FAIL | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `action-fusion:shuffled` | auroc | 0.493 | [0.461, 0.526] | PASS (Yes) | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `fusion:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
 
 ## 6. Judge Diagnostics & Answer Distributions
 
