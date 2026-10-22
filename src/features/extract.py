@@ -96,7 +96,7 @@ def run_extraction(
 
             item_t0 = time.time()
             try:
-                if encoder_id == "siglip-b16-224":
+                if encoder_id in ("siglip-b16-224", "siglip-b16-224-u9"):
                     window = item.action_window_sec
                 else:
                     window = item.reaction_window_sec

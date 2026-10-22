@@ -269,7 +269,21 @@ The VLM judge should be strong here, because the failure is visible. That is the
   - OXE files named `…_index_<n>.mp4` are original episodes; `…_attempt_<k>_score_<s>.mp4` are clipped versions of them.
   - `robo_arena` files are named `<rollout uuid>_<policy>_<camera>.mp4`, with several camera views per rollout.
   - In 800 sampled test rows: OXE originals had rewards 1–5 (rewards below 5 are counterfactual-instruction relabels); attempts 1–4; `robo_arena` 1–5.
-- **Wave D's vision-only labels, groups, filters and sampling are pinned in `04_wave_d_robot_check.md` §2.1.** The whole dataset is downloaded (Issue 9 option B: 54,140 files, 43,204,474,744 bytes). The schema as downloaded is recorded here by guide item D3.
+- **Wave D's vision-only labels, groups, filters and sampling are pinned in `04_wave_d_robot_check.md` §2.1.** The whole dataset is downloaded (Issue 9 option B: 54,140 files, 43,204,474,744 bytes).
+
+### Schema (as downloaded, October 22, 2026)
+
+- **Files and bytes:** 54,140 files total, 43,204,474,744 bytes, 54,135 `.mp4` video files, revision `469b9af76e8539e8d2ac553b081307738fd92ca5`.
+- **Counts per split:**
+  - `train`: 45,072 videos, 1 `metadata.jsonl` (sha256 `f0a21f02dce886446c28a92e5203c49de068bacd81df9011fbd824e567ab2312`)
+  - `val`: 6,232 videos, 1 `metadata.jsonl` (sha256 `73710f1ad522050b46e0b7f6e0ca35d6e7c0c61221b20f3f239b2dee878fdaec`)
+  - `test`: 2,831 videos, 1 `metadata.jsonl` (sha256 `3901cea9a7981d2e2d9fde4225a4b2ff0ebf2f4af69fc96972a2cfbe557db0cd`)
+- **Metadata field names:**
+  - `file_name`: relative path to video file under split directory (e.g. `austin_sirius_dataset_converted_externally_to_rlds/...mp4`). Note: the viewer API previewed this as `video`, but the actual on-disk metadata key is `file_name`. `src/sources/roboreward.py` resolves `file_name` (falling back to `video`).
+  - `task`: language instruction string.
+  - `reward`: integer rubric score (1 to 5).
+  - `gpt5_mini_check`: verification text or null.
+- **Duration range:** 0.9s to 82.7s (mean ~31s across sampled episodes).
 
 ## The HoloAssist pretraining pool (`holoassist_pool`, Wave D)
 

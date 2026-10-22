@@ -14,8 +14,6 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 8 was decided October 21: option A, by the maintainer in chat.** The Wave D spec is written (`04_wave_d_robot_check.md`).
-  - **Issue 9 was decided October 21: option B** (the full RoboReward download, 43.2 GB; RoboReward-8B not run). Nothing in the queue is gated any more.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below):
@@ -25,6 +23,7 @@
   - Issue 7 (step-prior and the ablation Δ, October 20, A11);
   - Issue 6 (the audible-session set, October 21, A12–A13).
   - Issue 8 (Wave D go: option A, spec written, October 21).
+  - Issue 9 (full RoboReward download verified, October 22, D3).
 
 **October 21, 2026: designer verification of A10, A9b, A11, A12, A13 and A14** (each item's code and outputs read against its contract; the key numbers recomputed independently from the caches).
 - **Verified correct:**
@@ -234,10 +233,14 @@ Your selection: _____
 
 ### Issue 9: Wave D needs RoboReward on disk: how much to download, and whether to run the RoboReward-8B reference
 
-**Status**: ✅ **Decided: option B, by the maintainer in chat, October 21, 2026** (*"For issue 9, lets go with Option B"*).
-- **What it means:** the whole dataset at the pinned revision is downloaded with one `snapshot_download`: **54,140 files, 43,204,474,744 bytes** (54,135 videos). RoboReward-8B is reported as `not run`.
-- **Why B over A** (designer, in chat): the experiment reads exactly the same videos either way. B costs about 20 minutes more at the ~37 MB/s the HoloAssist download achieved, and 40 GB of a 1.3 TiB disk. In return there is no file-selection code to get wrong, and val and the full train split stay on hand for later specs.
-- **Implementation:** guide items D2 (the tool) and D3 (the download). The entry moves to 🧪 Resolved when D3 lands.
+**Status**: 🧪 **Resolved (October 22, 2026, D3)**
+- **Downloaded and verified:** 54,140 files, 43,204,474,744 bytes, 54,135 `.mp4` video files at revision `469b9af76e8539e8d2ac553b081307738fd92ca5`.
+- **Metadata sha256:**
+  - train: `f0a21f02dce886446c28a92e5203c49de068bacd81df9011fbd824e567ab2312`
+  - val: `73710f1ad522050b46e0b7f6e0ca35d6e7c0c61221b20f3f239b2dee878fdaec`
+  - test: `3901cea9a7981d2e2d9fde4225a4b2ff0ebf2f4af69fc96972a2cfbe557db0cd`
+- **Free disk space after download:** 1,135.5 GiB (≥ 50 GiB rule satisfied).
+- **RoboReward-8B reference:** deferred (not run).
 
 *Filed by the designer with the Wave D spec, October 21, 2026.*
 
@@ -451,6 +454,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 **Wave D:**
 - D1 — The HoloAssist pretraining pool, the reaction labeler and the pseudo-labels — git log --grep "(d1)" — 20,000 pool items (104 mistakes, 0.52% natural rate, 0 audible overlap); siglip & e2v features 20,000/20,000 (0 exclusions, 0.0%); refit labeler reproduces reference AUROC 0.6539 [0.6257, 0.6749] on holoassist_audible test split; pseudo-label-quality:all AUROC 0.6210 [0.5684, 0.6739], pseudo-label-quality unseen null (all 5,682 items correct; test split took all mistakes); battery --slow exit 0.
 - D2 — The Wave D code: transfer.prior_lr, heads, curve, encoder siglip-b16-224-u9, sources.roboreward, tools/download_roboreward.py, h3_verdict and tools/report_wave_d.py — git log --grep "(d2)" — prior_lr with w0=None matches sklearn LogisticRegression test AUROC within 1e-4; 21 synthetic D2 unit tests pass; G1–G3 exit 0 (104 fast passed 3/3).
+- D3 — RoboReward: the full download, items, split, robot features and the judge-large reference — git log --grep "(d3)" — full download verified at 54,140 files, 43,204,474,744 bytes, 54,135 .mp4 files (revision 469b9af76e8539e8d2ac553b081307738fd92ca5, 1135.5 GiB free); items/roboreward/ built (4,000 train pool [2,000 success, 2,000 failure, shortfall 0], 1,517 test [527 success, 990 failure], 0 straddling groups); splits/roboreward.json generated; siglip-b16-224-u9 features extracted for all 5,517 items (0 exclusions, 0.0%); judge-large (gemma4:26b) reference evaluated on all 1,517 test items (0 exclusions, 100.0% coverage); G1–G4 exit 0.
 
 ---
 

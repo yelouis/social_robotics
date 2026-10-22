@@ -108,12 +108,12 @@
 
 ### 1.4 Gates (run bare October 21, 2026, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on `d6d9c54` |
+| # | Gate | Command | Result on `d6d9c54` (updated D3) |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
 | G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **104 passed**, 3 runs out of 3 |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (121 s); `memguard --status`: 53.1 GB, pressure 1, lock free |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **10 passed** (99 s); `memguard --status`: 30.7 GB, pressure 1, lock free |
 
 ### 1.5 Reference values to reproduce
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import subprocess
@@ -9,7 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from config import DATA_ROOT
-from harness.items import Item, validate_items
+from harness.items import Item, validate_items, write_items
+from harness.splits import make_group_split
 
 
 def get_roboreward_dir() -> Path:
@@ -116,6 +119,7 @@ def build_roboreward_items(
                             records.append(d)
 
     skip_counts: Dict[str, int] = defaultdict(int)
+    source_outcome_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     candidates: List[Item] = []
 
     for rec in records:
@@ -123,7 +127,7 @@ def build_roboreward_items(
         if split not in ("train", "test"):
             continue
 
-        video_field = rec.get("video", "")
+        video_field = rec.get("file_name") or rec.get("video", "")
         task = rec.get("task", "").strip()
         reward = rec.get("reward")
         if reward is None:
@@ -133,10 +137,9 @@ def build_roboreward_items(
         file_stem = rec.get("file_stem") or Path(video_field).stem
         source = rec.get("source")
         if not source:
-            # Try to infer source from path or file_stem
             p_parts = Path(video_field).parts
-            if len(p_parts) > 1 and p_parts[0] != split:
-                source = p_parts[0]
+            if len(p_parts) > 1:
+                source = p_parts[1] if p_parts[0] == split else p_parts[0]
             elif "robo_arena" in file_stem:
                 source = "robo_arena"
             else:
@@ -145,26 +148,31 @@ def build_roboreward_items(
         label, reason = parse_roboreward_label(source, file_stem, reward)
         if label is None:
             skip_counts[reason or "unhandled_label"] += 1
+            source_outcome_counts[source][f"excluded_{reason or 'unhandled'}"] += 1
             continue
 
-        # Duration
-        dur_val = rec.get("duration")
-        video_p = base_dir / video_field if video_field else (base_dir / split / f"{file_stem}.mp4")
+        outcome = "success" if label == 1 else "failure"
+        source_outcome_counts[source][outcome] += 1
+
+        # Resolve video path on disk
+        if (base_dir / split / video_field).exists():
+            video_p = base_dir / split / video_field
+        elif (base_dir / video_field).exists():
+            video_p = base_dir / video_field
+        elif video_field:
+            if Path(video_field).parts and Path(video_field).parts[0] == split:
+                video_p = base_dir / video_field
+            else:
+                video_p = base_dir / split / video_field
+        else:
+            video_p = base_dir / split / f"{file_stem}.mp4"
 
         if check_paths and not video_p.exists():
             skip_counts["missing_video"] += 1
             continue
 
-        if dur_val is None:
-            if check_paths and video_p.exists():
-                try:
-                    dur_val = get_video_duration(video_p)
-                except Exception:
-                    skip_counts["ffprobe_error"] += 1
-                    continue
-            else:
-                dur_val = 5.0
-        duration = float(dur_val)
+        dur_val = rec.get("duration")
+        duration = float(dur_val) if dur_val is not None else 0.0
 
         group_id = derive_roboreward_group_id(source, file_stem)
         item_id = f"roboreward:{split}:{file_stem}"
@@ -176,6 +184,7 @@ def build_roboreward_items(
             "raw_reward": reward,
             "task": task,
             "split": split,
+            "_needs_duration": (dur_val is None),
         }
 
         item = Item(
@@ -237,6 +246,29 @@ def build_roboreward_items(
     all_items = train_pool + test_items
     all_items.sort(key=lambda x: x.item_id)
 
+    # Probe duration concurrently for items that need it
+    items_needing_dur = [it for it in all_items if it.meta.pop("_needs_duration", False)]
+    if items_needing_dur:
+        if check_paths:
+            def _probe(it: Item) -> Tuple[str, float]:
+                try:
+                    d = get_video_duration(it.video_path)
+                except Exception:
+                    d = 5.0
+                return it.item_id, d
+
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                dur_results = dict(pool.map(_probe, items_needing_dur))
+
+            for it in items_needing_dur:
+                d = dur_results.get(it.item_id, 5.0)
+                it.action_window_sec = [0.0, round(d, 3)]
+                it.reaction_window_sec = [0.0, round(d, 3)]
+        else:
+            for it in items_needing_dur:
+                it.action_window_sec = [0.0, 5.0]
+                it.reaction_window_sec = [0.0, 5.0]
+
     errors = validate_items(all_items, check_paths=check_paths)
     if errors:
         raise ValueError(f"RoboReward item validation failed: {errors[:5]}")
@@ -251,12 +283,15 @@ def build_roboreward_items(
         "candidates_total": len(candidates),
         "train_candidates": len(train_cands),
         "test_candidates": len(test_cands),
+        "counts_by_source_outcome_reason": {src: dict(cnts) for src, cnts in sorted(source_outcome_counts.items())},
         "straddling_groups_count": len(straddling),
         "straddling_train_items_removed": len(train_cands) - len(train_pool_eligible),
         "train_pool_eligible": len(train_pool_eligible),
         "train_pool_sampled": len(train_pool),
         "train_pool_success": len(sampled_succ),
         "train_pool_failure": len(sampled_fail),
+        "train_pool_shortfall_success": max(0, train_pool_cap_per_class - len(sampled_succ)),
+        "train_pool_shortfall_failure": max(0, train_pool_cap_per_class - len(sampled_fail)),
         "test_items": len(test_items),
         "test_success": sum(1 for it in test_items if it.label == 1),
         "test_failure": sum(1 for it in test_items if it.label == 0),
@@ -268,3 +303,43 @@ def build_roboreward_items(
     stats["excluded_partial_progress"] = skip_counts.get("partial_progress_3_or_4", 0)
 
     return all_items, stats, split_map
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build RoboReward items and splits.")
+    parser.add_argument("--build", action="store_true", help="Build items.jsonl, stats.json, and splits/roboreward.json")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for train pool sampling")
+    parser.add_argument("--force-split", action="store_true", help="Force overwrite splits/roboreward.json if exists")
+    parser.add_argument("--no-check-paths", action="store_true", help="Disable checking video path existence")
+    args = parser.parse_args()
+
+    if args.build:
+        print("Building RoboReward items...")
+        items, stats, split_map = build_roboreward_items(
+            check_paths=not args.no_check_paths,
+            seed=args.seed,
+        )
+        out_dir = DATA_ROOT / "items" / "roboreward"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        items_path = out_dir / "items.jsonl"
+        stats_path = out_dir / "stats.json"
+
+        write_items(items, items_path)
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(stats, f, indent=2)
+        print(f"Wrote {items_path} ({len(items)} items) and {stats_path}")
+
+        print("Generating splits/roboreward.json...")
+        split_data = make_group_split(
+            items,
+            "roboreward",
+            official=split_map,
+            source="roboreward_official_train_test",
+            seed=args.seed,
+            force=args.force_split,
+        )
+        print(f"Split generated: {len(split_data['train'])} train, {len(split_data['test'])} test. sha256={split_data['sha256']}")
+
+
+if __name__ == "__main__":
+    main()
