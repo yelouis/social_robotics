@@ -2,7 +2,7 @@
 
 **What this answers:** does pre-training a success detector on **reaction-labeled human task video** make a **robot** success detector more accurate when only a few robot labels exist? This is the "robots can learn from vlogs" promise of `00_thesis.md` H3, tested offline. No robot is involved.
 
-**Status:** pre-registered October 21, 2026 (the maintainer chose Issue 8 option A). **Every rule below, including the pass and null rules and their interpretations, is fixed before any robot data is downloaded.** It changes only through a dated decision-log entry in `00_thesis.md`. The build spec is [`agent_execution_guide.md`](agent_execution_guide.md) (items D1–D6). The download is **Issue 9**.
+**Status:** pre-registered October 21, 2026 (the maintainer chose Issue 8 option A). **Every rule below, including the pass and null rules and their interpretations, is fixed before any robot data is downloaded.** It changes only through a dated decision-log entry in `00_thesis.md`. The build spec is [`agent_execution_guide.md`](agent_execution_guide.md) (items D1–D4). The download is **Issue 9: option B** (the full dataset).
 
 **Honest expectation, written before the run:**
 - Wave A's reaction signal is modest (`holoassist_audible` ablation gain +0.021 [0.006, 0.034]) and is mostly *whether the instructor spoke* (`00_thesis.md` entry 21).
@@ -25,7 +25,7 @@
 
 ### 2.1 Robot: RoboReward (`dataset = roboreward`)
 
-- **Source:** `teetone/RoboReward` (Hugging Face; CC-BY-4.0), **revision `469b9af76e8539e8d2ac553b081307738fd92ca5`**, stored under `DATA_ROOT/raw/roboreward/`. What is downloaded is **Issue 9**.
+- **Source:** `teetone/RoboReward` (Hugging Face; CC-BY-4.0), **revision `469b9af76e8539e8d2ac553b081307738fd92ca5`**, stored under `DATA_ROOT/raw/roboreward/`. **The whole dataset is downloaded** (Issue 9 option B, October 21): 54,140 files and 43,204,474,744 bytes, through one `huggingface_hub.snapshot_download(repo_id="teetone/RoboReward", repo_type="dataset", revision=<above>, local_dir=DATA_ROOT/raw/roboreward)`. Videos this spec does not select stay on disk, unused.
 - **Splits used:**
   - RoboReward `train` → the **robot train pool**;
   - RoboReward `test` → **evaluation**;
@@ -103,7 +103,7 @@
 - **Reference lines** (context, with no verdict):
   - **`robot-full`:** `w0 = 0` fit on the whole 4,000-item robot train pool;
   - **`judge-large`:** `gemma4:26b`, zero-shot on the test set, under the §8 rules of `03_eval_harness.md` (4 frames over `[0, D]`, the shared-model options, never unloaded by us). The `context_text` is the instruction, and the **question, verbatim**, is `Did the robot complete the task successfully by the end of the video?`;
-  - **`roboreward-8b`:** a `not run` row unless Issue 9 option C is selected.
+  - **`roboreward-8b`:** a `not run` row with the notes `not run: RoboReward-8B is Qwen3-VL-based and needs a transformers newer than the frozen 4.46.3 (Issue 9 chose B)`.
 - **The leak check:** `detector:none:N=1000:shuffled`. Each draw's robot labels are permuted (`default_rng(1000·N + r + 7)`) before fitting. It fails iff `ci_low > 0.5` (`03_eval_harness.md` §11.9).
 - **Scorecard rows** (`hypothesis = "H3"`, `dataset = "roboreward"`, `split = "test"`):
 

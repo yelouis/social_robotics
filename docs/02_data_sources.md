@@ -269,7 +269,7 @@ The VLM judge should be strong here, because the failure is visible. That is the
   - OXE files named `…_index_<n>.mp4` are original episodes; `…_attempt_<k>_score_<s>.mp4` are clipped versions of them.
   - `robo_arena` files are named `<rollout uuid>_<policy>_<camera>.mp4`, with several camera views per rollout.
   - In 800 sampled test rows: OXE originals had rewards 1–5 (rewards below 5 are counterfactual-instruction relabels); attempts 1–4; `robo_arena` 1–5.
-- **Wave D's vision-only labels, groups, filters and sampling are pinned in `04_wave_d_robot_check.md` §2.1.** The download is Issue 9. The schema as downloaded is recorded here by guide item D3.
+- **Wave D's vision-only labels, groups, filters and sampling are pinned in `04_wave_d_robot_check.md` §2.1.** The whole dataset is downloaded (Issue 9 option B: 54,140 files, 43,204,474,744 bytes). The schema as downloaded is recorded here by guide item D3.
 
 ## The HoloAssist pretraining pool (`holoassist_pool`, Wave D)
 

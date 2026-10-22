@@ -189,7 +189,8 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **The H3 offline pass rule and its four-way interpretation table** are written before any robot data is downloaded.
     - **The honest expectation is a null.**
     - **The download is Issue 9.**
+24. **Issue 9 → B** (maintainer, in chat): download the whole of RoboReward (43.2 GB) at the pinned revision. RoboReward-8B is not run, because it would break the frozen dependencies.
 
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** (how much of RoboReward to download, and whether to run RoboReward-8B) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is decided (B: the full RoboReward download). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: A15 report fix, then Wave D, the offline robot check (D1 → D2 → D3 → D4), October 21, 2026
+# Agent Execution Guide: Active Build: A15 report fix, then Wave D, the offline robot check (D1 → D2 → D3 → D4), October 21, 2026 (Issue 9 = B)
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -9,7 +9,7 @@
   - **A15:** a small report fix carried over from the last guide;
   - **D1:** a HoloAssist pretraining pool of 20,000 actions, labeled by the reaction model;
   - **D2:** the Wave D code (the prior-regularized learner, the robot encoder, the RoboReward adapter and downloader, and the verdict and report), tested on synthetic data only;
-  - **D3:** download RoboReward and build its items, features and judge reference. **This waits on the maintainer's Issue 9;**
+  - **D3:** download **all** of RoboReward (Issue 9 = B: 43.2 GB) and build its items, features and judge reference;
   - **D4:** run the pre-registered curve, write the report and close out.
 - **The contract for D1–D4 is [`04_wave_d_robot_check.md`](04_wave_d_robot_check.md).** It is pre-registered: its pass rule and interpretations are fixed before any robot data exists. **Do not change them, and do not re-run with other settings after seeing a result.**
 
@@ -18,17 +18,17 @@
 2. [`00_thesis.md`](00_thesis.md): H3 and decision-log entries 20–23.
 3. [`03_eval_harness.md`](03_eval_harness.md): §3, §8 (judges, including the `roboreward` question and the shared `gemma4:26b` rules), §11.8–§11.9 and §12 (memory).
 4. [`02_data_sources.md`](02_data_sources.md): HoloAssist (`holoassist_audible`, `holoassist_pool`) and **RoboReward**.
-5. [`ongoing_general_errors.md`](ongoing_general_errors.md): §1, **Issue 9** (not yours to decide), and lessons L10–L14.
+5. [`ongoing_general_errors.md`](ongoing_general_errors.md): §1, **Issue 9** (decided: B), and lessons L10–L14.
 
 **The maintainer's words:**
 - *"The fundamental core of this project is to use human emotion as a policy for robot learning in addition to the traditional RL stack for robots. We want to add this additional reward signal and investigate if this additional reward signal helped the robot learn a task better and perhaps allow robots to train on much more data like vlogs or any POV youtube video."*
 - *"Ideally we should avoid human in the loop ratings because that is not scalable and we want to be able to somehow measure whether our thesis is working often."*
 - *"How is this any different from asking an LLM model what is socially appropriate…?"*
 - *"No need to open up a new branch, just push to the repo."*
-- **October 21, 2026:** *"For issue 8, lets go with Option A."*
+- **October 21, 2026:** *"For issue 8, lets go with Option A."* and *"For issue 9, lets go with Option B."*
 
 **Status:** **Active Build.** Next is **A15**.
-- **D3 is blocked until Issue 9 has a selection.** If you reach D3 and the `Your selection:` line of Issue 9 in `ongoing_general_errors.md` is still `_____`, **STOP**. Change only this guide's status line to `Paused before D3: waiting on Issue 9`, commit it as `docs(d3): paused on Issue 9`, push, and end.
+- **Nothing in this queue waits on the maintainer.** Issue 9 is decided (B: the full download).
 
 **Every path, number, field name, formula and literal string in this guide, in `03_eval_harness.md` and in `04_wave_d_robot_check.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
 
@@ -50,7 +50,7 @@
 3. **Dependencies are frozen.**
    - No new pip packages. `scipy` 1.13.1, `scikit-learn` 1.6.1 and `huggingface_hub` 0.36.2 are already installed.
    - Pull no Ollama models, and download no models.
-4. **Downloads:** the **only** authorized download is RoboReward, in D3, **in the mode Issue 9 selects**, at revision `469b9af76e8539e8d2ac553b081307738fd92ca5`, into `DATA_ROOT/raw/roboreward/`.
+4. **Downloads:** the **only** authorized download is **all of** RoboReward, in D3: `teetone/RoboReward` (dataset), revision `469b9af76e8539e8d2ac553b081307738fd92ca5`, into `DATA_ROOT/raw/roboreward/`. That is 54,140 files and 43,204,474,744 bytes.
    - The free space after the download must stay ≥ 50 GiB.
    - Never circumvent a login, gate or rate limit.
 5. **Data placement.** All data lives under `DATA_ROOT`. No video or audio on the internal disk. Never delete anything you did not create.
@@ -104,7 +104,7 @@
 | `holoassist_audible` items, split, features (SigLIP, e2v), judge caches | `DATA_ROOT/items/holoassist_audible/`, `splits/holoassist_audible.json`, `features/holoassist_audible/` | complete (A13) |
 | Per-session audibility | `DATA_ROOT/runs/holoassist_session_audibility.jsonl` | 1,673 sessions; 548 `audible: true` |
 | HoloAssist videos and labels | `DATA_ROOT/raw/holoassist/` | 2,111 videos |
-| RoboReward | `DATA_ROOT/raw/roboreward/` | **not downloaded** (Issue 9) |
+| RoboReward | `DATA_ROOT/raw/roboreward/` | **not downloaded yet.** D3 downloads all of it (Issue 9 = B). The SSD has 1.3 TiB free |
 
 ### 1.4 Gates (run bare October 21, 2026, with `TMPDIR` on the SSD; the regression bar)
 
@@ -132,7 +132,7 @@
 | A15 | The report generators: the computed `judge-large` caveat and the one-sided leak label | Carried over. Small and independent; it fixes Wave A's record |
 | D1 | The `holoassist_pool` (20,000 actions), its features, the reaction labeler and the pseudo-labels | It needs no download. Its ~4 h extraction runs while D2 is coded |
 | D2 | The Wave D code: `transfer.prior_lr`/`heads`/`curve`, encoder `siglip-b16-224-u9`, `sources.roboreward`, `tools/download_roboreward.py`, `h3_verdict` and the report generator. Synthetic tests only | It needs no data, so it can land before Issue 9 is decided. D3 and D4 run it |
-| D3 | **Gated on Issue 9.** Download RoboReward; build its items and split; extract `siglip-b16-224-u9`; the `judge-large` reference | It needs the maintainer's download decision and D2's code |
+| D3 | Download all of RoboReward (Issue 9 = B); build its items and split; extract `siglip-b16-224-u9`; the `judge-large` reference | It needs D2's code (the download tool, the adapter and the u9 encoder) |
 | D4 | Fit the scaler and the heads; run the pre-registered curve; rows, report and verdict; close out | It needs D1 (pseudo-labels) and D3 (robot features) |
 
 ---
@@ -280,7 +280,7 @@
    - it loads the pool features and pseudo-labels, the robot features and `splits/roboreward.json`;
    - it fits the scaler and the heads, then runs §5's draws (`N` × 20 × 4 priors);
    - it computes the `mean20` AUROCs, gains, `react_minus_shuffled`, `robot-full` and the leak check with the paired group bootstrap;
-   - it writes `curve_scores.npz` (every draw's test scores) and appends the §5 rows. The `judge-large` row comes from the judge cache, through the existing `build_test_only_judge_row` logic. `roboreward-8b` is `not run` with its reason unless Issue 9 option C was selected;
+   - it writes `curve_scores.npz` (every draw's test scores) and appends the §5 rows. The `judge-large` row comes from the judge cache, through the existing `build_test_only_judge_row` logic. `roboreward-8b` is `not run`, with the reason pinned in `04` §5;
    - it ends with the count line.
 6. **`src/sources/roboreward.py`:**
    - **the pure rule functions:** `classify(split, source, file_stem, reward) -> ("success"|"failure"|"excluded", reason)`, `group_of(source, file_stem)` and `parse_row(row) -> (split, source, stem, task, reward)`. Make the file-path field name a module constant, verified against the real schema in D3;
@@ -288,14 +288,12 @@
    - **`build_items(...)`** (durations via `ffprobe`) → `items/roboreward/{items.jsonl,stats.json}`;
    - **the split file through `make_group_split(official=…)`**, with the §2.1 straddle rule applied **before** sampling;
    - **CLI:** `python -m sources.roboreward --build`.
-7. **`tools/download_roboreward.py --mode selective|full`** (revision pinned):
-   - **`selective`:**
-     - fetch the 3 `metadata.jsonl` files with `huggingface_hub.hf_hub_download`;
-     - select the eligible test files and the sampled train pool **using `sources.roboreward`'s functions**;
-     - download those files (resumable; skip existing files of the right size);
-     - write `DOWNLOAD.json` (revision, the metadata files' sha256, file count, bytes, `free_gib_after`);
-   - **`full`:** `snapshot_download` at the revision, then the same `DOWNLOAD.json`;
-   - it refuses to run unless `--i-have-issue-9-selection A|B|C` is passed. **D2 never runs it against the network.**
+7. **`tools/download_roboreward.py`** (Issue 9 = B; there is no selective mode):
+   - **First, check the disk rule:** free space must be ≥ 43,204,474,744 bytes + 50 GiB, else STOP.
+   - Then `huggingface_hub.snapshot_download(repo_id="teetone/RoboReward", repo_type="dataset", revision="469b9af76e8539e8d2ac553b081307738fd92ca5", local_dir=DATA_ROOT/raw/roboreward)`. It is resumable: rerunning it skips completed files.
+   - **Then verify against the Hub's metadata at that revision** (`HfApi().dataset_info(…, files_metadata=True)`): every one of the 54,140 files exists locally with the Hub's byte size. Use `data_glob` to count the local `.mp4` files, and expect 54,135.
+   - **Write `DATA_ROOT/raw/roboreward/DOWNLOAD.json`:** `{repo_id, revision, n_files, bytes, n_mp4, metadata_sha256: {train, val, test}, downloaded_at, free_gib_after}`.
+   - It ends with the count line. **D2 never runs it against the network.**
 8. **`tools/report_wave_d.py`:**
    - **`h3_verdict(rows) -> List[str]`**, exactly per `04` §6: the supported/not-supported line plus exactly one interpretation line, chosen in table order;
    - **the report** `docs/evals/<YYYY-MM-DD>_wave_d_robot_check.md`:
@@ -327,28 +325,31 @@
   - the draws are paired (the same indices for all priors);
   - the leak check is at chance;
   - the bootstrap is deterministic.
-- **`tools/download_roboreward.py`:** with `hf_hub_download` monkeypatched to a local fixture, `selective` selects exactly the expected files, and refuses to run without the Issue 9 flag.
+- **`tools/download_roboreward.py`:** with `snapshot_download` and `dataset_info` monkeypatched to a local fixture of 5 files:
+  - a complete fixture passes;
+  - a fixture with one file missing **fails** the verification;
+  - a fixture with one file truncated **fails** it;
+  - a fake free-space reading below the disk rule makes it refuse to start.
 - G1–G3 green.
 
 **Blast radius:** `src/features/{visual,extract}.py`, `src/judge/vlm_judge.py`, `src/transfer/{prior_lr,heads,curve}.py` (new), `src/sources/roboreward.py` (new), `tools/download_roboreward.py` (new), `tools/report_wave_d.py` (new), and the new tests; `ongoing_general_errors.md` §3; this guide's §1.4.
 
 ---
 
-### D3: RoboReward: download, items, split, robot features and the `judge-large` reference (**gated on Issue 9**)
+### D3: RoboReward: the full download, items, split, robot features and the `judge-large` reference
 
-**What this means for the maintainer:** it puts real robot episodes on disk in the amount you approve, and turns them into the labeled set the robot check is scored on.
+**What this means for the maintainer:** it puts all of RoboReward on disk (your Issue 9 choice: 43.2 GB) and turns the part the spec uses into the labeled set the robot check is scored on.
 
-**Start condition:** D2 is pushed **and** Issue 9 has a selection. Otherwise follow the Status-line STOP rule at the top.
+**Start condition:** D2 is pushed.
 
 **Implementation:**
 1. `memguard --status` (record it).
-2. **Download:**
+2. **Download** (run it detached; about 20 min at the ~37 MB/s seen for HoloAssist, possibly longer):
    ```bash
-   python tools/download_roboreward.py --mode <selective|full> --i-have-issue-9-selection <A|B|C>
+   ./venv/bin/python tools/daemonize.py "$DATA_ROOT/runs/download_roboreward.log" bash tools/run_supervised.sh "$DATA_ROOT/raw/roboreward/progress.json" ./venv/bin/python tools/download_roboreward.py
    ```
-   - `selective` for A, or for C built on A; `full` for B, or for C built on B.
-   - Run it detached if it lasts more than 30 min.
-   - Check `DOWNLOAD.json` and `free_gib_after ≥ 50`.
+   - Confirm `PPID 1`.
+   - Check that `DOWNLOAD.json` shows 54,140 files, 43,204,474,744 bytes and 54,135 `.mp4` files, and that `free_gib_after ≥ 50`.
 3. **Record the schema** in `02_data_sources.md` → RoboReward, as **"Schema (as downloaded, <date>)"**:
    - the `metadata.jsonl` field names, including the file-path field (fix `sources.roboreward`'s constant if it differs, and say so in the commit body);
    - the counts per split;
@@ -359,7 +360,6 @@
    - `stats.json` with counts per source × rule outcome × reason, the straddle removals and any pool shortfall.
 5. **Extract** (detached): `python -m features.extract --dataset roboreward --encoder siglip-b16-224-u9` (all items).
 6. **The `judge-large` reference** (detached): `python -m judge.vlm_judge --dataset roboreward --split test --backend ollama-large`.
-7. **If Issue 9 = C,** STOP after step 6 and file **Issue 10**: RoboReward-8B needs a dependency change that this guide does not specify, and the designer must spec it.
 
 **Validation:**
 - **No OXE original with `reward < 5` and no `reward` 3 or 4** appears among the items. Assert it in a slow test over the real `items.jsonl`.
@@ -370,7 +370,7 @@
 - **Coverage:** u9 feature exclusions ≤ 5%; the judge covers ≥ 90% of the test items.
 - G1–G4 green.
 
-**Blast radius:** `src/sources/roboreward.py` (the field constant, if needed), `splits/roboreward.json` (new), `docs/02_data_sources.md`; `ongoing_general_errors.md` §3; this guide's §1.4.
+**Blast radius:** `src/sources/roboreward.py` (the field constant, if needed), `splits/roboreward.json` (new), `docs/02_data_sources.md`; `ongoing_general_errors.md` (§3, and **Issue 9 → 🧪 Resolved** with the `DOWNLOAD.json` numbers); this guide's §1.4.
 
 ---
 
@@ -402,7 +402,7 @@
 
 | Work | Trigger | Who writes the spec |
 |---|---|---|
-| **RoboReward-8B reference** | Issue 9 option C **and** a designer spec for the dependency change | The designer |
+| **RoboReward-8B reference** | Not selected (Issue 9 = B). It would need a new maintainer decision to unfreeze `transformers`, plus a designer spec | The designer |
 | **Wave B: verdict-video H1 pilot**, DW1 | **Issue 1** selected **and** a Wave B spec (which restates the kill rule in ablation-gain terms) | The designer |
 | **Online H3** (training a policy with the reward) | After the offline result, and a cloud CUDA GPU | The designer |
 | **Face encoder**, DW2 · **H2 transfer**, DW3 · **Ego4D false-positive set**, DW4 | Wave B | The designer |
@@ -451,7 +451,7 @@ Also not to do:
   - commit to `main`;
   - Issue 5 → B.
 - **October 20:** Issue 6 → A (a fresh sample); Issue 7 → A; the pass bar and the Wave D trigger use the ablation gain.
-- **October 21:** **Issue 8 → A** (write and run Wave D).
+- **October 21:** **Issue 8 → A** (write and run Wave D); **Issue 9 → B** (the full RoboReward download; RoboReward-8B not run).
 
 ### 5.4 Invariants
 
@@ -500,10 +500,9 @@ Also not to do:
 ## 8. THE LOOP
 
 ```
-(1) Next item in §2 order: A15, D1, D2, D3 (only if Issue 9 is selected),
-    D4. If D3 is next and Issue 9 is unselected: pause per the Status line,
-    then end. If all are done: STOP (D4's close-out). Never start §4
-    work. Never fill in a `Your selection:` line.
+(1) Next item in §2 order: A15, D1, D2, D3, D4. If all are done: STOP
+    (D4's close-out). Never start §4 work. Never fill in a
+    `Your selection:` line.
 (2) Read the item and every contract section it names (04 in full for D1–D4).
 (3) RED FIRST: run the item's new tests; record the failure.
 (4) Build only what the item says.
@@ -521,10 +520,10 @@ Also not to do:
 
 ## 9. Definition of Done
 
-- [ ] A15, D1, D2, D3 and D4 each landed as one pushed commit, with red and green runs recorded (or the guide is paused before D3 on Issue 9).
+- [ ] A15, D1, D2, D3 and D4 each landed as one pushed commit, with red and green runs recorded.
 - [ ] The A15 report fixes are in: no report hard-codes 0.489, and no below-chance shuffled control is shown as `FAIL`.
 - [ ] D1: the pool has 20,000 items; the labeler reproduces 0.6539; the pseudo-label rows are written; `holoassist` and `holoassist_audible` rebuild byte-identically.
 - [ ] D2: every synthetic test passes, including the `sklearn` equivalence and the falsifying random-prior test.
-- [ ] D3: RoboReward is on disk in the approved mode; the label rule is enforced on the real items; the groups and split are verified.
+- [ ] D3: all of RoboReward is on disk and verified (54,140 files, 43,204,474,744 bytes); the label rule is enforced on the real items; the groups and split are verified; Issue 9 is moved to 🧪 Resolved.
 - [ ] D4: every §5 row exists; the leak check passes; the report's verdict equals `h3_verdict`; there are no re-runs with changed settings.
 - [ ] This guide is rewritten to **Queue Complete** (naming what it waits on). **Then stop. Do not invent work.**

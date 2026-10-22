@@ -15,7 +15,7 @@
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
   - **Issue 8 was decided October 21: option A, by the maintainer in chat.** The Wave D spec is written (`04_wave_d_robot_check.md`).
-  - **Issue 9 (new, October 21):** how much of RoboReward to download, and whether to run the RoboReward-8B reference. It gates guide items D3 onward.
+  - **Issue 9 was decided October 21: option B** (the full RoboReward download, 43.2 GB; RoboReward-8B not run). Nothing in the queue is gated any more.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below):
@@ -234,7 +234,12 @@ Your selection: _____
 
 ### Issue 9: Wave D needs RoboReward on disk: how much to download, and whether to run the RoboReward-8B reference
 
-**Status**: ⚠️ Confirmed Unresolved — filed by the designer with the Wave D spec, October 21, 2026. Downloads are frozen until you approve one. Items D1 and D2 (HoloAssist work plus code) proceed without it; D3 onward wait on it.
+**Status**: ✅ **Decided: option B, by the maintainer in chat, October 21, 2026** (*"For issue 9, lets go with Option B"*).
+- **What it means:** the whole dataset at the pinned revision is downloaded with one `snapshot_download`: **54,140 files, 43,204,474,744 bytes** (54,135 videos). RoboReward-8B is reported as `not run`.
+- **Why B over A** (designer, in chat): the experiment reads exactly the same videos either way. B costs about 20 minutes more at the ~37 MB/s the HoloAssist download achieved, and 40 GB of a 1.3 TiB disk. In return there is no file-selection code to get wrong, and val and the full train split stay on hand for later specs.
+- **Implementation:** guide items D2 (the tool) and D3 (the download). The entry moves to 🧪 Resolved when D3 lands.
+
+*Filed by the designer with the Wave D spec, October 21, 2026.*
 
 **Facts (October 21, 2026; Hugging Face metadata only, nothing downloaded):**
 1. **`teetone/RoboReward`** (dataset; CC-BY-4.0; revision `469b9af76e8539e8d2ac553b081307738fd92ca5`) is **43.2 GB** in total:
@@ -286,7 +291,7 @@ Your selection: _____
 
 **Recommendation:** **A.** RoboReward-8B is context, not a control; its paper reports its own numbers.
 
-Your selection: _____
+Your selection: **B** (maintainer, in chat, October 21, 2026)
 
 ---
 
@@ -452,5 +457,5 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Started:** Issue 8 = A; spec `04_wave_d_robot_check.md`; data waits on **Issue 9** |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Started:** Issue 8 = A; spec `04_wave_d_robot_check.md`; Issue 9 = B (full download) |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |
