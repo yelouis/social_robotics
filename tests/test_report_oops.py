@@ -129,3 +129,13 @@ def test_prediction_check_strong_judge_nonzero_delta():
     assert '- **Clause 2, "Δ ≈ 0":** ablation Δ 0.050 [0.020, 0.080] → did not hold' in text
     # Context line
     assert '- **Context, no verdict:** fusion − action_best 0.050 [0.020, 0.080]' in text
+
+
+def test_leak_check_label_oops():
+    from harness.reporting import leak_check_label
+
+    assert leak_check_label(0.51, 0.505, 0.53) == "FAIL: above chance (leak)"
+    assert leak_check_label(0.464, 0.440, 0.489) == "below chance (one permutation; not a leak)"
+    assert leak_check_label(0.49, 0.46, 0.52) == "pass"
+    assert leak_check_label(None, None, None) == "— (not run)"
+

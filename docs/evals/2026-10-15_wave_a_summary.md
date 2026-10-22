@@ -189,14 +189,14 @@ All values, 95% CIs, item counts, exclusions, and scorecard timestamps from the 
 - **Clause 2, "reactions add to the action-only model":** ablation Δ not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) → not tested: not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
 - **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not testable: react-nonverbal, ablation Δ
 - **Context, no verdict:** fusion − action_best action_best=step-prior; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20); judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; step-prior 0.751 [0.726, 0.774]; action-fusion 0.681 [0.657, 0.706]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
-- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 on test items whose verb is not "drop".
+- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 [0.477, 0.502] on the 1818 test items whose verb is not "drop" (computed from judge/holoassist/gemma4_26b).
 
 **HoloAssist-Audible (`prediction_check_hidden`, from `docs/evals/2026-10-21_holoassist_audible_h1.md`):**
 - **Clause 1, "reaction-only beats action_best":** react-nonverbal 0.654 [0.626, 0.675] vs step-prior 0.737 → did not hold
 - **Clause 2, "reactions add to the action-only model":** ablation Δ 0.021 [0.006, 0.034] → held
 - **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not met
 - **Context, no verdict:** fusion − action_best -0.065 [-0.113, -0.025]; judge 0.528 [0.499, 0.560]; judge-large 0.516 [0.499, 0.533]; action-probe 0.576 [0.526, 0.623]; step-prior 0.737 [0.712, 0.765]; action-fusion 0.650 [0.599, 0.694]; react-spoke 0.665 [0.636, 0.691] (diagnostic: did the instructor speak); react-full 0.759 [0.728, 0.791] (leakage condition: the instructor's words; never a headline, §11.2).
-- **Caveat:** HoloAssist step text carries outcome information (0.737 [0.712, 0.765]); judge-large scores 0.489 on test items whose verb is not "drop".
+- **Caveat:** HoloAssist step text carries outcome information (0.737 [0.712, 0.765]); judge-large scores 0.498 [0.481, 0.514] on the 1361 test items whose verb is not "drop" (computed from judge/holoassist_audible/gemma4_26b).
 
 ### 8.3 Caveats
 

@@ -1,4 +1,5 @@
 # HoloAssist (Audible Sessions) H1 Evaluation Report (2026-10-21)
+*Updated 2026-10-21 (A15): judge-large caveat computed per dataset; shuffled controls labeled by the one-sided leak check (03_eval_harness.md §11.9). No result changed.*
 
 > [!NOTE]
 > **Caveat 1 (Pitch-Shifted Audio):**
@@ -57,7 +58,7 @@
 - **Clause 2, "reactions add to the action-only model":** ablation Δ 0.021 [0.006, 0.034] → held
 - **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not met
 - **Context, no verdict:** fusion − action_best -0.065 [-0.113, -0.025]; judge 0.528 [0.499, 0.560]; judge-large 0.516 [0.499, 0.533]; action-probe 0.576 [0.526, 0.623]; step-prior 0.737 [0.712, 0.765]; action-fusion 0.650 [0.599, 0.694]; react-spoke 0.665 [0.636, 0.691] (diagnostic: did the instructor speak); react-full 0.759 [0.728, 0.791] (leakage condition: the instructor's words; never a headline, §11.2).
-- **Caveat:** HoloAssist step text carries outcome information (0.737 [0.712, 0.765]); judge-large scores 0.489 on test items whose verb is not "drop".
+- **Caveat:** HoloAssist step text carries outcome information (0.737 [0.712, 0.765]); judge-large scores 0.498 [0.481, 0.514] on the 1361 test items whose verb is not "drop" (computed from judge/holoassist_audible/gemma4_26b).
 
 ## 3. Conditions Table (Test Split, N=1,420)
 
@@ -83,15 +84,15 @@
 
 ## 5. Shuffled-Label Controls
 
-Validation requirement: every `:shuffled` condition must have a 95% CI covering chance (0.50).
+Leak check (03_eval_harness.md §11.9): a shuffled control fails only if its ci_low > 0.5; one permutation below chance is not a leak.
 
-| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |
+| Condition | Metric | Value | 95% CI | Leak check | Notes |
 |---|---|---|---|---|---|
-| `action-probe:shuffled` | auroc | 0.490 | [0.455, 0.529] | PASS (Yes) | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
-| `react-nonverbal:shuffled` | auroc | 0.496 | [0.465, 0.526] | PASS (Yes) | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
-| `step-prior:shuffled` | auroc | 0.483 | [0.449, 0.510] | PASS (Yes) | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
-| `action-fusion:shuffled` | auroc | 0.491 | [0.455, 0.530] | PASS (Yes) | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
-| `fusion:shuffled` | auroc | 0.495 | [0.465, 0.528] | PASS (Yes) | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
+| `action-probe:shuffled` | auroc | 0.490 | [0.455, 0.529] | pass | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
+| `react-nonverbal:shuffled` | auroc | 0.496 | [0.465, 0.526] | pass | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
+| `step-prior:shuffled` | auroc | 0.483 | [0.449, 0.510] | pass | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
+| `action-fusion:shuffled` | auroc | 0.491 | [0.455, 0.530] | pass | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
+| `fusion:shuffled` | auroc | 0.495 | [0.465, 0.528] | pass | shuffled-label control; Issue 6 A: audible sessions (>= +3.5 dB; 02_data_sources.md) |
 
 ## 6. Judge Diagnostics & Answer Distributions
 

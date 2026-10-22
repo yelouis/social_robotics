@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 from pathlib import Path
 import re
@@ -11,6 +11,7 @@ import numpy as np
 
 from config import DATA_ROOT
 from harness.items import read_items
+from harness.reporting import leak_check_label
 from harness.splits import load_split
 from shared.fsutil import data_glob
 
@@ -173,10 +174,11 @@ def generate_oops_report(
     out_path: Optional[Path] = None,
     descriptions_path: Optional[Path] = None,
     corrected_date: Optional[str] = None,
-    updated_date: Optional[str] = None,
+    updated_date: Optional[str] = "2026-10-21",
+    updated_a15_date: Optional[str] = "2026-10-21",
 ) -> Path:
     root = data_root or DATA_ROOT
-    today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = date_str or "2026-10-10"
     corr_date = corrected_date or "2026-10-15"
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
 
@@ -380,6 +382,8 @@ def generate_oops_report(
     ]
     if updated_date:
         lines.append(f"*Updated {updated_date} (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*")
+    if updated_a15_date:
+        lines.append(f"*Updated {updated_a15_date} (A15): judge-large caveat computed per dataset; shuffled controls labeled by the one-sided leak check (03_eval_harness.md §11.9). No result changed.*")
     lines.extend([
         "",
         "## 1. Executive Summary & Prediction Check",
@@ -432,9 +436,9 @@ def generate_oops_report(
     lines.extend([
         "## 3. Shuffled-Label Controls",
         "",
-        "Validation requirement: every `:shuffled` condition must have a 95% CI covering chance (0.50).",
+        "Leak check (03_eval_harness.md §11.9): a shuffled control fails only if its ci_low > 0.5; one permutation below chance is not a leak.",
         "",
-        "| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |",
+        "| Condition | Metric | Value | 95% CI | Leak check | Notes |",
         "|---|---|---|---|---|---|",
     ])
     shuffled_conditions = [
@@ -451,12 +455,7 @@ def generate_oops_report(
             ci_low = r.get("ci_low")
             ci_high = r.get("ci_high")
             ci_s = f"[{ci_low:.3f}, {ci_high:.3f}]" if ci_low is not None and ci_high is not None else "—"
-            if r.get("value") is None:
-                covers_05 = "— (not run)"
-            elif ci_low is not None and ci_high is not None and ci_low <= 0.5 <= ci_high:
-                covers_05 = "PASS (Yes)"
-            else:
-                covers_05 = "FAIL (No)"
+            covers_05 = leak_check_label(r.get("value"), ci_low, ci_high)
             lines.append(f"| `{r['condition']}` | {r['metric']} | {val_s} | {ci_s} | {covers_05} | {r.get('notes', '')} |")
     lines.append("")
 
@@ -529,6 +528,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Oops! H1 evaluation report")
     parser.add_argument("--date", default=None, help="Report date (YYYY-MM-DD)")
     parser.add_argument("--updated-date", default=None, help="Update date (YYYY-MM-DD)")
+    parser.add_argument("--updated-a15-date", default="2026-10-21", help="A15 update date (YYYY-MM-DD)")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", help="Scorecard JSONL path")
     parser.add_argument("--out", default=None, help="Output markdown path")
     parser.add_argument("--descriptions", default="docs/evals/2026-10-10_oops_examples.tsv", help="Path to TSV containing example descriptions")
@@ -537,7 +537,8 @@ def main() -> None:
 
     generate_oops_report(
         date_str=args.date,
-        updated_date=args.updated_date,
+        updated_date=args.updated_date or "2026-10-21",
+        updated_a15_date=args.updated_a15_date,
         data_root=Path(args.data_root) if args.data_root else None,
         scorecard_path=Path(args.scorecard) if args.scorecard else None,
         out_path=Path(args.out) if args.out else None,

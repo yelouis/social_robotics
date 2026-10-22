@@ -223,3 +223,113 @@ def test_generate_holoassist_report_audible_synthetic(tmp_path):
     assert "Clause 1" in content
     assert "Clause 2" in content
 
+
+def test_leak_check_label():
+    from harness.reporting import leak_check_label
+
+    assert leak_check_label(0.51, 0.505, 0.53) == "FAIL: above chance (leak)"
+    assert leak_check_label(0.464, 0.440, 0.489) == "below chance (one permutation; not a leak)"
+    assert leak_check_label(0.49, 0.46, 0.52) == "pass"
+    assert leak_check_label(None, None, None) == "— (not run)"
+
+
+def test_judge_nondrop_caveat_computed(tmp_path):
+    """build a tmp_path DATA_ROOT holding 8 test items (4 drop, 4 not),
+    a split file and a judge-large cache where the 4 non-drop items are perfectly separated;
+    the caveat line contains 1.000 and on the 4 test items;
+    change one non-drop probability so that AUROC = 0.75, and the line contains 0.750.
+    """
+    data_root = tmp_path / "data"
+    splits_dir = tmp_path / "splits"
+    data_root.mkdir(parents=True)
+    splits_dir.mkdir(parents=True)
+
+    items_dir = data_root / "items" / "holoassist_test_ds"
+    items_dir.mkdir(parents=True)
+
+    items = []
+    # 8 items: 4 drop (2 pos, 2 neg), 4 non-drop (2 pos, 2 neg)
+    for i in range(8):
+        verb = "drop" if i < 4 else "place"
+        label = 1 if i % 2 == 0 else 0
+        item_id = f"holoassist_test_ds:video_{i}:0"
+        items.append({
+            "item_id": item_id,
+            "dataset": "holoassist_test_ds",
+            "group_id": f"group_{i}",
+            "video_path": f"/dummy/video_{i}.mp4",
+            "action_window_sec": [0.0, 1.0],
+            "reaction_window_sec": [0.0, 1.0],
+            "label": label,
+            "label_source": "test",
+            "context_text": "Task: test",
+            "meta": {"verb": verb},
+        })
+
+    with open(items_dir / "items.jsonl", "w", encoding="utf-8") as f:
+        for it in items:
+            f.write(json.dumps(it) + "\n")
+
+    import hashlib
+
+    canonical_content = json.dumps({"test": sorted([it["item_id"] for it in items]), "train": []}, sort_keys=True)
+    computed_sha = hashlib.sha256(canonical_content.encode("utf-8")).hexdigest()
+    split_data = {
+        "dataset": "holoassist_test_ds",
+        "sha256": computed_sha,
+        "train": [],
+        "test": [it["item_id"] for it in items],
+    }
+    with open(splits_dir / "holoassist_test_ds.json", "w", encoding="utf-8") as f:
+        json.dump(split_data, f)
+
+    judge_dir = data_root / "judge" / "holoassist_test_ds" / "gemma4_26b"
+    judge_dir.mkdir(parents=True)
+
+    # 4 non-drop items (indices 4, 5, 6, 7): labels are [1, 0, 1, 0]
+    # Perfect separation: pos items prob 0.9, neg items prob 0.1
+    cache_file = judge_dir / "cache_123456789abc.jsonl"
+    judge_rows = [
+        {"item_id": items[0]["item_id"], "judge_prob": 0.5},
+        {"item_id": items[1]["item_id"], "judge_prob": 0.5},
+        {"item_id": items[2]["item_id"], "judge_prob": 0.5},
+        {"item_id": items[3]["item_id"], "judge_prob": 0.5},
+        {"item_id": items[4]["item_id"], "judge_prob": 0.9},
+        {"item_id": items[5]["item_id"], "judge_prob": 0.1},
+        {"item_id": items[6]["item_id"], "judge_prob": 0.9},
+        {"item_id": items[7]["item_id"], "judge_prob": 0.1},
+    ]
+    with open(cache_file, "w", encoding="utf-8") as f:
+        for jr in judge_rows:
+            f.write(json.dumps(jr) + "\n")
+
+    rows = {
+        "step-prior": {"value": 0.75, "ci_low": 0.70, "ci_high": 0.80},
+    }
+
+    lines = prediction_check_hidden(rows, dataset="holoassist_test_ds", data_root=data_root, splits_dir=splits_dir)
+    caveat_line = next(line for line in lines if "Caveat:" in line)
+    assert "1.000" in caveat_line
+    assert "on the 4 test items" in caveat_line
+
+    # Now change one non-drop probability so AUROC = 0.75
+    # item 4 (label 1): 0.9, item 6 (label 1): 0.9
+    # item 5 (label 0): 0.1, item 7 (label 0): 0.5 (below 0.9, so 1 item tied or flipped)
+    # Let's say item 4 (label 1) is 0.4 (lower than item 7 at 0.5, higher than item 5 at 0.1)
+    # pos pairs: (item 4, item 5): 0.4 > 0.1 (win)
+    #            (item 4, item 7): 0.4 < 0.5 (loss)
+    #            (item 6, item 5): 0.9 > 0.1 (win)
+    #            (item 6, item 7): 0.9 > 0.5 (win)
+    # Total wins = 3 out of 4 pairs -> AUROC = 0.750!
+    judge_rows[4]["judge_prob"] = 0.4
+    judge_rows[7]["judge_prob"] = 0.5
+    with open(cache_file, "w", encoding="utf-8") as f:
+        for jr in judge_rows:
+            f.write(json.dumps(jr) + "\n")
+
+    lines2 = prediction_check_hidden(rows, dataset="holoassist_test_ds", data_root=data_root, splits_dir=splits_dir)
+    caveat_line2 = next(line for line in lines2 if "Caveat:" in line)
+    assert "0.750" in caveat_line2
+    assert "on the 4 test items" in caveat_line2
+
+

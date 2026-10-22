@@ -1,6 +1,7 @@
 # HoloAssist H1 Evaluation Report (2026-10-15)
 *Corrected 2026-10-20 (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a "best reaction". The numbers are unchanged.*
 *Updated 2026-10-21 (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*
+*Updated 2026-10-21 (A15): judge-large caveat computed per dataset; shuffled controls labeled by the one-sided leak check (03_eval_harness.md §11.9). No result changed.*
 
 > [!NOTE]
 > **Caveat 1 (Pitch-Shifted Audio):**
@@ -26,7 +27,7 @@
 - **Clause 2, "reactions add to the action-only model":** ablation Δ not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) → not tested: not run: fusion not run (not run: react-nonverbal not run on train); rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20)
 - **H1 pass bar (proposed, 00_thesis.md):** react-nonverbal ≥ 0.65 and ablation Δ ≥ +0.03 with ci_low > 0 → not testable: react-nonverbal, ablation Δ
 - **Context, no verdict:** fusion − action_best action_best=step-prior; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20); judge 0.488 [0.466, 0.512]; judge-large 0.544 [0.528, 0.562]; action-probe 0.569 [0.542, 0.597]; step-prior 0.751 [0.726, 0.774]; action-fusion 0.681 [0.657, 0.706]; react-spoke 0.676 [0.655, 0.695] (diagnostic: did the instructor speak); react-full 0.739 [0.716, 0.761] (leakage condition: the instructor's words; never a headline, §11.2).
-- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 on test items whose verb is not "drop".
+- **Caveat:** HoloAssist step text carries outcome information (0.751 [0.726, 0.774]); judge-large scores 0.489 [0.477, 0.502] on the 1818 test items whose verb is not "drop" (computed from judge/holoassist/gemma4_26b).
 
 ## 3. Conditions Table (Test Split, N=2,000)
 
@@ -52,14 +53,14 @@
 
 ## 5. Shuffled-Label Controls
 
-Validation requirement: every `:shuffled` condition must have a 95% CI covering chance (0.50).
+Leak check (03_eval_harness.md §11.9): a shuffled control fails only if its ci_low > 0.5; one permutation below chance is not a leak.
 
-| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |
+| Condition | Metric | Value | 95% CI | Leak check | Notes |
 |---|---|---|---|---|---|
-| `action-probe:shuffled` | auroc | 0.492 | [0.461, 0.525] | PASS (Yes) | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `action-probe:shuffled` | auroc | 0.492 | [0.461, 0.525] | pass | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
 | `react-nonverbal:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: react-nonverbal not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
-| `step-prior:shuffled` | auroc | 0.464 | [0.440, 0.489] | FAIL | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
-| `action-fusion:shuffled` | auroc | 0.493 | [0.461, 0.526] | PASS (Yes) | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `step-prior:shuffled` | auroc | 0.464 | [0.440, 0.489] | below chance (one permutation; not a leak) | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
+| `action-fusion:shuffled` | auroc | 0.493 | [0.461, 0.526] | pass | shuffled-label control; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
 | `fusion:shuffled` | auroc | null | — | — (not run) | shuffled-label control; not run: fusion not run; rerun: step-prior and action-fusion added (Issue 7 A; 00_thesis entry 20) |
 
 ## 6. Judge Diagnostics & Answer Distributions

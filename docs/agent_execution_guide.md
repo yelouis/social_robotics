@@ -27,7 +27,7 @@
 - *"No need to open up a new branch, just push to the repo."*
 - **October 21, 2026:** *"For issue 8, lets go with Option A."* and *"For issue 9, lets go with Option B."*
 
-**Status:** **Active Build.** Next is **A15**.
+**Status:** **Active Build.** Next is **D1**.
 - **Nothing in this queue waits on the maintainer.** Issue 9 is decided (B: the full download).
 
 **Every path, number, field name, formula and literal string in this guide, in `03_eval_harness.md` and in `04_wave_d_robot_check.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
@@ -111,7 +111,7 @@
 | # | Gate | Command | Result on `d6d9c54` |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **75 passed**, 3 runs out of 3 |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **78 passed**, 3 runs out of 3 |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS |
 | G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **9 passed** (123 s); `memguard --status`: 53.8 GB, pressure 1, lock free |
 

@@ -4,12 +4,13 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
 from config import DATA_ROOT
 from harness.items import read_items
+from harness.reporting import judge_nondrop_auroc, leak_check_label
 from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
 from shared.fsutil import data_glob
@@ -28,7 +29,12 @@ def fmt_row(r: Optional[dict]) -> str:
     return r.get("notes", "not run")
 
 
-def prediction_check_hidden(rows: Dict[str, dict]) -> List[str]:
+def prediction_check_hidden(
+    rows: Dict[str, dict],
+    dataset: str = "holoassist",
+    data_root: Optional[Union[str, Path]] = None,
+    splits_dir: Optional[Union[str, Path]] = None,
+) -> List[str]:
     """Check hypothesis predictions against scorecard rows for hidden-outcome data per 03_eval_harness.md §11.8.
 
     Returns lines in order:
@@ -127,16 +133,23 @@ def prediction_check_hidden(rows: Dict[str, dict]) -> List[str]:
     lines.append(f"- **Context, no verdict:** {'; '.join(ctx_parts)}.")
 
     # 5. Caveat
+    judge_nondrop = judge_nondrop_auroc(
+        dataset=dataset, model_tag="gemma4_26b", data_root=data_root, splits_dir=splits_dir
+    )
+    if judge_nondrop is not None:
+        pt, lo, hi, n = judge_nondrop
+        judge_part = f'judge-large scores {pt:.3f} [{lo:.3f}, {hi:.3f}] on the {n} test items whose verb is not "drop" (computed from judge/{dataset}/gemma4_26b)'
+    else:
+        judge_part = f"judge-large not run on {dataset}"
+
     if "step-prior" in rows and rows["step-prior"].get("value") is not None:
         sp_r = fmt_row(rows["step-prior"])
         lines.append(
-            f'- **Caveat:** HoloAssist step text carries outcome information ({sp_r}); '
-            f'judge-large scores 0.489 on test items whose verb is not "drop".'
+            f'- **Caveat:** HoloAssist step text carries outcome information ({sp_r}); {judge_part}.'
         )
     else:
         lines.append(
-            '- **Caveat:** HoloAssist step text carries outcome information (02_data_sources.md → HoloAssist → As built (A8)); '
-            'judge-large scores 0.489 on test items whose verb is not "drop".'
+            f'- **Caveat:** HoloAssist step text carries outcome information (02_data_sources.md → HoloAssist → As built (A8)); {judge_part}.'
         )
 
     return lines
@@ -398,9 +411,24 @@ def generate_holoassist_report(
     out_path: Optional[Path] = None,
     corrected_date: Optional[str] = None,
     updated_date: Optional[str] = None,
+    updated_a15_date: Optional[str] = "2026-10-21",
 ) -> Path:
     root = data_root or DATA_ROOT
-    today = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if date_str:
+        today = date_str
+    elif dataset == "holoassist":
+        today = "2026-10-15"
+    elif dataset == "holoassist_audible":
+        today = "2026-10-21"
+    else:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    if dataset == "holoassist":
+        if corrected_date is None:
+            corrected_date = "2026-10-20"
+        if updated_date is None:
+            updated_date = "2026-10-21"
+
     sc_file = scorecard_path or Path("results/scorecard.jsonl")
     ap_file = audio_presence_path or (root / "runs" / "holoassist_audio_presence.json")
 
@@ -517,6 +545,8 @@ def generate_holoassist_report(
         report_lines.append(f"*Corrected {corrected_date} (A9b): prediction check per 03_eval_harness.md §11.8; react-full is no longer a \"best reaction\". The numbers are unchanged.*")
     if updated_date:
         report_lines.append(f"*Updated {updated_date} (A11): step-prior, action-fusion and the ablation Δ added (Issue 7 A).*")
+    if updated_a15_date:
+        report_lines.append(f"*Updated {updated_a15_date} (A15): judge-large caveat computed per dataset; shuffled controls labeled by the one-sided leak check (03_eval_harness.md §11.9). No result changed.*")
     report_lines.append("")
     report_lines.append("> [!NOTE]")
     report_lines.append("> **Caveat 1 (Pitch-Shifted Audio):**")
@@ -562,7 +592,7 @@ def generate_holoassist_report(
 
     report_lines.append("## 2. Executive Summary & Prediction Check")
     report_lines.append("")
-    check_lines = prediction_check_hidden(latest_rows)
+    check_lines = prediction_check_hidden(latest_rows, dataset=dataset, data_root=root)
     for cl in check_lines:
         report_lines.append(cl)
     report_lines.append("")
@@ -612,9 +642,9 @@ def generate_holoassist_report(
 
     report_lines.append("## 5. Shuffled-Label Controls")
     report_lines.append("")
-    report_lines.append("Validation requirement: every `:shuffled` condition must have a 95% CI covering chance (0.50).")
+    report_lines.append("Leak check (03_eval_harness.md §11.9): a shuffled control fails only if its ci_low > 0.5; one permutation below chance is not a leak.")
     report_lines.append("")
-    report_lines.append("| Condition | Metric | Value | 95% CI | Covers 0.5? | Notes |")
+    report_lines.append("| Condition | Metric | Value | 95% CI | Leak check | Notes |")
     report_lines.append("|---|---|---|---|---|---|")
 
     shuffled_conditions = [
@@ -625,12 +655,7 @@ def generate_holoassist_report(
         if r:
             val_s = f"{r['value']:.3f}" if r["value"] is not None else "null"
             ci_s = f"[{r['ci_low']:.3f}, {r['ci_high']:.3f}]" if r["ci_low"] is not None and r["ci_high"] is not None else "—"
-            if r["value"] is None:
-                covers = "— (not run)"
-            elif r["ci_low"] is not None and r["ci_high"] is not None and (r["ci_low"] <= 0.50 <= r["ci_high"]):
-                covers = "PASS (Yes)"
-            else:
-                covers = "FAIL"
+            covers = leak_check_label(r.get("value"), r.get("ci_low"), r.get("ci_high"))
             report_lines.append(f"| `{r['condition']}` | {r['metric']} | {val_s} | {ci_s} | {covers} | {r['notes']} |")
         else:
             report_lines.append(f"| `{c}` | auroc | null | — | — | not run |")
@@ -764,6 +789,7 @@ def main() -> None:
     parser.add_argument("--date", default=None, help="Date string YYYY-MM-DD")
     parser.add_argument("--corrected-date", default=None, help="Correction date if regenerating an earlier report")
     parser.add_argument("--updated-date", default=None, help="Update date")
+    parser.add_argument("--updated-a15-date", default="2026-10-21", help="A15 update date")
     parser.add_argument("--scorecard", default="results/scorecard.jsonl", type=Path, help="Scorecard path")
     parser.add_argument("--audio-presence", default=None, type=Path, help="Audio presence summary path")
     parser.add_argument("--output", default=None, type=Path, help="Output markdown path")
@@ -777,6 +803,7 @@ def main() -> None:
         out_path=args.output,
         corrected_date=args.corrected_date,
         updated_date=args.updated_date,
+        updated_a15_date=args.updated_a15_date,
     )
 
 
