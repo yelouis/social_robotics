@@ -42,7 +42,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | field | type | meaning |
 |---|---|---|
 | `item_id` | str | `"<dataset>:<source-native id>:<index>"`, unique, stable across reruns |
-| `dataset` | str | `oops` \| `holoassist` \| `holoassist_audible` \| `verdict` \| `bad` (`holoassist_audible`: the audible-session evaluation set, `02_data_sources.md`; added October 20, 2026) |
+| `dataset` | str | `oops` \| `holoassist` \| `holoassist_audible` \| `verdict` \| `bad` (`holoassist_audible`: the audible-session evaluation set, `02_data_sources.md`; added October 20, 2026). Wave D adds `roboreward` and `holoassist_pool` (`04_wave_d_robot_check.md` §2; added October 21, 2026) |
 | `group_id` | str | the person/session unit that must never straddle a split (§5) |
 | `video_path` | str | absolute path under `DATA_ROOT` |
 | `action_window_sec` | [float, float] | what the judge and the action probe see |
@@ -166,6 +166,7 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
   - `holoassist`: `Did the person perform this step correctly, without a mistake?`
   - `oops`: `Is everything still going as the person intended at this point, with no accident or failure yet?`
   - `verdict` (Wave B): `Will the person rate this item highly (8 or more out of 10)?`
+  - `roboreward` (Wave D reference only; added October 21, 2026): `Did the robot complete the task successfully by the end of the video?`
 - **Parse:** the first match of `\b(100|[1-9]?\d)\b`, divided by 100. If no match, retry up to 2 more times with `temperature` 0.3. If all 3 attempts fail, `judge_prob = null`; the item is excluded from `judge` and `fusion` and counted in `n_excluded`.
 - **Cache:** `DATA_ROOT/judge/<dataset>/<model_tag>/<prompt_hash>.jsonl`, one line per item: `{item_id, judge_prob, raw, attempts, elapsed_ms}`. The `prompt_hash` is the first 12 hex digits of the SHA-256 of `template + question + "frames=4;side=768;q=90"`. A cached item is never re-queried.
 

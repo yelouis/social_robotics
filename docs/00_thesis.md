@@ -93,6 +93,8 @@ Reaction-labeled human task video makes a robot **success detector** (the reward
   - **Data:** [RoboReward](https://huggingface.co/datasets/teetone/RoboReward) (CC-BY-4.0; 54,135 robot rollouts scored 1–5; a 2,831-item human-verified test split). Only real successes and failures are used; the counterfactual-instruction negatives are excluded, because our detector reads no instructions.
   - **Measure:** a data-efficiency curve, AUROC (success vs. failure) against the number of robot training labels (e.g. 50–1,000), **with vs. without** pre-training on reaction-labeled human task video (HoloAssist-style). Reference lines: RoboReward-8B and the VLM judge. **Never framed as beating RoboReward-8B.**
   - **Start condition (amended October 20, 2026, decision 20):** Wave A shows a positive, CI-excluding-0 **ablation gain** (fusion − `action-fusion`) on at least one dataset. Otherwise there is no signal to transfer.
+  - **Spec (pre-registered October 21, 2026):** [`04_wave_d_robot_check.md`](04_wave_d_robot_check.md). The detector's prior comes from a reaction-labeled HoloAssist head. It is compared with no prior, a shuffled-label prior and a true-label prior, at N = 50–1,000 robot labels.
+  - **Supported** iff the reaction prior's gain at N = 100 is ≥ +0.02 with the CI excluding 0 **and** it beats the shuffled-label prior with the CI excluding 0.
 - **Online (later, not in scope):** a policy trained with the improved reward learns faster in simulation (needs a cloud CUDA GPU; `microduck_rl`/mjlab need CUDA) or on hardware. This is the final link; the 3-month paper stops one step before it.
 
 ---
@@ -179,6 +181,15 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Wave D's start condition is met by the rule.** Whether to start is **Issue 8**.
     - **The shuffled-control check is now one-sided** (`03_eval_harness.md` §11.9): one permutation's CI is not a null distribution.
 
+**2026-10-21** (the maintainer, in chat, and the designer):
+22. **Issue 8 → A** (maintainer): write the Wave D spec now.
+23. **The Wave D spec is pre-registered** (designer): `04_wave_d_robot_check.md`.
+    - **Learner:** prior-regularized logistic regression with a fixed `C = 1`; the human heads are fit on 20,000 reaction-pseudo-labeled HoloAssist actions.
+    - **Robot data:** RoboReward, with vision-only labels (counterfactual-instruction negatives excluded).
+    - **The H3 offline pass rule and its four-way interpretation table** are written before any robot data is downloaded.
+    - **The honest expectation is a null.**
+    - **The download is Issue 9.**
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** (whether to start the Wave D spec now that its trigger is met narrowly) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** (how much of RoboReward to download, and whether to run RoboReward-8B) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

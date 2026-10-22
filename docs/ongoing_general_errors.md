@@ -14,7 +14,8 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 8 (new, October 21):** Wave D's start condition is met, but narrowly, and the gain comes mostly from the instructor speaking up. Should the designer write the Wave D spec now?
+  - **Issue 8 was decided October 21: option A, by the maintainer in chat.** The Wave D spec is written (`04_wave_d_robot_check.md`).
+  - **Issue 9 (new, October 21):** how much of RoboReward to download, and whether to run the RoboReward-8B reference. It gates guide items D3 onward.
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below):
@@ -23,6 +24,7 @@
   - Issue 5 (large local judge, October 14, A7c);
   - Issue 7 (step-prior and the ablation Δ, October 20, A11);
   - Issue 6 (the audible-session set, October 21, A12–A13).
+  - Issue 8 (Wave D go: option A, spec written, October 21).
 
 **October 21, 2026: designer verification of A10, A9b, A11, A12, A13 and A14** (each item's code and outputs read against its contract; the key numbers recomputed independently from the caches).
 - **Verified correct:**
@@ -230,53 +232,59 @@ Your selection: _____
 
 ---
 
-### Issue 8: Wave D's start condition is met, but narrowly, and mostly by the instructor speaking up. Start the Wave D spec now?
+### Issue 9: Wave D needs RoboReward on disk: how much to download, and whether to run the RoboReward-8B reference
 
-**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 21, 2026. By the rule you approved (decision 20), Wave D may start. But starting it commits weeks of work, a new download (RoboReward) and compute, on modest evidence. This is your call.
+**Status**: ⚠️ Confirmed Unresolved — filed by the designer with the Wave D spec, October 21, 2026. Downloads are frozen until you approve one. Items D1 and D2 (HoloAssist work plus code) proceed without it; D3 onward wait on it.
 
-**Facts (October 21, 2026):**
-1. **The rule is met.** `00_thesis.md` H3 (amended in decision 20): "a positive, CI-excluding-0 ablation gain on ≥ 1 dataset".
-   - `holoassist_audible`'s `fusion_minus_action_fusion` = **+0.021 [0.006, 0.034]** (row `2026-10-21T16:50:26Z`; the designer reproduced it from the caches).
-   - Oops!: +0.015 [−0.001, 0.029] (not met). Full `holoassist`: not run.
-2. **The H1 pass bar is not met anywhere.** It needs the ablation gain ≥ +0.03 with `react-nonverbal` ≥ 0.65. On `holoassist_audible`, `react-nonverbal` = 0.654 but the gain is 0.021.
-3. **In practice the reaction model loses to knowing the step name.** On `holoassist_audible`, fusion = 0.671 vs. `step-prior` = 0.737: fusion − action_best = **−0.065 [−0.113, −0.025]**.
-4. **Where the gain comes from** (designer, exploratory, from the cached features; not pre-declared):
-   - test items where the instructor spoke (837): **+0.012 [−0.004, 0.030]**;
-   - test items where the instructor stayed silent (583): **−0.026 [−0.044, −0.009]**. There, `react-nonverbal` alone scores 0.546 [0.497, 0.582];
-   - without the `drop` items: **+0.025 [0.011, 0.039]**. So the gain is not the sound of the action itself;
-   - the pre-declared diagnostic `react-nonverbal|spoke=1` = **0.582 [0.548, 0.612]**.
-   - **Reading:** the demonstrated signal is mainly *whether the supervisor said something*, plus a weaker signal in *how* they sounded. That is a real reaction-based reward signal (a robot can detect a voice response), but it is closer to explicit intervention than to implicit affect.
-5. **Scope caveats:**
-   - 548 of 1,673 sessions, with quiet device tasks over-represented;
-   - pitch-shifted audio;
-   - groups are instructor–performer pairs, not people.
-6. **What Wave D is** (`00_thesis.md` H3; DW5): an offline data-efficiency curve on RoboReward. A robot success detector is trained with vs. without pre-training on reaction-labeled human task video. It needs:
-   - a RoboReward download, which the spec will size for your approval;
-   - the designer's spec, written and pre-registered before any robot data is touched.
-7. **Issue 1** (the Wave B verdict-video source) is still open, so Wave B cannot start either way.
+**Facts (October 21, 2026; Hugging Face metadata only, nothing downloaded):**
+1. **`teetone/RoboReward`** (dataset; CC-BY-4.0; revision `469b9af76e8539e8d2ac553b081307738fd92ca5`) is **43.2 GB** in total:
 
-**Option A (recommended): Start the Wave D spec now, scoped to what Wave A actually showed**
-- The designer writes the spec with its H3 pass and kill criteria first. The reaction label is the instructor's vocal response on audible HoloAssist sessions; the robot-side measure is RoboReward success-detector AUROC against the number of robot labels. The download is sized for your approval.
+   | Split | Videos | Size |
+   |---|---|---|
+   | train | 45,072 | 38.64 GB |
+   | val | 6,232 | 2.91 GB |
+   | test | 2,831 | 1.63 GB |
+
+   Each split also has a `metadata.jsonl` (24.9, 3.5 and 1.3 MB). Each row carries `task` (the instruction), `reward` (1–5) and `gpt5_mini_check`.
+2. **Wave D needs only part of it** (`04_wave_d_robot_check.md` §2):
+   - the three `metadata.jsonl` files;
+   - the test videos that pass the vision-only label rule (about 1,600 of 2,831, estimated from 800 rows read through the Hugging Face viewer API; about 0.9 GB);
+   - a 4,000-video robot train pool (2,000 successes and 2,000 failures, sampled from train; about 3.4 GB at the train split's mean file size).
+
+   About **4–6 GB** in total. The SSD has about 1.3 TiB free.
+3. **`teetone/RoboReward-8B`** (CC-BY-4.0) is fine-tuned from `Qwen/Qwen3-VL-8B-Instruct`, with 17.55 GB of safetensors.
+   - Running it needs a `transformers` release that supports Qwen3-VL, which is newer than our frozen 4.46.3, plus a new memory-guard step and roughly 5 h on the ~1,600 test videos.
+   - GGUF builds exist (`mradermacher/RoboReward-8B-GGUF`, 5–16 GB), but whether Ollama can load this fine-tune's vision part is unverified.
+   - The thesis lists it as a reference line, never as something to beat.
+
+**Option A (recommended): The selective download (~4–6 GB): metadata plus the filtered test plus the 4,000-video train pool. RoboReward-8B is reported as `not run`**
 - *Pros:*
-  - it follows the rule you approved;
-  - it is offline and cheaper than Wave B;
-  - it directly tests the "robots learn from human video" promise;
-  - a null result is informative and publishable as part of the negative/positive map.
+  - smallest footprint;
+  - no dependency change;
+  - everything the pre-registered curve needs;
+  - one pinned revision, recorded in `DOWNLOAD.json`.
 - *Cons:*
-  - the signal is modest (below the H1 pass bar) and mostly speech presence, so Wave D may well show no gain;
-  - it spends compute and attention while Issue 1 is open.
+  - the download tool must select files from the metadata (a little more code);
+  - a larger train pool later means a second download;
+  - no RoboReward-8B line.
 
-**Option B: Hold Wave D until Wave B replicates on verdict videos (face + voice)**
-- *Pros:* Wave D would rest on stronger evidence, from the thesis's purest hidden-outcome test.
-- *Cons:* it needs Issue 1 decided, data sourced, and Wave B built and run, which is weeks. The robot result slips accordingly.
-
-**Option C: Tighten the trigger first: require the within-speech gain (instructor-spoke items) to exclude 0**
-- *Pros:* it would ensure that the transferable signal is more than "they said something".
+**Option B: The whole dataset (43.2 GB, one `snapshot_download`). RoboReward-8B is `not run`**
+- *Pros:*
+  - the simplest tool;
+  - val and the full train split stay on hand for any later spec.
 - *Cons:*
-  - it is a rule change after the result was seen. The designer has already measured it: +0.012 [−0.004, 0.030], which fails. So C effectively means "not now";
-  - changing a pre-agreed rule after seeing results is what the project rejects.
+  - about 8× the bytes for no use in this spec;
+  - a longer download.
 
-**Recommendation:** **A.** The rule was agreed before the result, and Wave D's own pre-registered pass/kill criteria will judge it. The spec will state plainly that the signal is mostly the supervisor speaking up.
+**Option C: A or B, plus RoboReward-8B as a reference line**
+- *Pros:* the published robot reward model appears as a reference on our own test split.
+- *Cons:*
+  - it breaks the frozen-dependency rule: a `transformers` upgrade that could change SigLIP and the `emotion2vec` stack's behavior, so all of Wave A's slow tests and reference values would need re-checking;
+  - +17.6 GB;
+  - +~5 h;
+  - a new heavy step with an unmeasured peak.
+
+**Recommendation:** **A.** RoboReward-8B is context, not a control; its paper reports its own numbers.
 
 Your selection: _____
 
@@ -334,6 +342,18 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - `action-fusion` achieves **0.650 [0.599, 0.694]** and full `fusion` achieves **0.671 [0.618, 0.713]**.
      - **Ablation $\Delta$ (`fusion_minus_action_fusion`):** **+0.021 [0.006, 0.034]** — **`ci_low > 0` (Held)**! Reactions demonstrably add information to the action-only model on hidden outcomes.
      - All 5 shuffled controls cover 0.50 (chance). Report generated at `docs/evals/2026-10-21_holoassist_audible_h1.md`.
+
+6. **Issue 8: Wave D's start condition was met narrowly; start the Wave D spec? (Resolved - October 21, the maintainer chose option A in chat)**:
+   - **Problem**:
+     - The amended H3 trigger was met on `holoassist_audible`: ablation gain +0.021 [0.006, 0.034].
+     - The H1 pass bar (≥ +0.03) was not, and fusion lost to the step-prior (−0.065).
+     - The designer's exploratory strata showed the gain is mostly whether the instructor spoke: +0.012 [−0.004, 0.030] where they spoke, −0.026 where they were silent, and +0.025 without `drop`.
+     - Starting Wave D commits weeks of work and a download on modest evidence.
+   - **Solution**: Option A: the designer wrote the Wave D spec, `04_wave_d_robot_check.md`, and pre-registered it before any robot data is touched.
+     - It is scoped to what Wave A showed: the reaction labeler is the `holoassist_audible` `react-nonverbal` probe.
+     - The H3 pass and null rules and their interpretations are written first.
+     - A shuffled-pseudo-label prior separates "reaction labels help" from "any human-video prior helps".
+     - The download it needs is **Issue 9**.
 
 ---
 
@@ -432,5 +452,5 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). Whether to start is **Issue 8** |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Started:** Issue 8 = A; spec `04_wave_d_robot_check.md`; data waits on **Issue 9** |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |

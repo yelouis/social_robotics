@@ -260,6 +260,22 @@ The VLM judge should be strong here, because the failure is visible. That is the
 - **One clip is undecodable** (`Grass Is Always Greener - Get Off My Lawn! (July 2018) _ FailArmy29`, train). It has no features and no judge score, and is honestly excluded from the train fits.
 - **The "reaction" audio is not only a reaction.** `reaction_window_sec` = `action_window_sec`, so the `post` window's audio contains the failure's own sound (the crash, splash or thud) and any compilation music, as well as the filmer's laugh or gasp. **`react-nonverbal` on Oops! (AUROC 0.711) is therefore not evidence of reaction signal.** It measures how much the audio track differs before and after a failure. State this wherever the number is reported.
 
+## RoboReward: robot episodes for Wave D (added October 21, 2026)
+
+- **Source:** `teetone/RoboReward` (Hugging Face; CC-BY-4.0), revision `469b9af76e8539e8d2ac553b081307738fd92ca5`.
+  - 43.2 GB: train 45,072 videos (38.64 GB), val 6,232 (2.91 GB), test 2,831 (1.63 GB), plus one `metadata.jsonl` per split.
+  - The test split has 1,000 `robo_arena` rollouts and about 100 episodes from each of 22 Open X-Embodiment sources.
+- **Fields** (read through the Hugging Face viewer API, October 21): `video`, `task` (the instruction), `reward` (1–5) and `gpt5_mini_check`.
+  - OXE files named `…_index_<n>.mp4` are original episodes; `…_attempt_<k>_score_<s>.mp4` are clipped versions of them.
+  - `robo_arena` files are named `<rollout uuid>_<policy>_<camera>.mp4`, with several camera views per rollout.
+  - In 800 sampled test rows: OXE originals had rewards 1–5 (rewards below 5 are counterfactual-instruction relabels); attempts 1–4; `robo_arena` 1–5.
+- **Wave D's vision-only labels, groups, filters and sampling are pinned in `04_wave_d_robot_check.md` §2.1.** The download is Issue 9. The schema as downloaded is recorded here by guide item D3.
+
+## The HoloAssist pretraining pool (`holoassist_pool`, Wave D)
+
+- These are 20,000 actions from the 548 audible sessions that are not `holoassist_audible` items, in the natural class proportion. They are a pretraining set for Wave D's human heads, not an evaluation set.
+- The definition is pinned in `04_wave_d_robot_check.md` §2.2.
+
 ## BAD / ERR@HRI / REACT: reactions to robots
 
 **If BAD access is granted, these commitments from the access request bind the project:**
