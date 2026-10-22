@@ -14,14 +14,42 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issues 6 and 7 were decided October 20 (option A for both). Two sub-choices were made in chat:**
-    - a **fresh** audible-session sample;
-    - the pass bar measured as the **ablation gain**.
-
-    They are being implemented by guide items A11–A13 (`00_thesis.md` entry 20).
+  - **Issue 8 (new, October 21):** Wave D's start condition is met, but narrowly, and the gain comes mostly from the instructor speaking up. Should the designer write the Wave D spec now?
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
-- **Resolved** (moved to 🧪 below): Issue 2 (HoloAssist labels are independent; October 9, A4), Issue 3 (SSD space; October 8), and Issue 5 (large local judge `gemma4:26b` evaluated on Oops!, October 14, A7c).
+- **Resolved** (moved to 🧪 below):
+  - Issue 2 (HoloAssist labels are independent; October 9, A4);
+  - Issue 3 (SSD space; October 8);
+  - Issue 5 (large local judge, October 14, A7c);
+  - Issue 7 (step-prior and the ablation Δ, October 20, A11);
+  - Issue 6 (the audible-session set, October 21, A12–A13).
+
+**October 21, 2026: designer verification of A10, A9b, A11, A12, A13 and A14** (each item's code and outputs read against its contract; the key numbers recomputed independently from the caches).
+- **Verified correct:**
+  - **A10:** every SSD glob goes through `shared.fsutil.data_glob`, and the agent ran G2 3/3 at every item.
+  - **A9b:** the summary's false statements were removed, and the HoloAssist report uses §11.8.
+  - **A11:** it reproduced every reference value to 3 dp (step-prior 0.751 [0.726, 0.774]; action-fusion 0.682; Oops! action-fusion 0.779; Oops! ablation Δ +0.015 [−0.001, 0.029]), and the old values are unchanged.
+  - **A12:** 1,673 sessions, 548 audible. The A8 sessions reproduce to within 0.0046 dB.
+  - **A13:**
+    - 4,420 items (1,420 test, 53 groups), with groups on the same side of the split as in `holoassist`;
+    - all five shuffled controls cover 0.5;
+    - the designer reproduced fusion, action-fusion and the ablation Δ to 4 dp from the caches.
+  - **A14:** Wave D's start condition was evaluated by the rule: **met** on `holoassist_audible`, +0.021 [0.006, 0.034].
+- **Findings:**
+  - **(a) A failed check that went unreported, now resolved by a design update:**
+    - On `holoassist`, `step-prior:shuffled` = 0.464 [0.440, 0.489]. Its CI excludes 0.5, which A11's validation required, and its report row says `FAIL`, but the A11 commit and Issue 7's resolution do not mention it.
+    - The designer's permutation analysis shows it is chance, not a leak: over 50 seeds the mean is 0.496 (SD 0.030) and seed 0 sits at the 20th percentile.
+    - The rule is now one-sided (`03_eval_harness.md` §11.9; L14). No code change is needed beyond A15's report label.
+  - **(b) Where the gain comes from** (designer, exploratory; these strata were not pre-declared). The ablation gain is mostly *whether the instructor spoke*:
+    - instructor spoke (837 test items): +0.012 [−0.004, 0.030];
+    - instructor silent (583): −0.026 [−0.044, −0.009];
+    - without the `drop` items: +0.025 [0.011, 0.039], so it is not the action's own sound;
+    - the pre-declared `react-nonverbal|spoke=1` = 0.582 [0.548, 0.612] shows some information in *how* the instructor sounds.
+
+    Also, fusion (0.671) loses to the step-prior alone (0.737): fusion − action_best = −0.065 [−0.113, −0.025]. Whether this is enough to start Wave D is **Issue 8**.
+  - **(c) A wrong number in the audible report:** its caveat line hard-codes "judge-large scores 0.489 … not drop", which is the full-HoloAssist number. On `holoassist_audible` it is **0.498 [0.481, 0.514]** (n = 1,361). The A9b spec mandated that literal. → guide item **A15**.
+  - **(d) Accepted:** `holoassist_audible`'s `not_audible` count includes the actions of the 85 sessions without video (`02_data_sources.md` → As run (A13)).
+  - **(e) The guide was stale:** its title said Queue Complete, but its body still described A10–A14 as work to build. It has been rewritten.
 
 **October 10, 2026: designer verification of A1–A7** (battery re-run bare; every item's code read against its contract).
 - **Verified correct:** A1–A5 as specified, and A6 except one gap: the frontier judge does not retry an unparsable answer (§8). That is fixed in **A7b**.
@@ -202,6 +230,58 @@ Your selection: _____
 
 ---
 
+### Issue 8: Wave D's start condition is met, but narrowly, and mostly by the instructor speaking up. Start the Wave D spec now?
+
+**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 21, 2026. By the rule you approved (decision 20), Wave D may start. But starting it commits weeks of work, a new download (RoboReward) and compute, on modest evidence. This is your call.
+
+**Facts (October 21, 2026):**
+1. **The rule is met.** `00_thesis.md` H3 (amended in decision 20): "a positive, CI-excluding-0 ablation gain on ≥ 1 dataset".
+   - `holoassist_audible`'s `fusion_minus_action_fusion` = **+0.021 [0.006, 0.034]** (row `2026-10-21T16:50:26Z`; the designer reproduced it from the caches).
+   - Oops!: +0.015 [−0.001, 0.029] (not met). Full `holoassist`: not run.
+2. **The H1 pass bar is not met anywhere.** It needs the ablation gain ≥ +0.03 with `react-nonverbal` ≥ 0.65. On `holoassist_audible`, `react-nonverbal` = 0.654 but the gain is 0.021.
+3. **In practice the reaction model loses to knowing the step name.** On `holoassist_audible`, fusion = 0.671 vs. `step-prior` = 0.737: fusion − action_best = **−0.065 [−0.113, −0.025]**.
+4. **Where the gain comes from** (designer, exploratory, from the cached features; not pre-declared):
+   - test items where the instructor spoke (837): **+0.012 [−0.004, 0.030]**;
+   - test items where the instructor stayed silent (583): **−0.026 [−0.044, −0.009]**. There, `react-nonverbal` alone scores 0.546 [0.497, 0.582];
+   - without the `drop` items: **+0.025 [0.011, 0.039]**. So the gain is not the sound of the action itself;
+   - the pre-declared diagnostic `react-nonverbal|spoke=1` = **0.582 [0.548, 0.612]**.
+   - **Reading:** the demonstrated signal is mainly *whether the supervisor said something*, plus a weaker signal in *how* they sounded. That is a real reaction-based reward signal (a robot can detect a voice response), but it is closer to explicit intervention than to implicit affect.
+5. **Scope caveats:**
+   - 548 of 1,673 sessions, with quiet device tasks over-represented;
+   - pitch-shifted audio;
+   - groups are instructor–performer pairs, not people.
+6. **What Wave D is** (`00_thesis.md` H3; DW5): an offline data-efficiency curve on RoboReward. A robot success detector is trained with vs. without pre-training on reaction-labeled human task video. It needs:
+   - a RoboReward download, which the spec will size for your approval;
+   - the designer's spec, written and pre-registered before any robot data is touched.
+7. **Issue 1** (the Wave B verdict-video source) is still open, so Wave B cannot start either way.
+
+**Option A (recommended): Start the Wave D spec now, scoped to what Wave A actually showed**
+- The designer writes the spec with its H3 pass and kill criteria first. The reaction label is the instructor's vocal response on audible HoloAssist sessions; the robot-side measure is RoboReward success-detector AUROC against the number of robot labels. The download is sized for your approval.
+- *Pros:*
+  - it follows the rule you approved;
+  - it is offline and cheaper than Wave B;
+  - it directly tests the "robots learn from human video" promise;
+  - a null result is informative and publishable as part of the negative/positive map.
+- *Cons:*
+  - the signal is modest (below the H1 pass bar) and mostly speech presence, so Wave D may well show no gain;
+  - it spends compute and attention while Issue 1 is open.
+
+**Option B: Hold Wave D until Wave B replicates on verdict videos (face + voice)**
+- *Pros:* Wave D would rest on stronger evidence, from the thesis's purest hidden-outcome test.
+- *Cons:* it needs Issue 1 decided, data sourced, and Wave B built and run, which is weeks. The robot result slips accordingly.
+
+**Option C: Tighten the trigger first: require the within-speech gain (instructor-spoke items) to exclude 0**
+- *Pros:* it would ensure that the transferable signal is more than "they said something".
+- *Cons:*
+  - it is a rule change after the result was seen. The designer has already measured it: +0.012 [−0.004, 0.030], which fails. So C effectively means "not now";
+  - changing a pre-agreed rule after seeing results is what the project rejects.
+
+**Recommendation:** **A.** The rule was agreed before the result, and Wave D's own pre-registered pass/kill criteria will judge it. The spec will state plainly that the signal is mostly the supervisor speaking up.
+
+Your selection: _____
+
+---
+
 ## 🧪 Resolved Issues & Implementation Refinements
 
 Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
@@ -287,6 +367,7 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
 - **L11: A lock that its own holder can re-enter needs to know it.** The memory guard's between-item path re-enters `guard()` and then calls a reload that enters `guard()` again. A non-re-entrant file lock then waits on itself for 30 min, while blocking the other project. Its unit test passed only because it stubbed `reload()` with a function that never takes the lock (L8). Test the composed path with the real callables.
 - **L12: An annotation's own vocabulary can carry the label.** HoloAssist's step verb `drop` is a mistake 95% of the time, and a train-split verb prior scores 0.721 on test, beating every action-only control. A banned-word list cannot catch this. For any text an item carries (`context_text`, step names, task names), fit a text-only prior on train and report its test AUROC before trusting the action-only controls.
 - **L13: The SSD is exFAT, and macOS tags new files.** A `com.apple.provenance` attribute on a new file makes exFAT write a hidden `._<name>` twin. Any `glob("*.jsonl")` or `rglob("*.mp4")` over `DATA_ROOT` or a temp dir on the SSD can pick it up. One test failed 1 run in 3 that way. Skip names starting with `._` everywhere a glob touches the SSD.
+- **L14: A single permutation is not a null distribution.** One shuffled-label run's bootstrap CI covers only the resampling of test items. A small control (step-prior has a few dozen verbs) lands outside it about 1 time in 5 with no leak at all. The leak check is one-sided (`ci_low > 0.5` fails; §11.9). A result that misses a stated validation bar is still reported in the commit body, even if the agent believes it is benign: here a `FAIL` sat in a report and nobody mentioned it.
 
 ---
 
@@ -336,6 +417,10 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - A13 — The audible-session evaluation set holoassist_audible, a fresh sample, run end to end — git log --grep "(a13)" — 4,420 items sampled from 548 audible sessions (3,000 train / 1,420 test across 53 groups); siglip, e2v, qwen2.5vl:7b (train/test), gemma4:26b (test) evaluated end-to-end (0 exclusions, 0 errors); react-nonverbal AUROC 0.654 [0.626, 0.675]; action-fusion AUROC 0.650 [0.599, 0.694]; fusion AUROC 0.671 [0.618, 0.713]; ablation Δ +0.021 [0.006, 0.034] (ci_low > 0, Held); all 5 shuffled controls cover 0.50; report and TSV generated; G1–G4 exit 0.
 - A14 — Close out Wave A — git log --grep "(a14)" — Wave A completed across Oops!, HoloAssist, and HoloAssist-Audible; headline table, prediction checks, and compute times documented in summary; Wave D start condition evaluated as MET (holoassist_audible ablation Δ +0.021 [0.006, 0.034], ci_low > 0, ts: 2026-10-21T16:50:26Z); guide retitled to Queue Complete; battery green.
 
+- R6 — Designer verification of A10–A14 (October 21, 2026):
+  - all six items match their specs, and the key numbers were recomputed independently;
+  - **findings:** a shuffled-control `FAIL` that went unreported (chance; rule made one-sided, §11.9, L14), a hard-coded caveat number (A15), and the Wave D go/no-go (Issue 8);
+  - **design updated:** `03_eval_harness.md` §11.9, `02_data_sources.md` (As run, A13), and `00_thesis.md` entry 21.
 
 ---
 
@@ -343,9 +428,9 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 
 | Id | Work | Trigger to start |
 |---|---|---|
-| DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec. Wave A is closed once guide items A9b and A10 land; Issues 6 and 7 do not block Wave B |
+| DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec. Wave A is closed (A14, October 21; A15 is a report fix only) |
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 20): not met.** Oops!'s Δ CI includes 0, and HoloAssist's Δ was not run (Issues 6 and 7) |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). Whether to start is **Issue 8** |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |

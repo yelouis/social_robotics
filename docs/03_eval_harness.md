@@ -236,6 +236,11 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
      - A clause whose rows did not run is `not tested`, never inferred.
      - `react-spoke` and `react-full` appear only as context lines without a verdict.
      - Implemented by `tools/report_holoassist.py` `prediction_check_hidden` (guide item A9b).
+9. **A shuffled-label control is a leak detector, and the check is one-sided** *(added October 21, 2026)*.
+   - It **fails** iff its `ci_low > 0.5` (above chance: something leaks). That is a STOP.
+   - A CI lying entirely **below** 0.5 is reported as `below chance (one permutation; not a leak)`, never as a failure. One permutation's bootstrap CI covers only the resampling of test items, not the variation between permutations.
+   - **Evidence:** on `holoassist`, `step-prior:shuffled` = 0.464 [0.440, 0.489] at seed 0. Over 50 permutation seeds the same control averages 0.496 (SD 0.030), and 20% of seeds fall below 0.47 (designer, October 21).
+   - Reports label the column `Leak check (fails iff ci_low > 0.5)`.
 
 ## 12. Memory guard (added October 10, 2026)
 

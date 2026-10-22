@@ -226,6 +226,16 @@ Rule (`agent_execution_guide.md` A14; `00_thesis.md` H3 amended): Met iff some d
 
 Reactions demonstrably add incremental information beyond the action-only model on hidden outcomes with a 95% confidence interval strictly excluding zero. Therefore, the Wave D robot check may start once the Wave D specification is written by the designer.
 
+**Designer note (October 21, 2026), on the line above.** "Reactions demonstrably add incremental information" is true by the rule, but it needs three qualifiers. They come from a designer recomputation from the caches; these strata are exploratory, not pre-declared rows.
+- **The gain is mostly whether the instructor spoke:**
+  - items where they spoke (837): +0.012 [−0.004, 0.030];
+  - items where they were silent (583): −0.026 [−0.044, −0.009];
+  - the pre-declared `react-nonverbal|spoke=1` = 0.582 [0.548, 0.612] shows some information in how they sounded.
+- **It is not the sound of the action:** without the `drop` items the gain is +0.025 [0.011, 0.039].
+- **In practice, fusion (0.671) loses to the step-prior alone (0.737).**
+
+Whether to start Wave D on this basis is **Issue 8** in `ongoing_general_errors.md`. The §8.2 caveat line for `holoassist_audible` quotes a full-HoloAssist number (0.489). The audible value is 0.498 [0.481, 0.514]; guide item A15 corrects it.
+
 ### 8.5 Compute Time per Stage for A13 (Recounted from Caches)
 
 - **Visual Features (`siglip-b16-224`):** 2,269.4 s (37.8 min across 4,420 items)

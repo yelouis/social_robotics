@@ -168,6 +168,17 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 
     **Still open:** the kill rule (decided on Wave B) still says "over `action_best`". The Wave B spec will restate it in terms of the ablation gain, for the maintainer to confirm.
 
+**2026-10-21** (designer, verification of A10–A14):
+21. **Wave A's final results:**
+    - **Oops!:** ablation gain +0.015 [−0.001, 0.029]. Δ ≈ 0 held, as predicted for visible outcomes.
+    - **HoloAssist, audible sessions** (`holoassist_audible`; 1,420 test items, 53 groups):
+      - `react-nonverbal` 0.654;
+      - **ablation gain +0.021 [0.006, 0.034]**: H1 Clause 2 held, but the pass bar (≥ +0.03) is not met;
+      - fusion loses to the step-prior alone (−0.065).
+    - **The gain is mostly whether the instructor spoke** (designer, exploratory): +0.012 [−0.004, 0.030] where they spoke, −0.026 where they stayed silent, and not the action's own sound (+0.025 without `drop`).
+    - **Wave D's start condition is met by the rule.** Whether to start is **Issue 8**.
+    - **The shuffled-control check is now one-sided** (`03_eval_harness.md` §11.9): one permutation's CI is not a null distribution.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are decided (entry 20) and are being implemented (guide items A11–A13). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** (whether to start the Wave D spec now that its trigger is met narrowly) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

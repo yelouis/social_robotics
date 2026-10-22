@@ -165,6 +165,13 @@ The question it answers: on the sessions where the instructor can actually be he
   - The judges use the `holoassist` question verbatim, so the `prompt_hash` is identical. The caches are its own, under `judge/holoassist_audible/` and `features/holoassist_audible/`.
 - **Report it as a subset:** quieter tasks (device setups) are over-represented, and the rule was chosen after the 20-session check failed, though before any outcome was seen. Give its task mix next to `holoassist`'s.
 
+#### As run (A13, October 21, 2026; verified by the designer)
+
+- **Size:** 4,420 items: 3,000 train (the 1,500-per-class cap was reached) and 1,420 test (710 per class; 53 test groups). That is above the 1,000–1,300 sanity range estimated from 20 sessions; only the lower bound was a stop rule.
+- **Groups:** every group is on the same side of the split as in `holoassist`; `straddling_groups` is 0.
+- **`stats.json` skip reasons:** `not_audible` (107,363 actions) also counts the 6,589 actions of the 85 annotated sessions without video. Those were never measured, so they cannot be on the allowlist. This is accepted; the item set is unaffected.
+- **Reproduced by the designer from the caches, to 4 dp:** fusion 0.6711, action-fusion 0.6505, ablation Δ +0.0206 [0.0063, 0.0343].
+
 #### Audibility (as measured, October 20, 2026)
 
 Measured over all 1,673 annotated sessions with video (`tools/check_audio_presence.py --all-sessions`; A12):
