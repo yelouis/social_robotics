@@ -23,6 +23,18 @@ def get_sample_times(s: float, e: float) -> List[float]:
     return times
 
 
+def get_sample_times_u9(s: float, e: float) -> List[float]:
+    """Sample 9 frames uniformly at t_k = s + k * (e - s) / 8 for k in 0..8."""
+    start = float(s)
+    end = float(e)
+    return [start + k * (end - start) / 8.0 for k in range(9)]
+
+
+def get_u9_sample_times(duration: float) -> List[float]:
+    """Sample 9 frames uniformly at t_k = k * D / 8 for k=0..8."""
+    return get_sample_times_u9(0.0, float(duration))
+
+
 def extract_frame(video_path: Union[str, Path], t: float) -> Image.Image:
     for seek_t in [t, max(0.0, t - 0.05), max(0.0, t - 0.1), max(0.0, t - 0.2), max(0.0, t - 0.3)]:
         cmd = [
@@ -41,9 +53,8 @@ def extract_frame(video_path: Union[str, Path], t: float) -> Image.Image:
 
 
 class FrameEncoder:
-    encoder_id: str = "siglip-b16-224"
-
-    def __init__(self, device: Optional[str] = None) -> None:
+    def __init__(self, encoder_id: str = "siglip-b16-224", device: Optional[str] = None) -> None:
+        self.encoder_id = encoder_id
         if device is None:
             self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         else:
@@ -92,6 +103,10 @@ class FrameEncoder:
 
     def encode_window(self, video_path: Union[str, Path], window: List[float]) -> np.ndarray:
         s, e = window[0], window[1]
-        sample_times = get_sample_times(s, e)
+        if self.encoder_id == "siglip-b16-224-u9":
+            duration = max(0.0, e - s)
+            sample_times = [round(s + t, 4) for t in get_u9_sample_times(duration)]
+        else:
+            sample_times = get_sample_times(s, e)
         frames = [extract_frame(video_path, t) for t in sample_times]
         return self.encode_frames(frames)

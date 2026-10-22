@@ -243,12 +243,14 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
     # Nested path: already hold the heavy lock in this process
     if _HELD_DEPTH > 0:
         last_log_time = 0.0
+        waited = False
         while time.monotonic() - t_start < timeout_s:
             available, pressure = read_memory()
             if available - peak >= FLOOR:
-                waited_ms = int((time.monotonic() - t_start) * 1000)
-                if waited_ms < 50:
+                if not waited:
                     waited_ms = 0
+                else:
+                    waited_ms = int((time.monotonic() - t_start) * 1000)
                 avail_gb = available / (1024**3)
                 log_event(step, "admit", waited_ms, avail_gb, pressure)
                 _HELD_DEPTH += 1
@@ -258,6 +260,7 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
                 finally:
                     _HELD_DEPTH -= 1
 
+            waited = True
             if step != "sr_judge_load" and is_our_judge_loaded():
                 unload_own_judge()
                 available, pressure = read_memory()
@@ -282,6 +285,7 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
     lock_fd = open(lock_file, "a+", encoding="utf-8")
     acquired_lock = False
     last_log_time = 0.0
+    waited = False
 
     try:
         while time.monotonic() - t_start < timeout_s:
@@ -299,9 +303,10 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
 
                     available, pressure = read_memory()
                     if available - peak >= FLOOR:
-                        waited_ms = int((time.monotonic() - t_start) * 1000)
-                        if waited_ms < 50:
+                        if not waited:
                             waited_ms = 0
+                        else:
+                            waited_ms = int((time.monotonic() - t_start) * 1000)
                         avail_gb = available / (1024**3)
                         log_event(step, "admit", waited_ms, avail_gb, pressure)
                         _HELD_DEPTH += 1
@@ -318,6 +323,8 @@ def guard(step: str, timeout_s: Optional[float] = None) -> Iterator[None]:
                         acquired_lock = False
                 except (BlockingIOError, OSError):
                     acquired_lock = False
+
+            waited = True
 
             if step != "sr_judge_load" and is_our_judge_loaded():
                 unload_own_judge()

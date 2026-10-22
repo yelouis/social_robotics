@@ -450,6 +450,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 
 **Wave D:**
 - D1 — The HoloAssist pretraining pool, the reaction labeler and the pseudo-labels — git log --grep "(d1)" — 20,000 pool items (104 mistakes, 0.52% natural rate, 0 audible overlap); siglip & e2v features 20,000/20,000 (0 exclusions, 0.0%); refit labeler reproduces reference AUROC 0.6539 [0.6257, 0.6749] on holoassist_audible test split; pseudo-label-quality:all AUROC 0.6210 [0.5684, 0.6739], pseudo-label-quality unseen null (all 5,682 items correct; test split took all mistakes); battery --slow exit 0.
+- D2 — The Wave D code: transfer.prior_lr, heads, curve, encoder siglip-b16-224-u9, sources.roboreward, tools/download_roboreward.py, h3_verdict and tools/report_wave_d.py — git log --grep "(d2)" — prior_lr with w0=None matches sklearn LogisticRegression test AUROC within 1e-4; 21 synthetic D2 unit tests pass; G1–G3 exit 0 (104 fast passed 3/3).
 
 ---
 

@@ -36,6 +36,8 @@ def run_extraction(
     # Load encoder
     if encoder_id == "siglip-b16-224":
         encoder = FrameEncoder()
+    elif encoder_id == "siglip-b16-224-u9":
+        encoder = FrameEncoder(encoder_id=encoder_id)
     elif encoder_id == "e2v-plus-large":
         encoder = NonverbalAudioEncoder()
     else:
@@ -74,7 +76,7 @@ def run_extraction(
     finished_set = set(finished_ids)
     errors_path = cache.cache_dir / "errors.jsonl"
 
-    step_name = "sr_siglip" if encoder_id == "siglip-b16-224" else "sr_e2v"
+    step_name = "sr_siglip" if encoder_id in ("siglip-b16-224", "siglip-b16-224-u9") else "sr_e2v"
 
     try:
         for item in items:
@@ -140,6 +142,15 @@ def run_extraction(
         )
         raise
 
+    # Ensure progress.json is written at end
+    if finished_ids and not progress_file.exists():
+        with tempfile.NamedTemporaryFile("w", dir=cache.cache_dir, delete=False, encoding="utf-8") as tf:
+            temp_progress = tf.name
+            json.dump(finished_ids, tf)
+            tf.flush()
+            os.fsync(tf.fileno())
+        os.replace(temp_progress, progress_file)
+
     elapsed_s = time.time() - start_time
     print(f"items_in={items_in} items_out={items_out} excluded={excluded} elapsed_s={elapsed_s:.2f}")
 
@@ -147,7 +158,7 @@ def run_extraction(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract features for dataset and encoder")
     parser.add_argument("--dataset", required=True, help="Dataset name")
-    parser.add_argument("--encoder", required=True, choices=["siglip-b16-224", "e2v-plus-large"], help="Encoder id")
+    parser.add_argument("--encoder", required=True, choices=["siglip-b16-224", "siglip-b16-224-u9", "e2v-plus-large"], help="Encoder id")
     parser.add_argument("--split", default="all", choices=["train", "test", "all"], help="Split to process")
     parser.add_argument("--force", action="store_true", help="Force recomputation of cached features")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of items")

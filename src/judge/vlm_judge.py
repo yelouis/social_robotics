@@ -35,6 +35,7 @@ DATASET_QUESTIONS: Dict[str, str] = {
     "holoassist_audible": "Did the person perform this step correctly, without a mistake?",
     "oops": "Is everything still going as the person intended at this point, with no accident or failure yet?",
     "verdict": "Will the person rate this item highly (8 or more out of 10)?",
+    "roboreward": "Did the robot complete the task successfully by the end of the video?",
 }
 
 PARSE_RE = re.compile(r"\b(100|[1-9]?\d)\b")

@@ -8,7 +8,7 @@ import pytest
 
 from features.audio import NonverbalAudioEncoder
 from features.cache import FeatureCache, sanitize_item_id
-from features.visual import FrameEncoder
+from features.visual import FrameEncoder, get_sample_times_u9
 from harness.items import Item, write_items
 
 
@@ -174,6 +174,13 @@ def video_fixtures(tmp_path_factory):
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
     return real_mp4, black_mp4
+
+
+def test_get_sample_times_u9():
+    times_8 = get_sample_times_u9(0, 8)
+    assert times_8 == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    times_4 = get_sample_times_u9(0, 4)
+    assert times_4 == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
 
 
 @pytest.mark.slow
