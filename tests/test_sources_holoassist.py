@@ -9,7 +9,12 @@ import pytest
 from config import DATA_ROOT
 from harness.items import validate_items
 from harness.splits import load_split
-from sources.holoassist import build_holoassist_items, derive_group_id, sanitize_task_name
+from sources.holoassist import (
+    build_holoassist_items,
+    build_holoassist_pool,
+    derive_group_id,
+    sanitize_task_name,
+)
 
 
 FORBIDDEN_WORDS_RE = re.compile(
@@ -406,3 +411,175 @@ def test_real_split_group_disjointness():
     te_groups = set(items[iid]["group_id"] for iid in split_data["test"])
 
     assert tr_groups.isdisjoint(te_groups), "splits/holoassist.json groups must be strictly disjoint!"
+
+
+def test_holoassist_pool_builder_synthetic(tmp_path: Path):
+    """Test build_holoassist_pool on the 3-session synthetic fixture.
+
+    Requirements:
+    - excluded keys never appear;
+    - only allowlisted sessions appear;
+    - class proportion follows candidates (no balancing);
+    - n_total is respected;
+    - result is deterministic.
+    """
+    synth_sessions = [
+        {
+            "video_name": "R001-1-GoPro",
+            "taskType": "setup gopro",
+            "videoMetadata": {"duration": {"seconds": 60.0}},
+            "events": [
+                {
+                    "label": "Conversation",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Conversation Purpose": "instructor-guidance",
+                        "Transcription": "turn it on",
+                    },
+                },
+                {
+                    "id": 101,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 4.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "turn",
+                        "Noun": "power",
+                    },
+                },
+                {
+                    "id": 102,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 7.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, corrected by student",
+                        "Verb": "press",
+                        "Noun": "shutter",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R002-1-Switch",
+            "taskType": "setup switch",
+            "videoMetadata": {"duration": {"seconds": 50.0}},
+            "events": [
+                {
+                    "id": 201,
+                    "label": "Fine grained action",
+                    "start": 1.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "insert",
+                        "Noun": "cartridge",
+                    },
+                },
+                {
+                    "id": 202,
+                    "label": "Fine grained action",
+                    "start": 4.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "otherwise",
+                        "Verb": "close",
+                        "Noun": "flap",
+                    },
+                },
+            ],
+        },
+        {
+            "video_name": "R003-1-Coffee",
+            "taskType": "make coffee",
+            "videoMetadata": {"duration": {"seconds": 40.0}},
+            "events": [
+                {
+                    "id": 301,
+                    "label": "Fine grained action",
+                    "start": 2.0,
+                    "end": 3.0,
+                    "attributes": {
+                        "Action Correctness": "Correct Action",
+                        "Verb": "pour",
+                        "Noun": "water",
+                    },
+                },
+                {
+                    "id": 302,
+                    "label": "Fine grained action",
+                    "start": 5.0,
+                    "end": 6.0,
+                    "attributes": {
+                        "Action Correctness": "Wrong Action, not corrected",
+                        "Verb": "press",
+                        "Noun": "brew",
+                    },
+                },
+            ],
+        },
+    ]
+
+    ann_file = tmp_path / "data-annotation-trainval-v1_1.json"
+    ann_file.write_text(json.dumps(synth_sessions), encoding="utf-8")
+
+    allowlist = {"R001-1-GoPro", "R002-1-Switch"}
+    # Event index 1 in R001 is the first fine-grained action (eid 101)
+    exclude_keys = {("R001-1-GoPro", 1)}
+
+    items, stats = build_holoassist_pool(
+        labels_dir=tmp_path,
+        check_paths=False,
+        session_allowlist=allowlist,
+        exclude_keys=exclude_keys,
+        n_total=2,
+        seed=0,
+    )
+
+    errs = validate_items(items, check_paths=False)
+    assert not errs, f"Validation errors: {errs}"
+
+    # 1. n_total is respected
+    assert len(items) == 2
+    assert stats["n_items"] == 2
+
+    # 2. Excluded keys never appear
+    item_keys = {(it.meta["session"], it.meta["event_id_idx"]) if "event_id_idx" in it.meta else (it.meta["session"], int(it.item_id.split(":")[-1])) for it in items}
+    assert ("R001-1-GoPro", 1) not in item_keys
+
+    # 3. Only allowlisted sessions appear
+    for it in items:
+        assert it.meta["session"] in allowlist
+        assert it.item_id.startswith("holoassist_pool:")
+        assert it.meta["source_item_id"].startswith("holoassist:")
+
+    # 4. Result is deterministic
+    items2, stats2 = build_holoassist_pool(
+        labels_dir=tmp_path,
+        check_paths=False,
+        session_allowlist=allowlist,
+        exclude_keys=exclude_keys,
+        n_total=2,
+        seed=0,
+    )
+    assert [it.item_id for it in items] == [it.item_id for it in items2]
+
+    # 5. Class proportion follows candidates (no balancing)
+    # When n_total equals total remaining candidates (3), all are taken
+    items_all, stats_all = build_holoassist_pool(
+        labels_dir=tmp_path,
+        check_paths=False,
+        session_allowlist=allowlist,
+        exclude_keys=exclude_keys,
+        n_total=10,  # more than available (3)
+        seed=0,
+    )
+    assert len(items_all) == 3
+    # Candidates are: R001:2 (Wrong, label 0), R002:0 (Correct, label 1), R002:1 (Wrong, label 0)
+    # Notice: 1 correct and 2 wrong -> natural proportion preserved (not balanced to 1:1)
+    labels = [it.label for it in items_all]
+    assert labels.count(0) == 2
+    assert labels.count(1) == 1
+

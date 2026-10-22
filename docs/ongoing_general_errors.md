@@ -448,6 +448,9 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **findings:** a shuffled-control `FAIL` that went unreported (chance; rule made one-sided, §11.9, L14), a hard-coded caveat number (A15), and the Wave D go/no-go (Issue 8);
   - **design updated:** `03_eval_harness.md` §11.9, `02_data_sources.md` (As run, A13), and `00_thesis.md` entry 21.
 
+**Wave D:**
+- D1 — The HoloAssist pretraining pool, the reaction labeler and the pseudo-labels — git log --grep "(d1)" — 20,000 pool items (104 mistakes, 0.52% natural rate, 0 audible overlap); siglip & e2v features 20,000/20,000 (0 exclusions, 0.0%); refit labeler reproduces reference AUROC 0.6539 [0.6257, 0.6749] on holoassist_audible test split; pseudo-label-quality:all AUROC 0.6210 [0.5684, 0.6739], pseudo-label-quality unseen null (all 5,682 items correct; test split took all mistakes); battery --slow exit 0.
+
 ---
 
 ## 4. Deferred work (do not start without its trigger)

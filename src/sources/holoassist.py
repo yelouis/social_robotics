@@ -178,21 +178,15 @@ def print_stats(stats: Dict[str, Any]) -> None:
     print(f"    - Correct actions with instructor utterance: {stats['react_spoke_correct_num']} / {stats['react_spoke_correct_denom']} ({stats['react_spoke_correct_rate']*100:.2f}%)")
 
 
-def build_holoassist_items(
-    holoassist_dir: Optional[Path] = None,
-    labels_dir: Optional[Path] = None,
-    check_paths: bool = True,
-    train_cap: int = 1500,
-    test_cap: int = 1000,
-    seed: int = 0,
+def extract_action_candidates(
+    sessions: List[Dict[str, Any]],
     dataset: str = "holoassist",
     session_allowlist: Optional[Set[str]] = None,
-) -> Tuple[List[Item], Dict[str, Any], Dict[str, str]]:
+    exclude_keys: Optional[Set[Tuple[str, int]]] = None,
+    holoassist_dir: Optional[Path] = None,
+    check_paths: bool = True,
+) -> Tuple[List[Item], Dict[str, int], int]:
     hd = holoassist_dir or get_holoassist_dir()
-    ld = labels_dir or get_labels_dir(hd)
-    sessions = load_raw_annotations(ld)
-    sessions = sorted(sessions, key=lambda s: s.get("video_name", ""))
-
     skip_counts: Dict[str, int] = {
         "missing_correctness_attr": 0,
         "missing_duration": 0,
@@ -200,9 +194,8 @@ def build_holoassist_items(
         "invalid_reaction_window": 0,
         "missing_video": 0,
         "not_audible": 0,
+        "excluded": 0,
     }
-
-    # 1. Collect all valid candidates
     candidates: List[Item] = []
     actions_seen = 0
 
@@ -251,6 +244,10 @@ def build_holoassist_items(
                 skip_counts["missing_correctness_attr"] += 1
                 continue
 
+            if exclude_keys is not None and (vname, idx) in exclude_keys:
+                skip_counts["excluded"] += 1
+                continue
+
             if not is_allowed:
                 skip_counts["not_audible"] += 1
                 continue
@@ -297,7 +294,7 @@ def build_holoassist_items(
                 "verb": verb,
                 "noun": noun,
             }
-            if session_allowlist is not None:
+            if session_allowlist is not None or dataset == "holoassist_pool":
                 meta["source_item_id"] = f"holoassist:{vname}:{idx}"
 
             item = Item(
@@ -313,6 +310,88 @@ def build_holoassist_items(
                 meta=meta,
             )
             candidates.append(item)
+
+    return candidates, skip_counts, actions_seen
+
+
+def build_holoassist_pool(
+    session_allowlist: Optional[Set[str]] = None,
+    exclude_keys: Optional[Set[Tuple[str, int]]] = None,
+    n_total: int = 20000,
+    seed: int = 0,
+    holoassist_dir: Optional[Path] = None,
+    labels_dir: Optional[Path] = None,
+    check_paths: bool = True,
+) -> Tuple[List[Item], Dict[str, Any]]:
+    hd = holoassist_dir or get_holoassist_dir()
+    ld = labels_dir or get_labels_dir(hd)
+    sessions = load_raw_annotations(ld)
+    sessions = sorted(sessions, key=lambda s: s.get("video_name", ""))
+
+    candidates, skip_counts, actions_seen = extract_action_candidates(
+        sessions=sessions,
+        dataset="holoassist_pool",
+        session_allowlist=session_allowlist,
+        exclude_keys=exclude_keys,
+        holoassist_dir=hd,
+        check_paths=check_paths,
+    )
+
+    rng = np.random.default_rng(seed)
+    if len(candidates) > n_total:
+        idxs = rng.choice(len(candidates), size=n_total, replace=False)
+        sampled = [candidates[i] for i in idxs]
+    else:
+        sampled = list(candidates)
+
+    sampled.sort(key=lambda x: x.item_id)
+
+    errors = validate_items(sampled, check_paths=check_paths)
+    if errors:
+        raise ValueError(f"HoloAssist pool validation failed with {len(errors)} errors: {errors[:5]}")
+
+    n_correct = sum(1 for it in sampled if it.label == 1)
+    n_mistakes = sum(1 for it in sampled if it.label == 0)
+
+    stats = {
+        "dataset": "holoassist_pool",
+        "sessions_seen": len(sessions),
+        "audible_sessions": len(session_allowlist) if session_allowlist is not None else len(sessions),
+        "actions_seen": actions_seen,
+        "candidates_pool": len(candidates),
+        "n_items": len(sampled),
+        "n_correct": n_correct,
+        "n_mistakes": n_mistakes,
+        "mistake_pct": (n_mistakes / len(sampled) * 100.0) if sampled else 0.0,
+        "actions_skipped": skip_counts,
+        "seed": seed,
+    }
+    return sampled, stats
+
+
+def build_holoassist_items(
+    holoassist_dir: Optional[Path] = None,
+    labels_dir: Optional[Path] = None,
+    check_paths: bool = True,
+    train_cap: int = 1500,
+    test_cap: int = 1000,
+    seed: int = 0,
+    dataset: str = "holoassist",
+    session_allowlist: Optional[Set[str]] = None,
+) -> Tuple[List[Item], Dict[str, Any], Dict[str, str]]:
+    hd = holoassist_dir or get_holoassist_dir()
+    ld = labels_dir or get_labels_dir(hd)
+    sessions = load_raw_annotations(ld)
+    sessions = sorted(sessions, key=lambda s: s.get("video_name", ""))
+
+    candidates, skip_counts, actions_seen = extract_action_candidates(
+        sessions=sessions,
+        dataset=dataset,
+        session_allowlist=session_allowlist,
+        exclude_keys=None,
+        holoassist_dir=hd,
+        check_paths=check_paths,
+    )
 
     # 2. Partition groups 70/30 across all sessions
     unique_groups = sorted(list(set(derive_group_id(s.get("video_name", "")) for s in sessions)))
@@ -416,6 +495,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="HoloAssist source adapter and dataset builder")
     parser.add_argument("--stats", action="store_true", help="Print HoloAssist label statistics")
     parser.add_argument("--build", action="store_true", help="Build items, stats, and group split")
+    parser.add_argument("--build-pool", action="store_true", help="Build pretraining pool items and stats")
+    parser.add_argument("--exclude-from", type=Path, default=None, help="Items JSONL file whose (session, event_idx) to exclude")
+    parser.add_argument("--n", type=int, default=20000, help="Number of pool items to sample")
     parser.add_argument("--dataset", default="holoassist", help="Dataset name to build")
     parser.add_argument("--audible-from", type=Path, default=None, help="JSONL file with session audibility results")
     parser.add_argument("--no-check-paths", action="store_true", help="Do not require video files to exist on disk")
@@ -428,6 +510,53 @@ def main() -> None:
         splits = load_official_splits()
         stats = compute_stats(sessions, splits)
         print_stats(stats)
+        return
+
+    if args.build_pool:
+        session_allowlist = None
+        if args.audible_from:
+            session_allowlist = set()
+            with open(args.audible_from, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        rec = json.loads(line)
+                        if rec.get("audible") is True:
+                            session_allowlist.add(rec["video_name"])
+            print(f"Loaded {len(session_allowlist)} audible sessions from {args.audible_from}.")
+
+        exclude_keys = set()
+        if args.exclude_from:
+            with open(args.exclude_from, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        rec = json.loads(line)
+                        iid = rec.get("item_id", "")
+                        parts = iid.split(":")
+                        if len(parts) >= 3:
+                            vname = parts[1]
+                            idx = int(parts[2])
+                            exclude_keys.add((vname, idx))
+            print(f"Loaded {len(exclude_keys)} exclude keys from {args.exclude_from}.")
+
+        print(f"Building holoassist_pool items (target n={args.n})...")
+        items, stats = build_holoassist_pool(
+            session_allowlist=session_allowlist,
+            exclude_keys=exclude_keys,
+            n_total=args.n,
+            seed=args.seed,
+            check_paths=not args.no_check_paths,
+        )
+        print(f"Built {len(items)} pool items ({stats['n_correct']} correct, {stats['n_mistakes']} mistakes).")
+
+        out_dir = DATA_ROOT / "items" / "holoassist_pool"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        items_path = out_dir / "items.jsonl"
+        stats_path = out_dir / "stats.json"
+
+        write_items(items, items_path)
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(stats, f, indent=2)
+        print(f"Wrote {items_path} and {stats_path}")
         return
 
     if args.build:
