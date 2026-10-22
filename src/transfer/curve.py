@@ -16,7 +16,7 @@ from features.cache import FeatureCache
 from harness.scorecard import ScorecardRow, append_rows, config_hash, make_row
 from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
-from transfer.heads import load_human_heads, load_transfer_scaler
+from transfer.heads import ensure_scaler_and_heads, load_human_heads, load_transfer_scaler
 from transfer.prior_lr import prior_regularized_logistic_regression, predict_proba
 
 
@@ -132,6 +132,9 @@ def run_curve(
         raise RuntimeError("Some robot train pool items missing u9 features")
     if not np.all(valid_te):
         raise RuntimeError("Some robot test items missing u9 features")
+
+    # Ensure transfer scaler and human heads exist
+    ensure_scaler_and_heads(root)
 
     # Load scaler and scale features
     scaler = load_transfer_scaler(root / "transfer" / "scaler.npz")

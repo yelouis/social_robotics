@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: A15 report fix, then Wave D, the offline robot check (D1 → D2 → D3 → D4), October 21, 2026 (Issue 9 = B)
+# Agent Execution Guide: Queue Complete: waiting on the designer's verification of Wave D, and Issue 1 (Wave B)
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -27,7 +27,7 @@
 - *"No need to open up a new branch, just push to the repo."*
 - **October 21, 2026:** *"For issue 8, lets go with Option A."* and *"For issue 9, lets go with Option B."*
 
-**Status:** **Active Build.** Next is **D1**.
+**Status:** **Queue Complete: waiting on the designer's verification of Wave D, and Issue 1 (Wave B)**.
 - **Nothing in this queue waits on the maintainer.** Issue 9 is decided (B: the full download).
 
 **Every path, number, field name, formula and literal string in this guide, in `03_eval_harness.md` and in `04_wave_d_robot_check.md` is a decision, not a suggestion. Implement as written; do not substitute your own.**
@@ -106,14 +106,14 @@
 | HoloAssist videos and labels | `DATA_ROOT/raw/holoassist/` | 2,111 videos |
 | RoboReward | `DATA_ROOT/raw/roboreward/` | **not downloaded yet.** D3 downloads all of it (Issue 9 = B). The SSD has 1.3 TiB free |
 
-### 1.4 Gates (run bare October 21, 2026, with `TMPDIR` on the SSD; the regression bar)
+### 1.4 Gates (run bare October 22, 2026, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on `d6d9c54` (updated D3) |
+| # | Gate | Command | Result on `d6d9c54` (updated D4) |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · clean |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **104 passed**, 3 runs out of 3 |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **106 passed**, 3 runs out of 3 |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **10 passed** (99 s); `memguard --status`: 30.7 GB, pressure 1, lock free |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **11 passed** (76.8 s); `memguard --status`: 23.7 GB, pressure 1, lock free |
 
 ### 1.5 Reference values to reproduce
 
