@@ -205,46 +205,94 @@
   - fixed size (no scaling curve);
   - depends on the EULA holders accepting an independent researcher.
 
-**New, October 22, 2026: routes that need no email** (designer research at the maintainer's request: *"can you brainstorm any other way of collecting videos without emailing?"*). The web checks were cut short by a search usage limit, so anything marked *unverified* is re-checked before it goes into a spec.
+**New, October 22–23, 2026: routes that need no email** (designer research at the maintainer's request: *"can you brainstorm any other way of collecting videos without emailing?"*). The web checks were finished on October 23. **What they found: no email-free route has face video with a hidden outcome. Every email-free route is voice only (F, G, H).**
 
-**Option F: Ego-Exo4D's expert commentary and proficiency labels.** Access is an online license agreement, the same kind the maintainer accepted for Ego4D (*the access flow is unverified*).
-- **What it is:** a large multiview dataset of skilled activities (cooking, bike repair, basketball, soccer, dance, music, bouldering, health procedures). Coaches and teachers recorded spoken **commentary while watching** each performance, and the performances carry **proficiency labels**.
-- **Why it fits:** it has the verdict-video structure: an evaluator reacts to what they watch, and there is a verdict.
+**Option F: Ego-Exo4D's expert commentary and proficiency labels**
+- **Access (verified October 23, [getting started](https://docs.ego-exo4d-data.org/getting-started/)):**
+  - an online license at `ego4d.dev/request/ego-exo4d`, which can be signed "as an individual". It covers research and commercial use and has no fee;
+  - approval typically takes about 48 hours. AWS credentials then arrive by email, so there is nothing to write;
+  - the credentials expire after 14 days; ask again to renew.
+- **What it is** ([annotation docs](https://docs.ego-exo4d-data.org/annotations/expert_commentary/), [arXiv 2311.18259](https://arxiv.org/abs/2311.18259)):
+  - 52 domain experts (coaches, chefs, performers) recorded **audio** commentary on skilled performances. There is no video of the experts;
+  - each expert watched a take once, then paused to critique it, and gave the whole take a 1–10 proficiency score with a reason;
+  - four-level skill labels (novice to late expert) cover 3,312 takes: 1,983 train, 561 val and 768 test. Bike repair and health are excluded.
+- **The A4-style independence check, done October 23** (the paper's Table 22, §11.5):
+  - in basketball, soccer, dancing, bouldering and music, the skill level comes from the performer's own survey (years of experience, training, highest bouldering grade, practice count). There it is independent of the commentary;
+  - **in cooking, the level is the average commentary score** (P < 3.5 is novice … P ≥ 8 is late expert). Cooking would be circular and must be left out.
 - *Pros:*
-  - no email;
-  - large;
-  - first- and third-person video;
-  - the maintainer has used this kind of licensing before.
+  - no email to write, and a license that covers this use;
+  - labels independent of the commentary in five scenarios;
+  - first- and third-person video of the performance.
 - *Cons:*
-  - the commentary is mostly **words** (the leakage condition), so the non-verbal signal is the commentator's voice only;
-  - **who assigned proficiency, and from what, needs the independence check HoloAssist got in A4**. If the commentators set the labels, the test is "does their tone predict their own rating";
-  - skill is partly visible, so this is not a purely hidden outcome.
+  - **not a hidden outcome.** Skill shows in the performance, so an action-only judge can see it (like Oops!, unlike a taste);
+  - the commentary is a **deliberate critique** (pause, then explain), not a spontaneous reaction, and its words state the verdict;
+  - voice only.
 
-**Option G: taste-and-rate podcasts through their RSS feeds** (mostly audio; some shows publish video)
+**Option G: taste-and-rate podcasts through their RSS feeds** (voice only)
 - **What it is:** shows where hosts taste food or drink on air and then score it ("7 out of 10"). RSS feeds are published for anyone to download, unlike YouTube, whose terms forbid downloading.
+- **The count (October 23, Apple's public podcast search; 12 fixed queries such as "taste test", "snack review", "beer review" and "whiskey review"):**
+  - 483 shows matched, most of them off-topic;
+  - 11 clearly on-topic feeds hold **3,397 episodes**: Cheap Wine Finder 1,030; Sips, Suds, & Smokes 670; The Scotchy Bourbon Boys 630; Xtreme Tasting League: Scotch 200; Irish Whiskey Review 181; Quick Beer Reviews 170; Candy Is Dandy 130; Super Tasters 111; Taste Test Dummies 100; Taste Test Thursday 90; Mike and Tom Eat Snacks 85. A twelfth feed was empty;
+  - **every episode in those feeds is audio (MP3 or M4A). None is video;**
+  - whether each episode has an on-air tasting followed by a stated score is *unverified*. That needs transcripts.
 - *Pros:*
   - no email, and no platform terms against downloading;
-  - a **hidden outcome** (taste);
+  - a **hidden outcome** (taste), in the genre Wave B was planned around;
   - verdicts parsed automatically from the transcript (the Wave B pipeline);
-  - potentially large (*pool size unverified*).
+  - enough episodes for a scaling curve, if most contain a scored tasting.
 - *Cons:*
-  - **mostly no face**: voice only, which Wave A showed is mainly "did they speak";
+  - **voice only** (confirmed), and Wave A showed voice is mainly "did they speak";
   - copyright still applies (research use only, nothing redistributed). For an unaffiliated researcher the risk is personal, and this is not legal advice;
-  - first-taste moments are harder to find in audio than in video.
+  - first-taste moments are harder to find in audio than in video, and each show formats its verdicts differently.
+
+**Option H: court oral arguments** (public-domain audio; the verdict is each judge's vote; new October 23)
+- **What it is:** judges question both sides on the record, then vote later, in private. That is a reaction followed by a hidden verdict.
+  - **U.S. Supreme Court:**
+    - an MP3 and a transcript of every argument since the 2010 term, free on the Court's site ([argument audio](https://www.supremecourt.gov/oral_arguments/audio/2025/25-197), [2010 notice](https://www.supremecourt.gov/publicinfo/press/pressreleases/pr_09-28-10));
+    - each justice's vote comes from the [Supreme Court Database](https://scdb.la.psu.edu/data/2025-release-01): one row per justice per case, terms 1946–2024, direct download;
+    - roughly 1,000 argued cases since 2010, so about 9,000 votes (*an estimate*, at about 60 cases a term).
+  - **Ninth Circuit:** each argument page has a "Download Audio" button. **The video is a YouTube embed** (checked on one case page on October 23), so the YouTube rule covers the video.
+- **A published positive control:** the pitch of the justices' voices alone predicts many of their votes (Dietrich, Enos & Sen, *Political Analysis* 2019, [summary](https://msen.scholars.harvard.edu/supreme-court-vocal-pitch)). The harness's voice path can therefore be checked against a known result.
+- *Pros:*
+  - no email and no account;
+  - federal court recordings are U.S. government works, which carry no U.S. copyright (17 U.S.C. § 105; not legal advice);
+  - the speakers are public officials in a public proceeding, so consent is far less of a concern than for private people on YouTube;
+  - a hidden outcome with automatic labels.
+- *Cons:*
+  - voice only;
+  - **the words leak**: the side asked more questions tends to lose, so the text and action-only baselines will be strong;
+  - few speakers (about 15 justices since 2010), so "works for a new person" is weakly tested. The Ninth Circuit adds dozens of judges, but its outcomes must be parsed from rulings (*unverified*);
+  - far from robots and from taste: the verdict is a legal vote, not a liking.
 
 **Also found, but not for Wave B:**
-- **REFLEX** (KTH; [Zenodo 14160783](https://zenodo.org/records/14160783); **open access, CC BY 4.0**; verified October 22): camera video of 55 people reacting to a robot's **failures** and its explanations, with per-failure annotations and questionnaires.
-  - A 5-person sample is 3.7 GB, and the full data is listed at 1.1 TB. A newer version exists (*contents unverified*).
+- **REFLEX** (KTH; **open, CC BY 4.0**; verified October 23): people reacting to a robot's **failures** and its explanations.
+  - The **full** set is version 1.1.0 on [Zenodo 14590226](https://zenodo.org/records/14590226) (March 2, 2025): one 37.2 GB zip with 55 participants.
+  - It has per-failure annotations (including whether the task was resolved) and satisfaction questionnaires.
+  - *Correction:* the "1.1 TB" noted on October 22 was Zenodo's download statistic, not the data size. Version 1 ([14160783](https://zenodo.org/records/14160783)) is a 5-person sample.
   - **It is a possible "reactions to robots" target without BAD's IRB requirement** (see Issue 4).
-- **EMPATHIC** (Cui et al., CoRL 2020; [Zenodo 4290896](https://zenodo.org/record/4290896)): faces of people watching an agent act, with per-episode reward and optimality, the closest prior work to this thesis.
-  - Its search listing says *restricted* (access through Zenodo's request button; *unverified*), so someone must approve it.
+- **EMPATHIC** (Cui et al., CoRL 2020; [Zenodo 4290896](https://zenodo.org/record/4290896); CC BY-NC 4.0): 102.8 GB of face frames of people watching agents (a driving game and a robot sorting task), with per-step reward and optimality. It is the closest prior work to this thesis.
+  - **Restricted (verified October 23):** access is through Zenodo's "Request access" form, not email, and the authors approve it.
+- **CANDOR** (BetterUp): 1,656 video-chat conversations from 2020, over 1 TB with video. Both people rated the conversation and each other afterward, so it has faces, a hidden verdict, and is close to social robots.
+  - It needs a request to BetterUp, and the TalkBank copy with media needs an emailed request ([ConvoKit](https://convokit.cornell.edu/documentation/candor.html), [TalkBank](https://talkbank.org/ca/access/CANDOR.html)).
+  - That makes it an E-type route, not an email-free one.
+- **Seamless Interaction** (Meta; CC BY-NC 4.0; [Hugging Face](https://huggingface.co/datasets/facebook/seamless-interaction)): over 4,000 hours of face-to-face video, open to download. It has **no outcome labels**, only 751 first-person internal-state notes, so it is not a verdict source.
 - **Checked and not usable without email:** the beverage-tasting database (2,970 videos) has no public download; AM-FED+ needs an emailed, signed license (that is option E).
 
-**Recommendation (revised October 22, 2026):** **check F and G first, then choose** (the designer, one short session once web search is available again):
-- confirm Ego-Exo4D's access flow, and who assigned its proficiency labels;
-- count taste-and-rate podcast episodes through Apple's public podcast search, which needs no key or account.
+**Recommendation (October 22, kept for the record):** check F and G first, then choose. *Done October 23 (above).*
 
-E stays available whenever you are willing to send a request; it is the only route with face reactions to a hidden outcome. *The earlier recommendation, kept for the record:*
+**Recommendation (revised October 23, 2026): H now, plus E in parallel.**
+- **H is the best email-free route:**
+  - public-domain recordings;
+  - a hidden outcome with automatic labels;
+  - a published result to check the harness against.
+- **Every email-free route is voice only.** A null on voice alone would not test faces. The Wave B spec must say which data decides the kill rule; the designer will propose that there, for you to confirm.
+- **E is the only route to faces with a hidden outcome:**
+  - M5 (the taste-liking authors) is a plain email with no signature;
+  - M4 (AM-FED+) needs your own signature on Affectiva's license first.
+- **G** is the fallback if you want the taste genre itself.
+- **F is not recommended for Wave B:** skill is visible in the performance, so it is not a hidden-outcome test, and the commentary is a deliberate critique.
+
+*The earlier recommendation, kept for the record:*
 
 **Recommendation (revised again October 9, 2026, after option D was declined):** **E as the hidden-outcome core, with creator permission (and non-YouTube CC) for scale.**
 - **E:** request AM-FED+ (maintainer action M4), and ask the taste-liking authors (M5).
@@ -272,7 +320,13 @@ Your selection: _____
 - **The maintainer is not affiliated** (Issue 1, fact 6).
 - **ERR@HRI 3.0's copy of BAD** is likely gated similarly. The 2024 edition's EULA was approved by the University of Cambridge's data protection officer and ethics committee, and signed copies went to a research office. Not confirmed for 3.0.
 
-**New fact (October 22, 2026):** an **openly licensed** dataset of people reacting to robot failures exists. REFLEX (KTH; [Zenodo 14160783](https://zenodo.org/records/14160783); CC BY 4.0; 55 participants; per-failure annotations) has no IRB or email requirement. It could give a "reactions to robots" result without BAD. It will be assessed in the H2 spec (its labels, size and the newer version's contents are not yet verified). The decision below is unchanged.
+**New facts (October 22–23, 2026):** two datasets of people reacting to robots or agents need no IRB.
+- **REFLEX** (KTH; CC BY 4.0; open, no email): the full set is [Zenodo 14590226](https://zenodo.org/records/14590226).
+  - version 1.1.0 (March 2, 2025): one 37.2 GB zip with 55 participants;
+  - per-failure annotations, including whether the task was resolved;
+  - satisfaction questionnaires.
+- **EMPATHIC** ([Zenodo 4290896](https://zenodo.org/record/4290896); CC BY-NC 4.0): faces of people watching agents, with per-step reward. Access is Zenodo's request form, approved by the authors (no email).
+- Either could give a "reactions to robots" result without BAD. They will be assessed in the H2 spec. The decision below is unchanged.
 
 **Option A: ask anyway, offering an independent IRB** (the M1a draft)
 - *Pros:* free to ask; it keeps the published robot-reaction benchmark in play.
