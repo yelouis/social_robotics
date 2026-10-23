@@ -205,6 +205,47 @@
   - fixed size (no scaling curve);
   - depends on the EULA holders accepting an independent researcher.
 
+**New, October 22, 2026: routes that need no email** (designer research at the maintainer's request: *"can you brainstorm any other way of collecting videos without emailing?"*). The web checks were cut short by a search usage limit, so anything marked *unverified* is re-checked before it goes into a spec.
+
+**Option F: Ego-Exo4D's expert commentary and proficiency labels.** Access is an online license agreement, the same kind the maintainer accepted for Ego4D (*the access flow is unverified*).
+- **What it is:** a large multiview dataset of skilled activities (cooking, bike repair, basketball, soccer, dance, music, bouldering, health procedures). Coaches and teachers recorded spoken **commentary while watching** each performance, and the performances carry **proficiency labels**.
+- **Why it fits:** it has the verdict-video structure: an evaluator reacts to what they watch, and there is a verdict.
+- *Pros:*
+  - no email;
+  - large;
+  - first- and third-person video;
+  - the maintainer has used this kind of licensing before.
+- *Cons:*
+  - the commentary is mostly **words** (the leakage condition), so the non-verbal signal is the commentator's voice only;
+  - **who assigned proficiency, and from what, needs the independence check HoloAssist got in A4**. If the commentators set the labels, the test is "does their tone predict their own rating";
+  - skill is partly visible, so this is not a purely hidden outcome.
+
+**Option G: taste-and-rate podcasts through their RSS feeds** (mostly audio; some shows publish video)
+- **What it is:** shows where hosts taste food or drink on air and then score it ("7 out of 10"). RSS feeds are published for anyone to download, unlike YouTube, whose terms forbid downloading.
+- *Pros:*
+  - no email, and no platform terms against downloading;
+  - a **hidden outcome** (taste);
+  - verdicts parsed automatically from the transcript (the Wave B pipeline);
+  - potentially large (*pool size unverified*).
+- *Cons:*
+  - **mostly no face**: voice only, which Wave A showed is mainly "did they speak";
+  - copyright still applies (research use only, nothing redistributed). For an unaffiliated researcher the risk is personal, and this is not legal advice;
+  - first-taste moments are harder to find in audio than in video.
+
+**Also found, but not for Wave B:**
+- **REFLEX** (KTH; [Zenodo 14160783](https://zenodo.org/records/14160783); **open access, CC BY 4.0**; verified October 22): camera video of 55 people reacting to a robot's **failures** and its explanations, with per-failure annotations and questionnaires.
+  - A 5-person sample is 3.7 GB, and the full data is listed at 1.1 TB. A newer version exists (*contents unverified*).
+  - **It is a possible "reactions to robots" target without BAD's IRB requirement** (see Issue 4).
+- **EMPATHIC** (Cui et al., CoRL 2020; [Zenodo 4290896](https://zenodo.org/record/4290896)): faces of people watching an agent act, with per-episode reward and optimality, the closest prior work to this thesis.
+  - Its search listing says *restricted* (access through Zenodo's request button; *unverified*), so someone must approve it.
+- **Checked and not usable without email:** the beverage-tasting database (2,970 videos) has no public download; AM-FED+ needs an emailed, signed license (that is option E).
+
+**Recommendation (revised October 22, 2026):** **check F and G first, then choose** (the designer, one short session once web search is available again):
+- confirm Ego-Exo4D's access flow, and who assigned its proficiency labels;
+- count taste-and-rate podcast episodes through Apple's public podcast search, which needs no key or account.
+
+E stays available whenever you are willing to send a request; it is the only route with face reactions to a hidden outcome. *The earlier recommendation, kept for the record:*
+
 **Recommendation (revised again October 9, 2026, after option D was declined):** **E as the hidden-outcome core, with creator permission (and non-YouTube CC) for scale.**
 - **E:** request AM-FED+ (maintainer action M4), and ask the taste-liking authors (M5).
 - **Scale:**
@@ -230,6 +271,8 @@ Your selection: _____
   - a special download agreement (no redistribution; use limited to the described study within human-interaction research; no identifying or harming participants).
 - **The maintainer is not affiliated** (Issue 1, fact 6).
 - **ERR@HRI 3.0's copy of BAD** is likely gated similarly. The 2024 edition's EULA was approved by the University of Cambridge's data protection officer and ethics committee, and signed copies went to a research office. Not confirmed for 3.0.
+
+**New fact (October 22, 2026):** an **openly licensed** dataset of people reacting to robot failures exists. REFLEX (KTH; [Zenodo 14160783](https://zenodo.org/records/14160783); CC BY 4.0; 55 participants; per-failure annotations) has no IRB or email requirement. It could give a "reactions to robots" result without BAD. It will be assessed in the H2 spec (its labels, size and the newer version's contents are not yet verified). The decision below is unchanged.
 
 **Option A: ask anyway, offering an independent IRB** (the M1a draft)
 - *Pros:* free to ask; it keeps the published robot-reaction benchmark in play.
