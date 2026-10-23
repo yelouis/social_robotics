@@ -283,7 +283,10 @@ The VLM judge should be strong here, because the failure is visible. That is the
   - `task`: language instruction string.
   - `reward`: integer rubric score (1 to 5).
   - `gpt5_mini_check`: verification text or null.
-- **Duration range:** 0.9s to 82.7s (mean ~31s across sampled episodes).
+- **Durations of the 5,517 built items** (designer correction, October 22: the line written in D3 said 0.9–82.7 s):
+  - all items: 0.1–134.6 s (median 7.7 s, mean 16.1 s); 519 are under 1 s, mostly clipped `_attempt_` failures;
+  - train pool: median 6.6 s;
+  - test: median 16.3 s. The test split is 45% `robo_arena`, against 19% in the train pool, which follows RoboReward's own split composition.
 
 ## The HoloAssist pretraining pool (`holoassist_pool`, Wave D)
 

@@ -145,3 +145,28 @@
 | The labeler, pseudo-labels, human heads (`heads.npz`), the scaler (`scaler.npz`), the curve's raw per-draw scores (`curve_scores.npz`) | `DATA_ROOT/transfer/` |
 | Code | `src/sources/roboreward.py`, `src/transfer/{prior_lr,heads,curve}.py`, `tools/download_roboreward.py`, `tools/report_wave_d.py` |
 | The report | `docs/evals/<date>_wave_d_robot_check.md` |
+
+---
+
+## 8. Result of v1 (October 22, 2026), and the designer's post-hoc notes
+
+**The pre-registered verdict is NOT SUPPORTED** (`docs/evals/2026-10-22_wave_d_robot_check.md`; rows `2026-10-22T14:22:28Z`–`14:24:54Z`).
+- `gain:react:N=100` = +0.0009 [−0.0006, 0.0024]; `react_minus_shuffled:N=100` = +0.0008 [−0.0013, 0.0029]; `gain:truth:N=100` = −0.0507 [−0.0779, −0.0240].
+- The interpretation printed by §6 is row 1, the true-label gain's `ci_low ≤ 0`.
+- **References:** `robot-full` 0.657 [0.624, 0.690]; `judge-large` 0.747 [0.720, 0.774]; the leak check passes.
+- **The verdict stands. These notes do not change it.** They record what the designer found when verifying the run, so that no one reads more into v1 than it supports.
+
+**Two flaws in this spec** (the implementation followed it faithfully):
+1. **§2.2's exclusion depleted the pool's mistakes.**
+   - Wave A's balanced `holoassist_audible` sample had taken about 92% of the audible sessions' mistakes, so the pool has 104 mistakes in 20,000 (0.52%), and none in the sessions the labeler never saw. §3's primary quality row is therefore undefined.
+   - The `truth` head, fit on 104 mistakes, is overfit: in-sample AUROC 0.997, norm 26.9.
+2. **§4's prior strength is the head's norm, which nothing controlled.** The norms are `react` 0.99, `shuffled` 1.03 and `truth` 26.9.
+   - At N = 100, the `react` and `shuffled` priors moved test predictions by 0.015 on average; `truth` moved them by 0.33.
+   - So "truth hurts" mostly measures an oversized prior from an overfit head, not transfer itself.
+
+**Exploratory diagnostics** (measured after the result was seen, so they are not evidence for any verdict):
+- **Each human head on its own, scored on the robot test set:** `react` 0.508 [0.475, 0.540], `shuffled` 0.521 [0.487, 0.554], `truth` 0.491 [0.457, 0.522]. All are at chance, and every head's direction is orthogonal to the no-prior robot detector's (cosine ≈ 0.00).
+- **Well-posed true-label heads:** one fit on `holoassist_audible` train (1,500 + 1,500) scores 0.550 [0.515, 0.585] on robot test; one fit on full `holoassist` train scores 0.472 [0.437, 0.509].
+- **Reading:** HoloAssist's "correct step" carries little robot-success information in SigLIP space, so the binding constraint is the human data's domain. A version with both flaws fixed would most likely also be null.
+
+**What happens next is Issue 10** (`ongoing_general_errors.md`): accept v1, pre-register a corrected v2, or close offline H3.

@@ -191,6 +191,14 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **The download is Issue 9.**
 24. **Issue 9 → B** (maintainer, in chat): download the whole of RoboReward (43.2 GB) at the pinned revision. RoboReward-8B is not run, because it would break the frozen dependencies.
 
+**2026-10-22** (designer, verification of A15 and D1–D4):
+25. **Wave D v1 result (H3 offline): NOT SUPPORTED** by the pre-registered rule.
+    - `gain:react:N=100` = +0.0009 [−0.0006, 0.0024]; `gain:truth:N=100` = −0.0507.
+    - References: `robot-full` 0.657; zero-shot `judge-large` 0.747.
+    - **Two flaws in the designer's spec weaken the test:** the pool lost its mistakes (0.52%), and the prior's strength was its uncontrolled norm.
+    - **The exploratory diagnostics put every human head at chance on robot videos,** even a well-posed true-label head (0.550 [0.515, 0.585]). The binding constraint is the human data's domain.
+    - The verdict stands (`04_wave_d_robot_check.md` §8). **The next step is Issue 10.**
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is decided (B: the full RoboReward download). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is resolved (B: the full RoboReward download, verified). **Issue 10** (after the Wave D v1 null: accept it, run a corrected v2, or close offline H3) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

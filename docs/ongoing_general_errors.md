@@ -14,6 +14,7 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
+  - **Issue 10 (new, October 22):** Wave D v1 says "not supported", but two flaws in the designer's spec weaken the test, and the diagnostics point at the human data as the binding problem. Accept it, run a corrected v2, or close offline H3?
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below):
@@ -24,6 +25,32 @@
   - Issue 6 (the audible-session set, October 21, A12–A13).
   - Issue 8 (Wave D go: option A, spec written, October 21).
   - Issue 9 (full RoboReward download verified, October 22, D3).
+
+**October 22, 2026: designer verification of A15 and D1–D4** (each item's code and outputs read against `04_wave_d_robot_check.md`; the key numbers recomputed independently; the battery run bare).
+- **Battery** (on `315f3a6`, with `TMPDIR` on the SSD): G1 exit 0; G2 106 passed, 3 runs out of 3; G3 4/4; G4 11 passed (124 s).
+- **Verified correct:**
+  - **A15:** the caveat is computed per dataset (0.498 [0.481, 0.514] audible; 0.489 [0.477, 0.502] full), and the reports use the one-sided leak label.
+  - **D1:**
+    - `holoassist` and `holoassist_audible` rebuild byte-identically;
+    - the pool has 20,000 items, aligned item by item with its pseudo-labels;
+    - the labeler reproduces 0.6539 [0.6257, 0.6749].
+  - **D2:** the learner, the soft-label weights, the label-free scaler, the heads, the paired draws with the pinned seeds, the group bootstrap and `h3_verdict` all match the spec.
+  - **D3:**
+    - the download was verified exactly;
+    - the label rule has **0 violations** over the 5,517 items, the groups are correct, and none straddles the split;
+    - every item has its u9 features, and the judge covered all 1,517 test items.
+  - **D4:** all 44 rows plus D1's 2; the leak check passes; the verdict follows the rule.
+- **Findings:**
+  - **(a) The test is weaker than intended, through two flaws in the designer's spec:**
+    - the pool lost its mistakes (0.52%);
+    - the prior's strength was its uncontrolled norm.
+
+    The exploratory diagnostics point at the human data itself: every human head is at chance on robot videos. → **Issue 10**; L15, L16.
+  - **(b) An unspecified change, accepted:** the D2 commit changed `shared/memguard.py`'s logged `waited_ms` (0 iff admitted on the first check, instead of under 50 ms). Admission behavior is unchanged.
+  - **(c) Document defects, fixed by the designer:**
+    - Issue 9's decision record was overwritten and left in the open section (moved and restored);
+    - `02_data_sources.md` gave the RoboReward duration range as 0.9–82.7 s. The 5,517 items actually run 0.1–134.6 s (median 7.7 s), with 519 under 1 s.
+  - **(d) A stray file, left in place:** `DATA_ROOT/judge/roboreward/gemma4_26b/scores.jsonl` duplicates the judge cache (1,517 lines). No code reads it, and it is harmless.
 
 **October 21, 2026: designer verification of A10, A9b, A11, A12, A13 and A14** (each item's code and outputs read against its contract; the key numbers recomputed independently from the caches).
 - **Verified correct:**
@@ -231,70 +258,59 @@ Your selection: _____
 
 ---
 
-### Issue 9: Wave D needs RoboReward on disk: how much to download, and whether to run the RoboReward-8B reference
+### Issue 10: Wave D v1 says "not supported", but two flaws in the designer's spec weaken that test. Accept it, or run a corrected v2?
 
-**Status**: 🧪 **Resolved (October 22, 2026, D3)**
-- **Downloaded and verified:** 54,140 files, 43,204,474,744 bytes, 54,135 `.mp4` video files at revision `469b9af76e8539e8d2ac553b081307738fd92ca5`.
-- **Metadata sha256:**
-  - train: `f0a21f02dce886446c28a92e5203c49de068bacd81df9011fbd824e567ab2312`
-  - val: `73710f1ad522050b46e0b7f6e0ca35d6e7c0c61221b20f3f239b2dee878fdaec`
-  - test: `3901cea9a7981d2e2d9fde4225a4b2ff0ebf2f4af69fc96972a2cfbe557db0cd`
-- **Free disk space after download:** 1,135.5 GiB (≥ 50 GiB rule satisfied).
-- **RoboReward-8B reference:** deferred (not run).
+**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 22, 2026. The implementing agent built the pre-registered spec faithfully: every component was checked against `04_wave_d_robot_check.md`, the items rebuild byte-identically, and the real-data `sklearn` equivalence holds. **The flaws are in the spec.** What to do next is your call.
 
-*Filed by the designer with the Wave D spec, October 21, 2026.*
+**Facts (October 22, 2026):**
+1. **The pre-registered verdict is NOT SUPPORTED** (rows `2026-10-22T14:22:28Z`–`14:24:54Z`):
+   - `gain:react:N=100` = **+0.0009 [−0.0006, 0.0024]**;
+   - `react_minus_shuffled:N=100` = +0.0008 [−0.0013, 0.0029];
+   - `gain:truth:N=100` = **−0.0507 [−0.0779, −0.0240]**.
 
-**Facts (October 21, 2026; Hugging Face metadata only, nothing downloaded):**
-1. **`teetone/RoboReward`** (dataset; CC-BY-4.0; revision `469b9af76e8539e8d2ac553b081307738fd92ca5`) is **43.2 GB** in total:
+   The rule's interpretation line reads: *"Human→robot transfer does not help in this setup even with true human labels; reaction labels cannot be judged here."* The leak check passes (0.498 [0.491, 0.505]). References: `robot-full` 0.657, `judge-large` (zero-shot `gemma4:26b`) 0.747.
+2. **Flaw 1, the pool:**
+   - Excluding the 4,420 `holoassist_audible` items removed about 92% of the audible sessions' mistakes, because Wave A's balanced sample had taken them.
+   - The pool has **104 mistakes in 20,000 (0.52%)**, against about 5.7% in those sessions, and **none** in the sessions the labeler never saw. So the primary `pseudo-label-quality` row is undefined.
+   - The true-label head, fit on those 104 mistakes, is overfit: in-sample AUROC 0.997, weight norm 26.9.
+3. **Flaw 2, the prior's strength:** a prior pulls with its weight norm, and the spec did not control it.
+   - The norms are **react 0.99, shuffled 1.03, truth 26.9.** The soft labels sit near 0.5 (mean 0.53, SD 0.14), so the soft-label heads came out small.
+   - At N = 100 (no-prior detector norm 2.54), the reaction and shuffled priors moved test predictions by 0.015 on average; the truth prior moved them by **0.33**.
+   - So "truth hurts" mostly measures an oversized prior from an overfit head.
+4. **But the binding problem looks like the human data, not the flaws** (designer, exploratory, measured after the result was seen):
+   - **Every human head is at chance on robot test videos on its own:** react 0.508 [0.475, 0.540], shuffled 0.521 [0.487, 0.554], truth 0.491 [0.457, 0.522]. Their directions are orthogonal to the robot detector's (cosine ≈ 0.00).
+   - **Even a well-posed true-label head barely transfers:** trained on `holoassist_audible` train (1,500 + 1,500) it scores **0.550 [0.515, 0.585]** on robot test, and trained on full `holoassist` train **0.472 [0.437, 0.509]**.
+   - Reaction pseudo-labels are weaker than true labels (pool AUROC 0.621).
+   - **So a corrected v2 would most likely also be null.** HoloAssist's "correct step" carries little robot-success information in SigLIP space.
+5. **The thesis's kill rule is unaffected:** it is decided on Wave B's verdict videos only, and Issue 1 still gates Wave B.
 
-   | Split | Videos | Size |
-   |---|---|---|
-   | train | 45,072 | 38.64 GB |
-   | val | 6,232 | 2.91 GB |
-   | test | 2,831 | 1.63 GB |
-
-   Each split also has a `metadata.jsonl` (24.9, 3.5 and 1.3 MB). Each row carries `task` (the instruction), `reward` (1–5) and `gpt5_mini_check`.
-2. **Wave D needs only part of it** (`04_wave_d_robot_check.md` §2):
-   - the three `metadata.jsonl` files;
-   - the test videos that pass the vision-only label rule (about 1,600 of 2,831, estimated from 800 rows read through the Hugging Face viewer API; about 0.9 GB);
-   - a 4,000-video robot train pool (2,000 successes and 2,000 failures, sampled from train; about 3.4 GB at the train split's mean file size).
-
-   About **4–6 GB** in total. The SSD has about 1.3 TiB free.
-3. **`teetone/RoboReward-8B`** (CC-BY-4.0) is fine-tuned from `Qwen/Qwen3-VL-8B-Instruct`, with 17.55 GB of safetensors.
-   - Running it needs a `transformers` release that supports Qwen3-VL, which is newer than our frozen 4.46.3, plus a new memory-guard step and roughly 5 h on the ~1,600 test videos.
-   - GGUF builds exist (`mradermacher/RoboReward-8B-GGUF`, 5–16 GB), but whether Ollama can load this fine-tune's vision part is unverified.
-   - The thesis lists it as a reference line, never as something to beat.
-
-**Option A (recommended): The selective download (~4–6 GB): metadata plus the filtered test plus the 4,000-video train pool. RoboReward-8B is reported as `not run`**
+**Option A (recommended): Accept v1 as Wave D's result, with the flaws and the diagnostics recorded beside it. No v2 now. Revisit robot transfer only after Wave B, through a new spec with a closer human data source**
 - *Pros:*
-  - smallest footprint;
-  - no dependency change;
-  - everything the pre-registered curve needs;
-  - one pinned revision, recorded in `DOWNLOAD.json`.
-- *Cons:*
-  - the download tool must select files from the metadata (a little more code);
-  - a larger train pool later means a second download;
-  - no RoboReward-8B line.
+  - no second analysis of the same question after seeing a null;
+  - the diagnostics already show the ceiling: the best human direction scores 0.55 on robot videos;
+  - zero compute;
+  - it puts the effort on Wave B, which is the thesis's real test.
+- *Cons:* the H3 result rests on a test with documented weaknesses, and a reviewer can say the human data was the wrong source. That is true, and it is stated.
 
-**Option B: The whole dataset (43.2 GB, one `snapshot_download`). RoboReward-8B is `not run`**
+**Option B: Pre-register and run a corrected v2 now** (same RoboReward data and robot features)
+- **Pseudo-labels:** cross-fitted over all ~41,900 audible-session actions, at the natural ~5.7% mistake rate. Each action is labeled by a labeler that never saw its session group.
+- **Priors:** all three human heads are rescaled to one norm, the mean norm of the no-prior detectors at N = 100 on the robot train pool, so the priors differ only in direction.
+- v1 is reported beside v2.
 - *Pros:*
-  - the simplest tool;
-  - val and the full train split stay on hand for any later spec.
+  - it removes both known flaws;
+  - a clean null is more citable than a flawed one.
 - *Cons:*
-  - about 8× the bytes for no use in this spec;
-  - a longer download.
+  - it is a second analysis after seeing the first, which must be disclosed;
+  - the diagnostics predict a null;
+  - about 3 h of feature extraction for ~17,500 more actions, plus about a day of agent work.
 
-**Option C: A or B, plus RoboReward-8B as a reference line**
-- *Pros:* the published robot reward model appears as a reference on our own test split.
-- *Cons:*
-  - it breaks the frozen-dependency rule: a `transformers` upgrade that could change SigLIP and the `emotion2vec` stack's behavior, so all of Wave A's slow tests and reference values would need re-checking;
-  - +17.6 GB;
-  - +~5 h;
-  - a new heavy step with an unmeasured peak.
+**Option C: Accept v1 and close offline H3 for the 3-month paper.** It is reported as a negative result, with no revisit.
+- *Pros:* the simplest scope; no open thread.
+- *Cons:* it gives up the robot-transfer question, even if Wave B produces a much stronger reaction model.
 
-**Recommendation:** **A.** RoboReward-8B is context, not a control; its paper reports its own numbers.
+**Recommendation:** **A.** It is honest about v1, spends nothing on a test the diagnostics already predict, and keeps the robot question open for when there is a better reaction model and a closer human data source.
 
-Your selection: **B** (maintainer, in chat, October 21, 2026)
+Your selection: _____
 
 ---
 
@@ -363,6 +379,19 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - A shuffled-pseudo-label prior separates "reaction labels help" from "any human-video prior helps".
      - The download it needs is **Issue 9**.
 
+7. **Issue 9: How much of RoboReward to download, and whether to run RoboReward-8B (Resolved - October 22, D3; decided by the maintainer in chat October 21: option B)**:
+   - **Problem**: Wave D needed RoboReward on disk. The options were:
+     - a selective ~4–6 GB (A);
+     - the whole 43.2 GB (B);
+     - either plus RoboReward-8B (C), which needs a `transformers` newer than the frozen 4.46.3.
+   - **Decision**: **B** (*"For issue 9, lets go with Option B"*).
+     - **Why B over A:** the experiment reads the same videos either way. B cost about 20 more minutes and 40 GB of a 1.3 TiB disk. In exchange, the download path has no file-selection code, and val and the full train split stay on hand.
+     - **RoboReward-8B is not run.**
+   - **Solution (D3):** one `snapshot_download`, verified file by file against the Hub's metadata.
+     - **54,140 files, 43,204,474,744 bytes, 54,135 `.mp4` files** at revision `469b9af76e8539e8d2ac553b081307738fd92ca5`; 1,135.5 GiB free afterwards.
+     - **Metadata sha256:** train `f0a21f02…`, val `73710f1a…`, test `3901cea9…` (full hashes in `DATA_ROOT/raw/roboreward/DOWNLOAD.json` and `02_data_sources.md`).
+   - *History:* the D3 agent rewrote this entry's status in place and left it in the open section. The designer moved it here on October 22 and restored the decision record.
+
 ---
 
 ## Maintainer actions (not agent work)
@@ -396,6 +425,10 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
 - **L12: An annotation's own vocabulary can carry the label.** HoloAssist's step verb `drop` is a mistake 95% of the time, and a train-split verb prior scores 0.721 on test, beating every action-only control. A banned-word list cannot catch this. For any text an item carries (`context_text`, step names, task names), fit a text-only prior on train and report its test AUROC before trusting the action-only controls.
 - **L13: The SSD is exFAT, and macOS tags new files.** A `com.apple.provenance` attribute on a new file makes exFAT write a hidden `._<name>` twin. Any `glob("*.jsonl")` or `rglob("*.mp4")` over `DATA_ROOT` or a temp dir on the SSD can pick it up. One test failed 1 run in 3 that way. Skip names starting with `._` everywhere a glob touches the SSD.
 - **L14: A single permutation is not a null distribution.** One shuffled-label run's bootstrap CI covers only the resampling of test items. A small control (step-prior has a few dozen verbs) lands outside it about 1 time in 5 with no leak at all. The leak check is one-sided (`ci_low > 0.5` fails; §11.9). A result that misses a stated validation bar is still reported in the commit body, even if the agent believes it is benign: here a `FAIL` sat in a report and nobody mentioned it.
+- **L15: A pool built by excluding an evaluation sample can lose its rare class.** Wave A's balanced sample had taken about 92% of the audible sessions' mistakes. Excluding it left Wave D's pool at 0.52% mistakes, and with none in the sessions the labeler never saw. Before using any derived pool, check its class counts per stratum.
+- **L16: A prior pulls with its norm, so compare priors at equal strength, and check a head's zero-shot transfer first.**
+  - Wave D's reaction and shuffled priors had norm ~1 and moved predictions by 0.015; the true-label prior had norm 27 and moved them by 0.33.
+  - All three heads were at chance on robot videos by themselves, which a one-line check would have shown before the curve was built.
 
 ---
 
@@ -456,6 +489,12 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - D2 — The Wave D code: transfer.prior_lr, heads, curve, encoder siglip-b16-224-u9, sources.roboreward, tools/download_roboreward.py, h3_verdict and tools/report_wave_d.py — git log --grep "(d2)" — prior_lr with w0=None matches sklearn LogisticRegression test AUROC within 1e-4; 21 synthetic D2 unit tests pass; G1–G3 exit 0 (104 fast passed 3/3).
 - D3 — RoboReward: the full download, items, split, robot features and the judge-large reference — git log --grep "(d3)" — full download verified at 54,140 files, 43,204,474,744 bytes, 54,135 .mp4 files (revision 469b9af76e8539e8d2ac553b081307738fd92ca5, 1135.5 GiB free); items/roboreward/ built (4,000 train pool [2,000 success, 2,000 failure, shortfall 0], 1,517 test [527 success, 990 failure], 0 straddling groups); splits/roboreward.json generated; siglip-b16-224-u9 features extracted for all 5,517 items (0 exclusions, 0.0%); judge-large (gemma4:26b) reference evaluated on all 1,517 test items (0 exclusions, 100.0% coverage); G1–G4 exit 0.
 - D4 — Wave D execution, report and close-out — git log --grep "(d4)" — Pre-registered verdict: NOT SUPPORTED. "Human→robot transfer does not help in this setup even with true human labels; reaction labels cannot be judged here." (scorecard rows ts: 2026-10-22T14:23:01Z; gain:truth:N=100 -0.0507 [-0.0779, -0.0240], gain:react:N=100 +0.0009 [-0.0006, 0.0024], react_minus_shuffled:N=100 +0.0008 [-0.0013, 0.0029]; leak check pass: 0.498 [0.491, 0.505]); report generated at docs/evals/2026-10-22_wave_d_robot_check.md; guide updated to Queue Complete; G1–G4 exit 0.
+  - *Designer note (October 22):*
+    - The verdict stands by the pre-registered rule, and the implementation is faithful.
+    - Two flaws in the spec weaken the test: the pool's mistakes were depleted, and the prior's norm was uncontrolled.
+    - Exploratory diagnostics show every human head at chance on robot videos (0.47–0.55, even with true labels).
+    - What to do next is **Issue 10**.
+- R7 — Designer verification of A15 and D1–D4 (October 22, 2026): all five items match their specs. The findings are Issue 10 (Wave D's two design flaws and the diagnostics), an accepted memguard logging change, two document fixes and a stray duplicate file. Design updated: `04_wave_d_robot_check.md` §8 (the v1 result and notes), `02_data_sources.md` (durations), `00_thesis.md` entry 25.
 
 ---
 
@@ -467,5 +506,5 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Started:** Issue 8 = A; spec `04_wave_d_robot_check.md`; Issue 9 = B (full download) |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**. The next step is **Issue 10** (accept, run a corrected v2, or close) |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |

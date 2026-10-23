@@ -44,3 +44,12 @@ Leak check (03_eval_harness.md §11.9): a shuffled control fails only if its ci_
 |---|---|---|---|---|---|
 | `detector:none:N=1000:shuffled` | auroc_mean20 | 0.498 | [0.491, 0.505] | pass | shuffled-label control; robot labels permuted per draw (seed=1000*N + r + 7) |
 
+---
+
+## Designer note (October 22, 2026; post hoc, not part of the pre-registered verdict)
+
+The verdict above follows the pre-registered rule, and the implementation was verified to match the spec. Two flaws in the spec, plus exploratory diagnostics measured after the result, qualify what it means. The details are in `04_wave_d_robot_check.md` §8.
+- **The pool lost its mistakes:** 104 of 20,000 (0.52%), none in the sessions the labeler never saw. The `truth` head is overfit to them: in-sample AUROC 0.997, norm 26.9.
+- **The priors' strength was their uncontrolled norm** (`react` 0.99, `shuffled` 1.03, `truth` 26.9). "Truth hurts" mostly reflects that.
+- **Every human head is at chance on robot videos on its own** (0.508, 0.521, 0.491), and even a well-posed true-label head scores only 0.550 [0.515, 0.585]. The binding problem is the human data's domain.
+- **Next step:** Issue 10 in `ongoing_general_errors.md`.
