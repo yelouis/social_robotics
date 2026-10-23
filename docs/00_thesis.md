@@ -95,6 +95,7 @@ Reaction-labeled human task video makes a robot **success detector** (the reward
   - **Start condition (amended October 20, 2026, decision 20):** Wave A shows a positive, CI-excluding-0 **ablation gain** (fusion − `action-fusion`) on at least one dataset. Otherwise there is no signal to transfer.
   - **Spec (pre-registered October 21, 2026):** [`04_wave_d_robot_check.md`](04_wave_d_robot_check.md). The detector's prior comes from a reaction-labeled HoloAssist head. It is compared with no prior, a shuffled-label prior and a true-label prior, at N = 50–1,000 robot labels.
   - **Supported** iff the reaction prior's gain at N = 100 is ≥ +0.02 with the CI excluding 0 **and** it beats the shuffled-label prior with the CI excluding 0.
+  - **Result (v1, October 22): NOT SUPPORTED.** It is accepted as Wave D's result (Issue 10 = A). Every human head was at chance on robot videos, so the human data's domain was the limit (`04_wave_d_robot_check.md` §8). Revisit after Wave B (DW7).
 - **Online (later, not in scope):** a policy trained with the improved reward learns faster in simulation (needs a cloud CUDA GPU; `microduck_rl`/mjlab need CUDA) or on hardware. This is the final link; the 3-month paper stops one step before it.
 
 ---
@@ -199,6 +200,11 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **The exploratory diagnostics put every human head at chance on robot videos,** even a well-posed true-label head (0.550 [0.515, 0.585]). The binding constraint is the human data's domain.
     - The verdict stands (`04_wave_d_robot_check.md` §8). **The next step is Issue 10.**
 
+26. **Issue 10 → A** (maintainer, in chat, October 22).
+    - **Wave D v1 is the offline-H3 result** (NOT SUPPORTED), with its flaws and diagnostics recorded beside it. No v2 is run.
+    - **Robot transfer is revisited only after Wave B,** through a new pre-registered spec that uses Wave B's reaction model and a human source closer to robot manipulation (DW7).
+    - **Wave B is the next work.** It waits on Issue 1.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is resolved (B: the full RoboReward download, verified). **Issue 10** (after the Wave D v1 null: accept it, run a corrected v2, or close offline H3) needs your selection. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is resolved (B: the full RoboReward download, verified). **Issue 10** is resolved (A: v1 accepted; robot transfer revisited after Wave B). **The only open decision is Issue 1**, which gates Wave B. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

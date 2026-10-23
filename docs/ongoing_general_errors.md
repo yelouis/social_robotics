@@ -14,7 +14,6 @@
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
 - **Decisions pending:**
-  - **Issue 10 (new, October 22):** Wave D v1 says "not supported", but two flaws in the designer's spec weaken the test, and the diagnostics point at the human data as the binding problem. Accept it, run a corrected v2, or close offline H3?
   - Issue 1 blocks Wave B only.
   - Issue 4 was decided October 9: the BAD request, else no robot-reaction target.
 - **Resolved** (moved to 🧪 below):
@@ -25,6 +24,7 @@
   - Issue 6 (the audible-session set, October 21, A12–A13).
   - Issue 8 (Wave D go: option A, spec written, October 21).
   - Issue 9 (full RoboReward download verified, October 22, D3).
+  - Issue 10 (Wave D v1 accepted as the result; robot transfer revisited only after Wave B; option A, October 22).
 
 **October 22, 2026: designer verification of A15 and D1–D4** (each item's code and outputs read against `04_wave_d_robot_check.md`; the key numbers recomputed independently; the battery run bare).
 - **Battery** (on `315f3a6`, with `TMPDIR` on the SSD): G1 exit 0; G2 106 passed, 3 runs out of 3; G3 4/4; G4 11 passed (124 s).
@@ -175,7 +175,7 @@
   - CC uploads include mislabeled re-uploads, so licenses need verifying;
   - CC covers the uploader's copyright, not the consent of others on screen.
 
-**Option C (recommended): measure first via the API, then decide by a fixed rule**
+**Option C: measure first via the API, then decide by a fixed rule** *(this was the recommendation until October 9; the current one is the Recommendation below)*
 - One day of API-only counting (authorized) of verdict-video candidates in both pools, with the query list and title filter fixed in the Wave B spec.
 - **The rule:**
   - if the CC pool has ≥ 1,000 candidates → **B**;
@@ -258,62 +258,6 @@ Your selection: _____
 
 ---
 
-### Issue 10: Wave D v1 says "not supported", but two flaws in the designer's spec weaken that test. Accept it, or run a corrected v2?
-
-**Status**: ⚠️ Confirmed Unresolved — found in the designer's verification, October 22, 2026. The implementing agent built the pre-registered spec faithfully: every component was checked against `04_wave_d_robot_check.md`, the items rebuild byte-identically, and the real-data `sklearn` equivalence holds. **The flaws are in the spec.** What to do next is your call.
-
-**Facts (October 22, 2026):**
-1. **The pre-registered verdict is NOT SUPPORTED** (rows `2026-10-22T14:22:28Z`–`14:24:54Z`):
-   - `gain:react:N=100` = **+0.0009 [−0.0006, 0.0024]**;
-   - `react_minus_shuffled:N=100` = +0.0008 [−0.0013, 0.0029];
-   - `gain:truth:N=100` = **−0.0507 [−0.0779, −0.0240]**.
-
-   The rule's interpretation line reads: *"Human→robot transfer does not help in this setup even with true human labels; reaction labels cannot be judged here."* The leak check passes (0.498 [0.491, 0.505]). References: `robot-full` 0.657, `judge-large` (zero-shot `gemma4:26b`) 0.747.
-2. **Flaw 1, the pool:**
-   - Excluding the 4,420 `holoassist_audible` items removed about 92% of the audible sessions' mistakes, because Wave A's balanced sample had taken them.
-   - The pool has **104 mistakes in 20,000 (0.52%)**, against about 5.7% in those sessions, and **none** in the sessions the labeler never saw. So the primary `pseudo-label-quality` row is undefined.
-   - The true-label head, fit on those 104 mistakes, is overfit: in-sample AUROC 0.997, weight norm 26.9.
-3. **Flaw 2, the prior's strength:** a prior pulls with its weight norm, and the spec did not control it.
-   - The norms are **react 0.99, shuffled 1.03, truth 26.9.** The soft labels sit near 0.5 (mean 0.53, SD 0.14), so the soft-label heads came out small.
-   - At N = 100 (no-prior detector norm 2.54), the reaction and shuffled priors moved test predictions by 0.015 on average; the truth prior moved them by **0.33**.
-   - So "truth hurts" mostly measures an oversized prior from an overfit head.
-4. **But the binding problem looks like the human data, not the flaws** (designer, exploratory, measured after the result was seen):
-   - **Every human head is at chance on robot test videos on its own:** react 0.508 [0.475, 0.540], shuffled 0.521 [0.487, 0.554], truth 0.491 [0.457, 0.522]. Their directions are orthogonal to the robot detector's (cosine ≈ 0.00).
-   - **Even a well-posed true-label head barely transfers:** trained on `holoassist_audible` train (1,500 + 1,500) it scores **0.550 [0.515, 0.585]** on robot test, and trained on full `holoassist` train **0.472 [0.437, 0.509]**.
-   - Reaction pseudo-labels are weaker than true labels (pool AUROC 0.621).
-   - **So a corrected v2 would most likely also be null.** HoloAssist's "correct step" carries little robot-success information in SigLIP space.
-5. **The thesis's kill rule is unaffected:** it is decided on Wave B's verdict videos only, and Issue 1 still gates Wave B.
-
-**Option A (recommended): Accept v1 as Wave D's result, with the flaws and the diagnostics recorded beside it. No v2 now. Revisit robot transfer only after Wave B, through a new spec with a closer human data source**
-- *Pros:*
-  - no second analysis of the same question after seeing a null;
-  - the diagnostics already show the ceiling: the best human direction scores 0.55 on robot videos;
-  - zero compute;
-  - it puts the effort on Wave B, which is the thesis's real test.
-- *Cons:* the H3 result rests on a test with documented weaknesses, and a reviewer can say the human data was the wrong source. That is true, and it is stated.
-
-**Option B: Pre-register and run a corrected v2 now** (same RoboReward data and robot features)
-- **Pseudo-labels:** cross-fitted over all ~41,900 audible-session actions, at the natural ~5.7% mistake rate. Each action is labeled by a labeler that never saw its session group.
-- **Priors:** all three human heads are rescaled to one norm, the mean norm of the no-prior detectors at N = 100 on the robot train pool, so the priors differ only in direction.
-- v1 is reported beside v2.
-- *Pros:*
-  - it removes both known flaws;
-  - a clean null is more citable than a flawed one.
-- *Cons:*
-  - it is a second analysis after seeing the first, which must be disclosed;
-  - the diagnostics predict a null;
-  - about 3 h of feature extraction for ~17,500 more actions, plus about a day of agent work.
-
-**Option C: Accept v1 and close offline H3 for the 3-month paper.** It is reported as a negative result, with no revisit.
-- *Pros:* the simplest scope; no open thread.
-- *Cons:* it gives up the robot-transfer question, even if Wave B produces a much stronger reaction model.
-
-**Recommendation:** **A.** It is honest about v1, spends nothing on a test the diagnostics already predict, and keeps the robot question open for when there is a better reaction model and a closer human data source.
-
-Your selection: _____
-
----
-
 ## 🧪 Resolved Issues & Implementation Refinements
 
 Resolved issues keep their numbers. The full evidence now lives in the design docs that each entry points to.
@@ -391,6 +335,21 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
      - **54,140 files, 43,204,474,744 bytes, 54,135 `.mp4` files** at revision `469b9af76e8539e8d2ac553b081307738fd92ca5`; 1,135.5 GiB free afterwards.
      - **Metadata sha256:** train `f0a21f02…`, val `73710f1a…`, test `3901cea9…` (full hashes in `DATA_ROOT/raw/roboreward/DOWNLOAD.json` and `02_data_sources.md`).
    - *History:* the D3 agent rewrote this entry's status in place and left it in the open section. The designer moved it here on October 22 and restored the decision record.
+
+8. **Issue 10: After Wave D v1's null: accept it, run a corrected v2, or close offline H3? (Resolved - October 22, the maintainer chose option A in chat)**:
+   - **Problem**:
+     - Wave D v1 (the offline robot check, H3) was **NOT SUPPORTED** by its pre-registered rule: `gain:react:N=100` +0.0009 [−0.0006, 0.0024]; `gain:truth:N=100` −0.0507.
+     - The designer's verification found two flaws in the spec: the pool's mistakes were depleted (0.52%), and the prior's norm was uncontrolled (`react` 0.99 vs `truth` 26.9).
+     - Exploratory diagnostics showed every human head at chance on robot videos (0.49–0.52), and even a well-posed true-label head at only 0.550 [0.515, 0.585]. So the binding constraint is the human data's domain, not the flaws.
+     - The full facts are in `04_wave_d_robot_check.md` §8.
+   - **Options:**
+     - **A:** accept v1, revisit after Wave B with a closer human source;
+     - **B:** a corrected v2 now, about a day of work, with a null predicted;
+     - **C:** accept v1 and close offline H3.
+   - **Decision**: **A** (*"For issue 10, lets go with Option A"*).
+     - **v1 is Wave D's result,** with its flaws and diagnostics recorded beside it.
+     - **No v2 is run now.**
+     - **Robot transfer is revisited only through a new, pre-registered spec, and only after Wave B.** That spec uses Wave B's reaction model and a human video source closer to robot manipulation (deferred item **DW7**).
 
 ---
 
@@ -506,5 +465,6 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 | DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
 | DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**. The next step is **Issue 10** (accept, run a corrected v2, or close) |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**, accepted as Wave D's result (Issue 10 = A). The follow-up is DW7 |
 | DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |
+| DW7 | **Robot transfer, revisited (offline H3, a new pre-registered spec).** It uses Wave B's reaction model and a human video source closer to robot manipulation (e.g. third-person tabletop work with outcome labels). v1's lessons apply: check a derived pool's class counts per stratum (L15); compare priors at equal norm, and check each head's zero-shot transfer first (L16) | Wave B shows a reaction gain (an ablation gain with `ci_low > 0`) **and** a closer human source is identified **and** the designer has written the spec (Issue 10 = A) |

@@ -1,4 +1,4 @@
-# Agent Execution Guide: Queue Complete: waiting on Issue 10 (what follows Wave D) and Issue 1 (Wave B), October 22, 2026
+# Agent Execution Guide: Queue Complete: waiting on Issue 1 (Wave B), October 22, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -9,14 +9,12 @@
   - **Wave D (H3 offline, pre-registered):** the verdict is **NOT SUPPORTED**.
     - Reaction-labeled HoloAssist video gave no gain to a RoboReward success detector (+0.0009 [−0.0006, 0.0024] at N = 100).
     - The designer found two flaws in the spec, and diagnostics showing that every human head is at chance on robot videos (`04_wave_d_robot_check.md` §8).
-- **There is no approved work.** What happens next depends on two maintainer decisions:
-  - **Issue 10:** accept Wave D v1, run a corrected v2, or close offline H3;
-  - **Issue 1:** Wave B's verdict-video source.
+- **Wave D's result is accepted** (Issue 10 = A, October 22). No v2 is run, and robot transfer is revisited only after Wave B, through a new spec (DW7).
+- **There is no approved work.** The next work is **Wave B**. It waits on **Issue 1** (Wave B's verdict-video source), which belongs to the maintainer.
 
 **Status:** **Queue Complete. Do not invent work.** The only legitimate triggers for new work are:
-1. **the maintainer's selection on Issue 10,** then the designer's spec for it (option A or C needs no agent work; option B gets a new pre-registered spec and guide items);
-2. **the maintainer's selection on Issue 1,** then the designer's Wave B spec;
-3. **a new issue the maintainer raises.**
+1. **the maintainer's selection on Issue 1,** then the designer's Wave B spec and new guide items;
+2. **a new issue the maintainer raises.**
 
 If you were started on this guide with no new spec in it, read §1, run the battery to confirm the baseline (§1.4), report the result, and **stop**.
 
@@ -52,7 +50,7 @@ If you were started on this guide with no new spec in it, read §1, run the batt
    - `/usr/bin/git push origin main`;
    - no branches, no PRs, never amend.
 10. **When a contract and this guide disagree, or a bar cannot be met, STOP and file a new issue** (the next number is **Issue 11**), with options.
-11. **Never fill in a `Your selection: _____` line.** Issues 1, 4 and 10 belong to the maintainer.
+11. **Never fill in a `Your selection: _____` line.** Issues 1 and 4 belong to the maintainer.
 
 ---
 
@@ -113,8 +111,8 @@ None. The last queue (A15, D1–D4) was delivered and verified on October 22 (§
 
 | Work | Trigger | Who writes the spec |
 |---|---|---|
-| **Wave D v2** (cross-fitted pseudo-labels at the natural mistake rate; priors at equal norm) | **Issue 10 option B** | The designer, as a new pre-registered spec, with v1 reported beside it |
-| **Robot transfer revisited with a closer human source and Wave B's reaction model** | **Issue 10 option A** **and** Wave B results | The designer |
+| **Robot transfer, revisited** (DW7): a new pre-registered spec with Wave B's reaction model and a human source closer to robot manipulation. It applies L15 and L16 | Wave B shows a reaction gain **and** a closer human source is identified **and** the designer has written the spec (Issue 10 = A) | The designer |
+| **Wave D v2** (the same data, with the two flaws fixed) | **Not selected** (Issue 10 = A). Do not run it | — |
 | **Wave B: verdict-video H1 pilot**, DW1 | **Issue 1** selected **and** a Wave B spec (which restates the kill rule in ablation-gain terms) | The designer |
 | **RoboReward-8B reference** | A maintainer decision to unfreeze `transformers` (it is Qwen3-VL-based) **and** a spec | The designer |
 | **Face encoder**, DW2 · **H2 transfer**, DW3 · **Ego4D false-positive set**, DW4 | Wave B | The designer |
@@ -154,7 +152,7 @@ Also not to do:
 - **The HoloAssist group partition is computed over all 1,758 sessions,** and `holoassist_audible` reuses it. Its `not_audible` count includes the 85 sessions without video.
 - **`shared/memguard.py` logs `waited_ms = 0` iff admitted on the first check** (D2; previously, under 50 ms). Admission behavior is unchanged.
 - **`DATA_ROOT/judge/roboreward/gemma4_26b/scores.jsonl`** is a stray duplicate of that judge cache, written in D3. No code reads it. Leave it.
-- **Wave D v1's pool has 0.52% mistakes, and its true-label head is overfit.** These are part of v1's record (`04` §8), **not** bugs to patch: a fix is Issue 10 option B, as a new spec.
+- **Wave D v1's pool has 0.52% mistakes, and its true-label head is overfit.** These are part of v1's record (`04` §8), **not** bugs to patch. v1 is accepted as the result (Issue 10 = A), and any future robot-transfer test is a new spec (DW7).
 
 ### 5.3 Maintainer decisions
 
@@ -167,6 +165,7 @@ Also not to do:
   - Issue 5 → B.
 - **October 20:** Issue 6 → A (a fresh sample); Issue 7 → A; the pass bar and the Wave D trigger use the ablation gain.
 - **October 21:** Issue 8 → A (run Wave D); Issue 9 → B (the full RoboReward download; RoboReward-8B not run).
+- **October 22:** **Issue 10 → A.** Wave D v1 is the offline-H3 result; robot transfer is revisited only after Wave B (DW7).
 
 ### 5.4 Invariants
 
@@ -192,11 +191,11 @@ Also not to do:
 
 | What | Where |
 |---|---|
-| The thesis, H1–H3, the decision log (entries 19–25) | `00_thesis.md` |
+| The thesis, H1–H3, the decision log (entries 19–26) | `00_thesis.md` |
 | The scorecard, conditions, metrics, judges, guardrails (§11), memory guard (§12) | `03_eval_harness.md` |
 | Wave D: the contract (§1–§7) and the v1 result with the designer's notes (§8) | `04_wave_d_robot_check.md` |
 | Datasets: Oops!, HoloAssist (`holoassist_audible`, `holoassist_pool`), RoboReward | `02_data_sources.md` |
-| Issues 1, 4, 10 (open); 2, 3, 5–9 (resolved); lessons L1–L16 | `ongoing_general_errors.md` |
+| Issues 1 and 4 (open); 2, 3 and 5–10 (resolved); deferred work DW1–DW7; lessons L1–L16 | `ongoing_general_errors.md` |
 | Reports | `docs/evals/` (Oops!, HoloAssist, HoloAssist-audible, the Wave A summary, Wave D) |
 | Operations | `LESSONS_v0.md` "Operations"; `tools/README.md` |
 
@@ -229,4 +228,5 @@ Also not to do:
 - [x] A1–A15 and D1–D4 delivered and verified (§5.1).
 - [x] The battery is green and re-measured bare on October 22 (§1.4).
 - [x] Wave D v1's verdict is recorded, with the designer's post-hoc notes beside it (`04` §8; the report's designer note).
-- [ ] **Waiting:** Issue 10 (what follows Wave D) and Issue 1 (Wave B). **Queue empty: do not invent work.**
+- [x] Issue 10 decided (A): Wave D v1 is accepted as the result.
+- [ ] **Waiting:** Issue 1 (Wave B). **Queue empty: do not invent work.**

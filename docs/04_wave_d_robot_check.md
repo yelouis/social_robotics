@@ -169,4 +169,7 @@
 - **Well-posed true-label heads:** one fit on `holoassist_audible` train (1,500 + 1,500) scores 0.550 [0.515, 0.585] on robot test; one fit on full `holoassist` train scores 0.472 [0.437, 0.509].
 - **Reading:** HoloAssist's "correct step" carries little robot-success information in SigLIP space, so the binding constraint is the human data's domain. A version with both flaws fixed would most likely also be null.
 
-**What happens next is Issue 10** (`ongoing_general_errors.md`): accept v1, pre-register a corrected v2, or close offline H3.
+**Decision (October 22, Issue 10 = A, the maintainer):**
+- **v1 is Wave D's result.** No v2 is run.
+- **Robot transfer is revisited only after Wave B,** through a new pre-registered spec with Wave B's reaction model and a human source closer to robot manipulation (DW7, `ongoing_general_errors.md` §4).
+- **That spec must apply L15 and L16:** check the pool's class counts per stratum; set the priors at equal norm; check each head's zero-shot transfer first.
