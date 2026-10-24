@@ -79,6 +79,26 @@ The email alternative (if you prefer **Contact Owner**):
 
 **Why it matters:** viewers watched the same few ads, then answered "Did you like the video?". Because many people saw the same ad, an action-only judge cannot tell their verdicts apart. Only the reaction can. That makes it a clean test of the "this person, right now" part of the thesis.
 
+**Update, October 23, 2026 (Issue 1 = E):**
+- **Affectiva's AM-FED page now returns "page not found".** The 2013 license form is still online ([PDF](https://www.affectiva.com/wp-content/uploads/2017/03/AMFED_EULA.pdf)). It covers AM-FED (242 videos), not AM-FED+, and asks for a use description, name, title, email, institution, signature and date.
+- **The maintainer chose to ask first and sign later.** The inquiry below was approved in chat. Sign the form only if Affectiva confirms it is current. The original draft is kept after it for the record.
+- **Sent October 23, 5:21 PM PT, from the maintainer's Gmail. It bounced at once:** *"550 5.4.1 Recipient address rejected: Access denied"*. The next route (Smart Eye's contact form, or the dataset's first author) is the maintainer's call; see Issue 1.
+
+**Subject (sent version):** AM-FED / AM-FED+ access for independent research
+
+> Hello,
+>
+> I would like to request the AM-FED and AM-FED+ datasets for non-commercial research. The dataset page (affectiva.com/facial-expression-dataset-/) now shows "page not found". Could you tell me whether the datasets are still available, and whether the 2013 EULA (https://www.affectiva.com/wp-content/uploads/2017/03/AMFED_EULA.pdf) is still current? I will sign and return it.
+>
+> I am an independent researcher studying whether spontaneous facial reactions predict a viewer's own evaluation (self-reported liking), as part of research on human reactions as a reward signal for robots (https://github.com/yelouis/social_robotics). Use is non-commercial; I will not redistribute the data, and I will cite the dataset papers.
+>
+> Thank you,
+> Louis Ye
+
+**When Affectiva confirms the form,** paste this into its use box: *"To test whether spontaneous facial reactions predict a viewer's own self-reported liking, beyond what the ad itself shows, as part of non-commercial research on human reactions as a reward signal for robots (https://github.com/yelouis/social_robotics). Only aggregate metrics will be published."* For Institution, write "Independent researcher".
+
+*Original draft (October 9), kept for the record:*
+
 **Where:**
 - Download the End User License Agreement from Affectiva's [AM-FED page](https://www.affectiva.com/facial-expression-dataset-/).
 - Sign it, and email it to `amfed@affectiva.com`. The EULA is non-commercial research only.
@@ -99,6 +119,21 @@ The email alternative (if you prefer **Contact Owner**):
 ## M5: Taste-liking video database (optional)
 
 **What:** *Automatic Estimation of Taste Liking Through Facial Expression Dynamics* (IEEE Transactions on Affective Computing, 2020) describes 2,970 videos of taste-induced expressions from 495 people. No public download was found. Write to the corresponding author listed on the paper.
+
+**Update, October 23, 2026 (Issue 1 = E):** no corresponding-author note was found, so the request goes to the first author, Hamdi Dibeklioğlu (Bilkent University; `dibeklioglu@cs.bilkent.edu.tr`, from his [contact page](https://cs.bilkent.edu.tr/~dibeklioglu/contact.html)). The maintainer approved this version in chat. **Sent October 23, 5:20 PM PT, from the maintainer's Gmail** (no bounce):
+
+**Subject (sent version):** Research access to the taste-liking video database
+
+> Hello Dr. Dibeklioğlu,
+>
+> I read your paper "Automatic Estimation of Taste Liking Through Facial Expression Dynamics" (IEEE Transactions on Affective Computing, 2020), and I would like to ask whether the beverage-tasting video database can be shared for non-commercial research.
+>
+> I study whether spontaneous reactions predict a person's own verdict, as a reward signal for robot learning (https://github.com/yelouis/social_robotics). I am an independent researcher. I would sign any data use agreement, never redistribute the videos, and publish only aggregate results with a citation to your work.
+>
+> Thank you,
+> Louis Ye
+
+*Original draft (October 9), kept for the record:*
 
 **Subject:** Research access to the taste-liking video database
 

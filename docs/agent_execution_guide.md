@@ -1,4 +1,4 @@
-# Agent Execution Guide: Queue Complete: waiting on Issue 1 (Wave B), October 22, 2026
+# Agent Execution Guide: Queue Complete: waiting on Wave B's data access (Issue 1 = E), October 23, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:** on October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
@@ -10,10 +10,10 @@
     - Reaction-labeled HoloAssist video gave no gain to a RoboReward success detector (+0.0009 [−0.0006, 0.0024] at N = 100).
     - The designer found two flaws in the spec, and diagnostics showing that every human head is at chance on robot videos (`04_wave_d_robot_check.md` §8).
 - **Wave D's result is accepted** (Issue 10 = A, October 22). No v2 is run, and robot transfer is revisited only after Wave B, through a new spec (DW7).
-- **There is no approved work.** The next work is **Wave B**. It waits on **Issue 1** (Wave B's verdict-video source), which belongs to the maintainer.
+- **There is no approved work.** The next work is **Wave B**. Its data source was decided October 23 (**Issue 1 = E**: licensed datasets on request). Wave B waits on the replies to those requests (maintainer actions M4 and M5; M4's address bounced on October 23), then on the designer's Wave B spec.
 
 **Status:** **Queue Complete. Do not invent work.** The only legitimate triggers for new work are:
-1. **the maintainer's selection on Issue 1,** then the designer's Wave B spec and new guide items;
+1. **a yes to an E request (M4 or M5),** then the designer's Wave B spec and new guide items;
 2. **a new issue the maintainer raises.**
 
 If you were started on this guide with no new spec in it, read §1, run the battery to confirm the baseline (§1.4), report the result, and **stop**.
@@ -113,7 +113,7 @@ None. The last queue (A15, D1–D4) was delivered and verified on October 22 (§
 |---|---|---|
 | **Robot transfer, revisited** (DW7): a new pre-registered spec with Wave B's reaction model and a human source closer to robot manipulation. It applies L15 and L16 | Wave B shows a reaction gain **and** a closer human source is identified **and** the designer has written the spec (Issue 10 = A) | The designer |
 | **Wave D v2** (the same data, with the two flaws fixed) | **Not selected** (Issue 10 = A). Do not run it | — |
-| **Wave B: verdict-video H1 pilot**, DW1 | **Issue 1** selected **and** a Wave B spec (which restates the kill rule in ablation-gain terms) | The designer |
+| **Wave B: verdict-video H1 pilot**, DW1 | Issue 1 = E (decided October 23) **and** an E dataset granted (M4 or M5) **and** a Wave B spec (which restates the kill rule in ablation-gain terms) | The designer |
 | **RoboReward-8B reference** | A maintainer decision to unfreeze `transformers` (it is Qwen3-VL-based) **and** a spec | The designer |
 | **Face encoder**, DW2 · **H2 transfer**, DW3 · **Ego4D false-positive set**, DW4 | Wave B | The designer |
 | **Online H3** (training a policy with the reward) | After offline H3 shows a gain, and a cloud CUDA GPU | The designer |
@@ -166,6 +166,7 @@ Also not to do:
 - **October 20:** Issue 6 → A (a fresh sample); Issue 7 → A; the pass bar and the Wave D trigger use the ablation gain.
 - **October 21:** Issue 8 → A (run Wave D); Issue 9 → B (the full RoboReward download; RoboReward-8B not run).
 - **October 22:** **Issue 10 → A.** Wave D v1 is the offline-H3 result; robot transfer is revisited only after Wave B (DW7).
+- **October 23:** **Issue 1 → E.** Wave B's verdict data is requested from Affectiva (AM-FED / AM-FED+) and from the beverage-tasting database's author. If neither says yes, Issue 1 is reopened.
 
 ### 5.4 Invariants
 
@@ -229,4 +230,5 @@ Also not to do:
 - [x] The battery is green and re-measured bare on October 22 (§1.4).
 - [x] Wave D v1's verdict is recorded, with the designer's post-hoc notes beside it (`04` §8; the report's designer note).
 - [x] Issue 10 decided (A): Wave D v1 is accepted as the result.
-- [ ] **Waiting:** Issue 1 (Wave B). **Queue empty: do not invent work.**
+- [x] Issue 1 decided (E, October 23).
+- [ ] **Waiting:** the replies to the E requests (M4, M5), then the Wave B spec. **Queue empty: do not invent work.**

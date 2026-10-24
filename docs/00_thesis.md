@@ -205,6 +205,14 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Robot transfer is revisited only after Wave B,** through a new pre-registered spec that uses Wave B's reaction model and a human source closer to robot manipulation (DW7).
     - **Wave B is the next work.** It waits on Issue 1.
 
+27. **Issue 1 → E** (maintainer, in chat, October 23): *"Lets go with E. Send the email for me."*
+    - **Wave B's verdict data is requested, not downloaded:**
+      - AM-FED / AM-FED+ from Affectiva (M4);
+      - the beverage-tasting database from its first author (M5).
+    - **Both requests were sent October 23** from the maintainer's Gmail, with wording the maintainer approved.
+    - **Affectiva's dataset page is gone, and its address bounced** (*"Recipient address rejected"*). The next route to AM-FED is the maintainer's call.
+    - **Wave B waits on the replies.** If neither says yes, Issue 1 is reopened with the routes that need no email (F–H in Issue 1, all voice only).
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing (needs your selection before Wave B), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is resolved (B: the full RoboReward download, verified). **Issue 10** is resolved (A: v1 accepted; robot transfer revisited after Wave B). **The only open decision is Issue 1**, which gates Wave B. **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** web-video sourcing & licensing is decided (E, October 23; Wave B waits on the access replies), **Issue 4** (robot-reaction target) is decided: the BAD request, else none. **Issue 5** (the frontier judge) is resolved: option B, a larger local judge (`judge-large`). **Issues 6 and 7** are resolved (entries 20–21). **Issue 8** is resolved (A: the Wave D spec is written). **Issue 9** is resolved (B: the full RoboReward download, verified). **Issue 10** is resolved (A: v1 accepted; robot transfer revisited after Wave B). **No decision is open.** Wave B waits on the replies to the E requests (M4, M5). **Issue 2** (resolved: independent) and **Issue 3** (SSD capacity) are resolved.

@@ -130,7 +130,10 @@
 
 ### Issue 1: Verdict-video sourcing: download public videos (release only IDs, timestamps and labels) or Creative Commons only?
 
-**Status:** ⚠️ Awaiting selection. **Blocks Wave B only.** Wave A uses Oops! and HoloAssist, which are downloaded from their official pages.
+**Status:** ✅ **Decided by the maintainer, October 23, 2026: E** (*"Lets go with E. Send the email for me"*; see **Decision** at the end of this issue).
+- **Both requests were sent October 23. M5 (the taste-liking database) is awaiting a reply.** M4's address (`amfed@affectiva.com`) **bounced**. The next route to AM-FED is the maintainer's call (see **Decision**).
+- **If neither says yes, Issue 1 is reopened,** with F–H as the routes that need no one's permission.
+- Wave A uses Oops! and HoloAssist, which are downloaded from their official pages.
 
 **Facts (October 8, 2026):**
 1. **YouTube's terms prohibit downloading** except where the service expressly authorizes it, or with written permission from YouTube and the rights holders. They separately prohibit automated access (robots, scrapers) without permission ([terms](https://www.youtube.com/terms)). **This holds for Creative Commons videos too.** A CC license grants *copyright* permission to reuse; it does not change YouTube's terms on *how you obtain the file*.
@@ -303,6 +306,23 @@
 - **The risk this leaves:** every hidden-outcome verdict source now depends on someone else saying yes (Affectiva/Smart Eye, the paper's authors, creators). If none does, Wave B has no verdict data. The kill rule would then fall back to HoloAssist, the only hidden-outcome set already in hand, with its pitch-shift caveat. The designer will state that fallback in the Wave B spec rather than leave it implicit.
 - **Worth evaluating in the Wave B spec (not yet verified):** Ego-Exo4D's expert commentary and proficiency labels. Ego4D-style licenses were granted to the maintainer as an individual before. Before any use it needs the same independence check as HoloAssist (A4): were the proficiency labels assigned from the commentary?
 
+**Decision (October 23, 2026): E**, by the maintainer in chat: *"Lets go with E. Send the email for me."* The recipients and wording were approved in chat the same day.
+- **Facts found while preparing the requests (October 23):**
+  - **Affectiva's AM-FED page now returns "page not found".** It was still up in the January 2025 web archive, which promised download instructions "within 5 working day[s]" of an emailed form.
+  - **The 2013 license form is still online** ([PDF](https://www.affectiva.com/wp-content/uploads/2017/03/AMFED_EULA.pdf)):
+    - it covers AM-FED (242 videos with FACS labels and self-reported liking), not AM-FED+;
+    - it asks for a use description, name, title, email, institution, signature and date, with no affiliation rule;
+    - its terms: non-commercial research, no redistribution, images may appear in research papers, cite the 2013 paper.
+  - **The taste-liking paper's first author,** Hamdi Dibeklioğlu, is at Bilkent University ([contact page](https://cs.bilkent.edu.tr/~dibeklioglu/contact.html)). No corresponding-author note was found, so the request goes to him.
+- **The AM-FED request asks before anything is signed** (the maintainer chose this over signing first), because the page is gone. The maintainer signs the form only if Affectiva confirms it is current.
+- **What was sent** (October 23, from the maintainer's Gmail, with the wording approved in chat; the texts are in `maintainer_access_requests.md` M4 and M5):
+  - **M5** → `dibeklioglu@cs.bilkent.edu.tr`, 5:20 PM PT. No bounce. Awaiting a reply.
+  - **M4** → `amfed@affectiva.com`, 5:21 PM PT. **It bounced at once:** *"550 5.4.1 Recipient address rejected: Access denied"* (Microsoft Exchange Online). With the dataset page gone too, Affectiva's AM-FED channel looks closed.
+- **AM-FED's next route is the maintainer's call:**
+  - Smart Eye's web contact form (Affectiva's parent company; it lists no email);
+  - the dataset's first author, Daniel McDuff (current address not yet found);
+  - or drop AM-FED and wait on M5.
+
 Your selection: _____
 
 ---
@@ -457,8 +477,8 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
 | M1 | Request **BAD dataset** access (QDR account → Request Access / "Contact Owner"), asking whether an independent researcher can qualify, and email the **ERR@HRI 3.0** organizers about post-challenge access | H2 targets: reactions to robots. BAD requires an IRB-reviewed protocol from an affiliated institution (Issue 4). Drafts: `maintainer_access_requests.md` M1a/M1b | Open |
 | M2 | Add an "Archived (October 2026)" note to the 6 public `louisye/social-robotics-*` Hugging Face cards | They describe the v0 pipeline as current | ✅ Done October 9 (wording confirmed by the maintainer; 6 HF commits) |
 | M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional |
-| M4 | Sign and send the **AM-FED+** EULA | Issue 1 option E: reactions + self-reported liking | Open, pending the Issue 1 selection |
-| M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | Optional |
+| M4 | Request **AM-FED / AM-FED+** (sign the EULA only if Affectiva confirms it) | Issue 1 option E: reactions + self-reported liking | **Sent October 23; bounced** (`amfed@affectiva.com` rejected). Next route: the maintainer's call (Issue 1, Decision) |
+| M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | **Sent October 23** (5:20 PM PT) to the first author, `dibeklioglu@cs.bilkent.edu.tr`. Awaiting a reply |
 | M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Not needed: Issue 5 was decided as **option B** (a larger local judge) on October 10. The frontier judge stays on the free tier |
 
 ---
