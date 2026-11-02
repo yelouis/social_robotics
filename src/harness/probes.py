@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -18,6 +19,7 @@ from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
 
 
 HOLOASSIST_DATASETS = ("holoassist", "holoassist_audible")
+REFLEX_DATASETS = ("reflex", "reflex_resolve")
 
 
 def logit(prob: np.ndarray) -> np.ndarray:
@@ -288,6 +290,814 @@ def build_test_only_judge_row(
         return row, scores, res.point, k
 
 
+def _safe_predict_proba(clf: LogisticRegression, X: np.ndarray) -> np.ndarray:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return clf.predict_proba(X)
+
+
+def _run_reflex_probes(
+    dataset: str,
+    split_name: str,
+    root: Path,
+    splits_path: Path,
+    scorecard_path: Optional[Union[str, Path]],
+    judge_model_tag: str,
+    notes: str,
+) -> List[ScorecardRow]:
+    items_path = root / "items" / dataset / "items.jsonl"
+    if not items_path.exists():
+        raise FileNotFoundError(f"Items not found: {items_path}")
+    all_items = read_items(items_path)
+    item_map = {it.item_id: it for it in all_items}
+
+    split_data = load_split(dataset, path_dir=splits_path)
+    train_ids = split_data["train"]
+    test_ids = split_data["test"]
+
+    train_items = [item_map[i] for i in train_ids if i in item_map]
+    test_items = [item_map[i] for i in test_ids if i in item_map]
+
+    y_train = np.array([it.label for it in train_items], dtype=int)
+    y_test = np.array([it.label for it in test_items], dtype=int)
+    groups_test = [it.group_id for it in test_items]
+    n_total_test = len(test_items)
+    n_groups_test = len(set(groups_test))
+
+    # Caches
+    action_cache = FeatureCache(dataset=dataset, encoder_id="siglip-b16-224-u9", data_root=root)
+    face_cache = FeatureCache(dataset=dataset, encoder_id="reflex-face-v1", data_root=root)
+    speech_cache = FeatureCache(dataset=dataset, encoder_id="reflex-speech-v1", data_root=root)
+
+    X_action_train, valid_act_tr, _ = load_features_for_items(train_items, action_cache)
+    X_action_test, valid_act_te, _ = load_features_for_items(test_items, action_cache)
+
+    X_face_train, valid_face_tr, _ = load_features_for_items(train_items, face_cache)
+    X_face_test, valid_face_te, _ = load_features_for_items(test_items, face_cache)
+
+    X_speech_train, valid_speech_tr, _ = load_features_for_items(train_items, speech_cache)
+    X_speech_test, valid_speech_te, _ = load_features_for_items(test_items, speech_cache)
+
+    # Judge scores
+    q = DATASET_QUESTIONS.get(dataset, "Is everything going as intended?")
+    p_hash = prompt_hash(q)
+    judge_train_scores, valid_j_tr, _ = load_judge_scores(train_items, dataset, judge_model_tag, p_hash, root)
+    judge_test_scores, valid_j_te, _ = load_judge_scores(test_items, dataset, judge_model_tag, p_hash, root)
+
+    cfg = {
+        "dataset": dataset,
+        "encoder_action": "siglip-b16-224-u9",
+        "encoder_react": "reflex-face-v1",
+        "judge_model": judge_model_tag,
+        "judge_large_model": "gemma4:26b",
+        "judge_large_options": {"temperature": 0, "num_ctx": 16384, "num_predict": 16},
+        "prompt_hash": p_hash,
+        "probe_C": 1.0,
+        "probe_class_weight": "balanced",
+        "probe_max_iter": 2000,
+        "split_sha256": split_data["sha256"],
+        "step_prior": {"levels": ["base", "verb", "verb+noun"], "m": 5, "loo_train": True},
+        "ablation": "fusion_minus_action_fusion",
+    }
+    c_hash = config_hash(cfg)
+
+    rows: List[ScorecardRow] = []
+
+    # 1. Condition: judge
+    j_res = auroc_ci(y_test, judge_test_scores, groups_test)
+    rows.append(make_row(
+        hypothesis="H1", dataset=dataset, split=split_name,
+        condition="judge", metric="auroc",
+        value=j_res.point, ci_low=j_res.ci_low, ci_high=j_res.ci_high,
+        n_items=n_total_test - j_res.n_excluded, n_groups=n_groups_test, n_excluded=j_res.n_excluded,
+        config_hash=c_hash, notes="",
+    ))
+
+    # 2. Condition: judge-large (test split only)
+    row_large, large_test_scores, large_point, k_large = build_test_only_judge_row(
+        condition="judge-large",
+        dataset=dataset,
+        split_name=split_name,
+        model_tag="gemma4_26b",
+        p_hash=p_hash,
+        data_root=root,
+        test_items=test_items,
+        y_test=y_test,
+        groups_test=groups_test,
+        c_hash=c_hash,
+    )
+    rows.append(row_large)
+
+    # 3. Condition: judge-frontier (test split only)
+    row_front, frontier_test_scores, front_point, k_front = build_test_only_judge_row(
+        condition="judge-frontier",
+        dataset=dataset,
+        split_name=split_name,
+        model_tag="gemini-3.6-flash",
+        p_hash=p_hash,
+        data_root=root,
+        test_items=test_items,
+        y_test=y_test,
+        groups_test=groups_test,
+        c_hash=c_hash,
+    )
+    rows.append(row_front)
+
+    # 4. Condition: action-probe
+    act_point = None
+    k_act_tr = int(np.sum(valid_act_tr))
+    act_test_probs = np.full(len(test_items), np.nan)
+    if k_act_tr > 0 and len(set(y_train[valid_act_tr])) > 1:
+        act_scaler = StandardScaler().fit(X_action_train[valid_act_tr])
+        X_act_tr_scaled = act_scaler.transform(X_action_train[valid_act_tr])
+        clf_act = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_act.fit(X_act_tr_scaled, y_train[valid_act_tr])
+
+        if np.any(valid_act_te):
+            X_act_te_scaled = act_scaler.transform(X_action_test[valid_act_te])
+            act_test_probs[valid_act_te] = _safe_predict_proba(clf_act, X_act_te_scaled)[:, 1]
+
+        act_res = auroc_ci(y_test, act_test_probs, groups_test)
+        act_point = act_res.point
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe", metric="auroc",
+            value=act_res.point, ci_low=act_res.ci_low, ci_high=act_res.ci_high,
+            n_items=n_total_test - act_res.n_excluded, n_groups=n_groups_test, n_excluded=act_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: 0 of {len(train_items)} items cached in {action_cache.cache_dir}",
+        ))
+
+    # 5. Condition: react-face (headline reaction condition on REFLEX)
+    k_face_tr = int(np.sum(valid_face_tr))
+    face_test_probs = np.full(len(test_items), np.nan)
+    if k_face_tr > 0 and len(set(y_train[valid_face_tr])) > 1:
+        face_scaler = StandardScaler().fit(X_face_train[valid_face_tr])
+        X_face_tr_scaled = face_scaler.transform(X_face_train[valid_face_tr])
+        clf_face = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_face.fit(X_face_tr_scaled, y_train[valid_face_tr])
+
+        if np.any(valid_face_te):
+            X_face_te_scaled = face_scaler.transform(X_face_test[valid_face_te])
+            face_test_probs[valid_face_te] = _safe_predict_proba(clf_face, X_face_te_scaled)[:, 1]
+
+        face_res = auroc_ci(y_test, face_test_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-face", metric="auroc",
+            value=face_res.point, ci_low=face_res.ci_low, ci_high=face_res.ci_high,
+            n_items=n_total_test - face_res.n_excluded, n_groups=n_groups_test, n_excluded=face_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+
+        # Export MicroDuck face probe artifact (DW6 preparation)
+        transfer_dir = root / "transfer"
+        transfer_dir.mkdir(parents=True, exist_ok=True)
+        probe_out_path = transfer_dir / f"{dataset}_face_probe.npz"
+        np.savez(
+            probe_out_path,
+            mean=face_scaler.mean_,
+            scale=face_scaler.scale_,
+            coef=clf_face.coef_,
+            intercept=clf_face.intercept_,
+        )
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-face", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: 0 of {len(train_items)} items cached in {face_cache.cache_dir}",
+        ))
+
+    # 6. Condition: react-nonverbal
+    k_sp_tr = int(np.sum(valid_speech_tr))
+    speech_test_probs = np.full(len(test_items), np.nan)
+    speech_scaler = None
+    clf_speech = None
+
+    if k_sp_tr > 0 and len(set(y_train[valid_speech_tr])) > 1:
+        speech_scaler = StandardScaler().fit(X_speech_train[valid_speech_tr])
+        X_sp_tr_scaled = speech_scaler.transform(X_speech_train[valid_speech_tr])
+        clf_speech = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_speech.fit(X_sp_tr_scaled, y_train[valid_speech_tr])
+
+        if np.any(valid_speech_te):
+            X_sp_te_scaled = speech_scaler.transform(X_speech_test[valid_speech_te])
+            speech_test_probs[valid_speech_te] = _safe_predict_proba(clf_speech, X_sp_te_scaled)[:, 1]
+
+        k_sp_te = int(np.sum(valid_speech_te))
+        if k_sp_te > 0 and len(set(y_test[valid_speech_te])) > 1:
+            sp_res = auroc_ci(y_test, speech_test_probs, groups_test)
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal", metric="auroc",
+                value=sp_res.point, ci_low=sp_res.ci_low, ci_high=sp_res.ci_high,
+                n_items=n_total_test - sp_res.n_excluded, n_groups=n_groups_test, n_excluded=sp_res.n_excluded,
+                config_hash=c_hash, notes="",
+            ))
+        elif k_sp_te > 0:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=k_sp_te, n_groups=n_groups_test, n_excluded=n_total_test - k_sp_te,
+                config_hash=c_hash, notes=f"partial: {k_sp_te} of {n_total_test} scored; metric undefined: only one class in speech subset",
+            ))
+        else:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+                config_hash=c_hash, notes="not run: 0 of test items have participant speech",
+            ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: fewer than 2 classes with speech in train ({k_sp_tr} items)",
+        ))
+
+    # 7. Condition: react-nonverbal|spoke=1 (diagnostic)
+    spoke_mask_te = np.array([bool(it.meta.get("spoke", 0)) for it in test_items], dtype=bool)
+    n_spoke_items = int(np.sum(spoke_mask_te))
+    spoke_groups = [groups_test[i] for i in range(len(test_items)) if spoke_mask_te[i]]
+    n_spoke_groups = len(set(spoke_groups))
+
+    if k_sp_tr > 0 and len(set(y_train[valid_speech_tr])) > 1 and n_spoke_items > 0:
+        spoke_test_probs = np.full(n_spoke_items, np.nan)
+        valid_sp_spoke = valid_speech_te[spoke_mask_te]
+        if np.any(valid_sp_spoke):
+            X_sp_spoke = X_speech_test[spoke_mask_te][valid_sp_spoke]
+            X_sp_spk_scaled = speech_scaler.transform(X_sp_spoke)
+            spoke_test_probs[valid_sp_spoke] = _safe_predict_proba(clf_speech, X_sp_spk_scaled)[:, 1]
+
+        y_test_spoke = y_test[spoke_mask_te]
+        valid_probs_mask = ~np.isnan(spoke_test_probs)
+        if len(set(y_test_spoke[valid_probs_mask])) > 1:
+            rspk_res = auroc_ci(y_test_spoke, spoke_test_probs, spoke_groups)
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal|spoke=1", metric="auroc",
+                value=rspk_res.point, ci_low=rspk_res.ci_low, ci_high=rspk_res.ci_high,
+                n_items=n_spoke_items - rspk_res.n_excluded, n_groups=n_spoke_groups, n_excluded=rspk_res.n_excluded,
+                config_hash=c_hash, notes="diagnostic: test items with spoke=1",
+            ))
+        else:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal|spoke=1", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_spoke_items, n_groups=n_spoke_groups, n_excluded=n_spoke_items,
+                config_hash=c_hash, notes="diagnostic: test items with spoke=1; metric undefined: only one class in spoke=1 subset",
+            ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal|spoke=1", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_spoke_items, n_groups=n_spoke_groups, n_excluded=n_spoke_items,
+            config_hash=c_hash, notes="diagnostic: test items with spoke=1; not run: react-nonverbal not run",
+        ))
+
+    # 8. Condition: react-spoke
+    spoke_scores = np.array([1.0 - float(it.meta.get("spoke", 0)) for it in test_items])
+    spk_res = auroc_ci(y_test, spoke_scores, groups_test)
+    rows.append(make_row(
+        hypothesis="H1", dataset=dataset, split=split_name,
+        condition="react-spoke", metric="auroc",
+        value=spk_res.point, ci_low=spk_res.ci_low, ci_high=spk_res.ci_high,
+        n_items=n_total_test - spk_res.n_excluded, n_groups=n_groups_test, n_excluded=spk_res.n_excluded,
+        config_hash=c_hash, notes="",
+    ))
+
+    # 9. Condition: react-full
+    texts_tr = [it.meta.get("transcript") or "" for it in train_items]
+    texts_te = [it.meta.get("transcript") or "" for it in test_items]
+    has_transcripts = any(t.strip() for t in texts_tr)
+
+    if has_transcripts:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        try:
+            tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=2)
+            X_text_tr = tfidf.fit_transform(texts_tr)
+            non_empty_tr = np.array([bool(t.strip()) for t in texts_tr])
+            if X_text_tr.shape[1] > 0 and len(set(y_train[non_empty_tr])) > 1:
+                X_text_te = tfidf.transform(texts_te)
+                clf_text = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    clf_text.fit(X_text_tr, y_train)
+                text_probs = _safe_predict_proba(clf_text, X_text_te)[:, 1]
+                rf_res = auroc_ci(y_test, text_probs, groups_test)
+                rows.append(make_row(
+                    hypothesis="H1", dataset=dataset, split=split_name,
+                    condition="react-full", metric="auroc",
+                    value=rf_res.point, ci_low=rf_res.ci_low, ci_high=rf_res.ci_high,
+                    n_items=n_total_test - rf_res.n_excluded, n_groups=n_groups_test, n_excluded=rf_res.n_excluded,
+                    config_hash=c_hash, notes="",
+                ))
+            else:
+                rows.append(make_row(
+                    hypothesis="H1", dataset=dataset, split=split_name,
+                    condition="react-full", metric="auroc",
+                    value=None, ci_low=None, ci_high=None,
+                    n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+                    config_hash=c_hash, notes="not run: vocabulary empty or < 2 classes with transcripts in train",
+                ))
+        except Exception as exc:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-full", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+                config_hash=c_hash, notes=f"not run: {exc}",
+            ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-full", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="not run: annotations carry no transcripts",
+        ))
+
+    # 10. Condition: step-prior
+    step_prior_train_loo = step_prior_scores(train_items, train_items, y_train, loo=True)
+    step_prior_test_scores = step_prior_scores(train_items, test_items, y_train, loo=False)
+    sp_res = auroc_ci(y_test, step_prior_test_scores, groups_test)
+    step_prior_point = sp_res.point
+    rows.append(make_row(
+        hypothesis="H1", dataset=dataset, split=split_name,
+        condition="step-prior", metric="auroc",
+        value=sp_res.point, ci_low=sp_res.ci_low, ci_high=sp_res.ci_high,
+        n_items=n_total_test - sp_res.n_excluded, n_groups=n_groups_test, n_excluded=sp_res.n_excluded,
+        config_hash=c_hash, notes="text-only: train-split P(correct | verb, noun), hierarchical smoothing m=5",
+    ))
+
+    # 11. Condition: fusion & 12. Condition: action-fusion
+    fusion_tr_mask = valid_j_tr & valid_act_tr & valid_face_tr
+    fusion_te_mask = valid_j_te & valid_act_te & valid_face_te
+
+    fu_point = None
+    fusion_test_probs = np.full(len(test_items), np.nan)
+    act_fu_point = None
+    act_fu_test_probs = np.full(len(test_items), np.nan)
+
+    fusion_runnable = np.any(fusion_tr_mask) and len(set(y_train[fusion_tr_mask])) > 1
+
+    if fusion_runnable:
+        logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
+        logit_sp_tr = logit(step_prior_train_loo[fusion_tr_mask])
+
+        logit_j_te = logit(judge_test_scores[fusion_te_mask]) if np.any(fusion_te_mask) else None
+        logit_sp_te = logit(step_prior_test_scores[fusion_te_mask]) if np.any(fusion_te_mask) else None
+
+        # Build action-fusion inputs
+        X_act_fu_tr_raw = np.hstack([
+            logit_j_tr[:, None],
+            logit_sp_tr[:, None],
+            X_action_train[fusion_tr_mask],
+        ])
+
+        # Build fusion inputs
+        if dataset == "reflex_resolve" and speech_scaler is not None and k_sp_tr > 0 and len(set(y_train[valid_speech_tr])) > 1:
+            X_sp_zf_tr = np.zeros((len(train_items), 96), dtype=np.float32)
+            X_sp_zf_te = np.zeros((len(test_items), 96), dtype=np.float32)
+            X_sp_zf_tr[valid_speech_tr] = speech_scaler.transform(X_speech_train[valid_speech_tr])
+            if np.any(valid_speech_te):
+                X_sp_zf_te[valid_speech_te] = speech_scaler.transform(X_speech_test[valid_speech_te])
+
+            spoke_tr = np.array([float(it.meta.get("spoke", 0)) for it in train_items], dtype=np.float32)
+            spoke_te = np.array([float(it.meta.get("spoke", 0)) for it in test_items], dtype=np.float32)
+
+            X_fusion_tr_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr[:, None],
+                X_action_train[fusion_tr_mask],
+                X_face_train[fusion_tr_mask],
+                spoke_tr[fusion_tr_mask, None],
+                X_sp_zf_tr[fusion_tr_mask],
+            ])
+            use_resolve_speech = True
+        else:
+            X_fusion_tr_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr[:, None],
+                X_action_train[fusion_tr_mask],
+                X_face_train[fusion_tr_mask],
+            ])
+            use_resolve_speech = False
+
+        # Fit action-fusion
+        act_fu_scaler = StandardScaler().fit(X_act_fu_tr_raw)
+        X_act_fu_tr = act_fu_scaler.transform(X_act_fu_tr_raw)
+        clf_act_fu = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_act_fu.fit(X_act_fu_tr, y_train[fusion_tr_mask])
+
+        if np.any(fusion_te_mask):
+            X_act_fu_te_raw = np.hstack([
+                logit_j_te[:, None],
+                logit_sp_te[:, None],
+                X_action_test[fusion_te_mask],
+            ])
+            X_act_fu_te = act_fu_scaler.transform(X_act_fu_te_raw)
+            act_fu_test_probs[fusion_te_mask] = _safe_predict_proba(clf_act_fu, X_act_fu_te)[:, 1]
+
+        act_fu_res = auroc_ci(y_test, act_fu_test_probs, groups_test)
+        act_fu_point = act_fu_res.point
+
+        # Fit fusion
+        fusion_scaler = StandardScaler().fit(X_fusion_tr_raw)
+        X_fusion_tr = fusion_scaler.transform(X_fusion_tr_raw)
+        clf_fusion = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_fusion.fit(X_fusion_tr, y_train[fusion_tr_mask])
+
+        if np.any(fusion_te_mask):
+            if use_resolve_speech:
+                X_fusion_te_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_face_test[fusion_te_mask],
+                    spoke_te[fusion_te_mask, None],
+                    X_sp_zf_te[fusion_te_mask],
+                ])
+            else:
+                X_fusion_te_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_face_test[fusion_te_mask],
+                ])
+            X_fusion_te = fusion_scaler.transform(X_fusion_te_raw)
+            fusion_test_probs[fusion_te_mask] = _safe_predict_proba(clf_fusion, X_fusion_te)[:, 1]
+
+        fu_res = auroc_ci(y_test, fusion_test_probs, groups_test)
+        fu_point = fu_res.point
+
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion", metric="auroc",
+            value=fu_res.point, ci_low=fu_res.ci_low, ci_high=fu_res.ci_high,
+            n_items=n_total_test - fu_res.n_excluded, n_groups=n_groups_test, n_excluded=fu_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion", metric="auroc",
+            value=act_fu_res.point, ci_low=act_fu_res.ci_low, ci_high=act_fu_res.ci_high,
+            n_items=n_total_test - act_fu_res.n_excluded, n_groups=n_groups_test, n_excluded=act_fu_res.n_excluded,
+            config_hash=c_hash, notes="",
+        ))
+    else:
+        missing_reasons = []
+        if not np.any(valid_j_tr):
+            missing_reasons.append("judge not run on train")
+        if not np.any(valid_act_tr):
+            missing_reasons.append("action-probe not run on train")
+        if not np.any(valid_face_tr):
+            missing_reasons.append("react-face not run on train")
+        reason_str = ", ".join(missing_reasons) if missing_reasons else "no overlapping items across modalities"
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: {reason_str}",
+        ))
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"not run: {reason_str}",
+        ))
+
+    # 13. Condition: fusion_minus_action_fusion (ablation Delta)
+    if fusion_runnable and fu_point is not None and act_fu_point is not None:
+        d_abl_res = delta_auroc_ci(y_test, act_fu_test_probs, fusion_test_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_fusion", metric="delta_auroc",
+            value=d_abl_res.point, ci_low=d_abl_res.ci_low, ci_high=d_abl_res.ci_high,
+            n_items=n_total_test - d_abl_res.n_excluded, n_groups=n_groups_test, n_excluded=d_abl_res.n_excluded,
+            config_hash=c_hash, notes="ablation: reaction features removed",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_fusion", metric="delta_auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="not run: fusion not run",
+        ))
+
+    # 14. Condition: fusion_minus_action_best
+    action_candidates = []
+    k_judge = int(np.sum(valid_j_te))
+    if k_judge >= 0.9 * n_total_test and j_res.point is not None:
+        action_candidates.append(("judge", judge_test_scores, j_res.point))
+    if k_large >= 0.9 * n_total_test and large_point is not None:
+        action_candidates.append(("judge-large", large_test_scores, large_point))
+    if k_front >= 0.9 * n_total_test and front_point is not None:
+        action_candidates.append(("judge-frontier", frontier_test_scores, front_point))
+    if act_point is not None:
+        action_candidates.append(("action-probe", act_test_probs, act_point))
+    if step_prior_point is not None:
+        action_candidates.append(("step-prior", step_prior_test_scores, step_prior_point))
+    if act_fu_point is not None:
+        action_candidates.append(("action-fusion", act_fu_test_probs, act_fu_point))
+
+    valid_candidates = [c for c in action_candidates if c[2] is not None]
+    if valid_candidates:
+        best_candidate = max(valid_candidates, key=lambda c: c[2])
+        action_best_name, action_best_scores, _ = best_candidate
+    else:
+        action_best_name = "none"
+        action_best_scores = np.full(len(test_items), np.nan)
+
+    if fu_point is not None and valid_candidates:
+        d_res = delta_auroc_ci(y_test, action_best_scores, fusion_test_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_best", metric="delta_auroc",
+            value=d_res.point, ci_low=d_res.ci_low, ci_high=d_res.ci_high,
+            n_items=n_total_test - d_res.n_excluded, n_groups=n_groups_test, n_excluded=d_res.n_excluded,
+            config_hash=c_hash, notes=f"action_best={action_best_name}",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion_minus_action_best", metric="delta_auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes=f"action_best={action_best_name}; not run: fusion not run" if valid_candidates else "not run",
+        ))
+
+    # 15. Shuffled controls (permuted train labels)
+    rng = np.random.default_rng(0)
+    y_train_shuffled = y_train.copy()
+    rng.shuffle(y_train_shuffled)
+
+    # action-probe:shuffled
+    if k_act_tr > 0 and len(set(y_train[valid_act_tr])) > 1:
+        clf_act_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_act_sh.fit(X_act_tr_scaled, y_train_shuffled[valid_act_tr])
+        act_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_act_te):
+            act_sh_probs[valid_act_te] = _safe_predict_proba(clf_act_sh, X_act_te_scaled)[:, 1]
+        ash_res = auroc_ci(y_test, act_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe:shuffled", metric="auroc",
+            value=ash_res.point, ci_low=ash_res.ci_low, ci_high=ash_res.ci_high,
+            n_items=n_total_test - ash_res.n_excluded, n_groups=n_groups_test, n_excluded=ash_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-probe:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: action-probe not run",
+        ))
+
+    # react-face:shuffled
+    if k_face_tr > 0 and len(set(y_train[valid_face_tr])) > 1:
+        clf_face_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_face_sh.fit(X_face_tr_scaled, y_train_shuffled[valid_face_tr])
+        face_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_face_te):
+            face_sh_probs[valid_face_te] = _safe_predict_proba(clf_face_sh, X_face_te_scaled)[:, 1]
+        fsh_res = auroc_ci(y_test, face_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-face:shuffled", metric="auroc",
+            value=fsh_res.point, ci_low=fsh_res.ci_low, ci_high=fsh_res.ci_high,
+            n_items=n_total_test - fsh_res.n_excluded, n_groups=n_groups_test, n_excluded=fsh_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-face:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: react-face not run",
+        ))
+
+    # react-nonverbal:shuffled
+    if k_sp_tr > 0 and len(set(y_train[valid_speech_tr])) > 1:
+        clf_sp_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_sp_sh.fit(X_sp_tr_scaled, y_train_shuffled[valid_speech_tr])
+        sp_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(valid_speech_te):
+            sp_sh_probs[valid_speech_te] = _safe_predict_proba(clf_sp_sh, X_sp_te_scaled)[:, 1]
+        k_sp_te = int(np.sum(valid_speech_te))
+        if k_sp_te > 0 and len(set(y_test[valid_speech_te])) > 1:
+            spsh_res = auroc_ci(y_test, sp_sh_probs, groups_test)
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal:shuffled", metric="auroc",
+                value=spsh_res.point, ci_low=spsh_res.ci_low, ci_high=spsh_res.ci_high,
+                n_items=n_total_test - spsh_res.n_excluded, n_groups=n_groups_test, n_excluded=spsh_res.n_excluded,
+                config_hash=c_hash, notes="shuffled-label control",
+            ))
+        else:
+            rows.append(make_row(
+                hypothesis="H1", dataset=dataset, split=split_name,
+                condition="react-nonverbal:shuffled", metric="auroc",
+                value=None, ci_low=None, ci_high=None,
+                n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+                config_hash=c_hash, notes="shuffled-label control; not run: speech test items < 2 classes",
+            ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="react-nonverbal:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: react-nonverbal not run",
+        ))
+
+    # step-prior:shuffled (recomputed from y_train_shuffled)
+    sp_sh_train_loo = step_prior_scores(train_items, train_items, y_train_shuffled, loo=True)
+    sp_sh_test_scores = step_prior_scores(train_items, test_items, y_train_shuffled, loo=False)
+    spsh_res = auroc_ci(y_test, sp_sh_test_scores, groups_test)
+    rows.append(make_row(
+        hypothesis="H1", dataset=dataset, split=split_name,
+        condition="step-prior:shuffled", metric="auroc",
+        value=spsh_res.point, ci_low=spsh_res.ci_low, ci_high=spsh_res.ci_high,
+        n_items=n_total_test - spsh_res.n_excluded, n_groups=n_groups_test, n_excluded=spsh_res.n_excluded,
+        config_hash=c_hash, notes="shuffled-label control",
+    ))
+
+    # action-fusion:shuffled
+    if fusion_runnable:
+        logit_j_tr_af = logit(judge_train_scores[fusion_tr_mask])
+        logit_sp_tr_af_sh = logit(sp_sh_train_loo[fusion_tr_mask])
+        X_act_fu_tr_sh_raw = np.hstack([
+            logit_j_tr_af[:, None],
+            logit_sp_tr_af_sh[:, None],
+            X_action_train[fusion_tr_mask],
+        ])
+        act_fu_sh_scaler = StandardScaler().fit(X_act_fu_tr_sh_raw)
+        X_act_fu_tr_sh = act_fu_sh_scaler.transform(X_act_fu_tr_sh_raw)
+
+        clf_act_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_act_fu_sh.fit(X_act_fu_tr_sh, y_train_shuffled[fusion_tr_mask])
+
+        act_fu_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(fusion_te_mask):
+            logit_j_te_af = logit(judge_test_scores[fusion_te_mask])
+            logit_sp_te_af_sh = logit(sp_sh_test_scores[fusion_te_mask])
+            X_act_fu_te_sh_raw = np.hstack([
+                logit_j_te_af[:, None],
+                logit_sp_te_af_sh[:, None],
+                X_action_test[fusion_te_mask],
+            ])
+            X_act_fu_te_sh = act_fu_sh_scaler.transform(X_act_fu_te_sh_raw)
+            act_fu_sh_probs[fusion_te_mask] = _safe_predict_proba(clf_act_fu_sh, X_act_fu_te_sh)[:, 1]
+
+        afush_res = auroc_ci(y_test, act_fu_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion:shuffled", metric="auroc",
+            value=afush_res.point, ci_low=afush_res.ci_low, ci_high=afush_res.ci_high,
+            n_items=n_total_test - afush_res.n_excluded, n_groups=n_groups_test, n_excluded=afush_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="action-fusion:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: action-fusion not run",
+        ))
+
+    # fusion:shuffled
+    if fusion_runnable:
+        logit_j_tr = logit(judge_train_scores[fusion_tr_mask])
+        logit_sp_tr_sh = logit(sp_sh_train_loo[fusion_tr_mask])
+        if use_resolve_speech:
+            X_fusion_tr_sh_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr_sh[:, None],
+                X_action_train[fusion_tr_mask],
+                X_face_train[fusion_tr_mask],
+                spoke_tr[fusion_tr_mask, None],
+                X_sp_zf_tr[fusion_tr_mask],
+            ])
+        else:
+            X_fusion_tr_sh_raw = np.hstack([
+                logit_j_tr[:, None],
+                logit_sp_tr_sh[:, None],
+                X_action_train[fusion_tr_mask],
+                X_face_train[fusion_tr_mask],
+            ])
+
+        fu_sh_scaler = StandardScaler().fit(X_fusion_tr_sh_raw)
+        X_fu_tr_sh = fu_sh_scaler.transform(X_fusion_tr_sh_raw)
+
+        clf_fu_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_fu_sh.fit(X_fu_tr_sh, y_train_shuffled[fusion_tr_mask])
+
+        fu_sh_probs = np.full(len(test_items), np.nan)
+        if np.any(fusion_te_mask):
+            logit_j_te = logit(judge_test_scores[fusion_te_mask])
+            logit_sp_te_sh = logit(sp_sh_test_scores[fusion_te_mask])
+            if use_resolve_speech:
+                X_fusion_te_sh_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te_sh[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_face_test[fusion_te_mask],
+                    spoke_te[fusion_te_mask, None],
+                    X_sp_zf_te[fusion_te_mask],
+                ])
+            else:
+                X_fusion_te_sh_raw = np.hstack([
+                    logit_j_te[:, None],
+                    logit_sp_te_sh[:, None],
+                    X_action_test[fusion_te_mask],
+                    X_face_test[fusion_te_mask],
+                ])
+            X_fu_te_sh = fu_sh_scaler.transform(X_fusion_te_sh_raw)
+            fu_sh_probs[fusion_te_mask] = _safe_predict_proba(clf_fu_sh, X_fu_te_sh)[:, 1]
+
+        fush_res = auroc_ci(y_test, fu_sh_probs, groups_test)
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion:shuffled", metric="auroc",
+            value=fush_res.point, ci_low=fush_res.ci_low, ci_high=fush_res.ci_high,
+            n_items=n_total_test - fush_res.n_excluded, n_groups=n_groups_test, n_excluded=fush_res.n_excluded,
+            config_hash=c_hash, notes="shuffled-label control",
+        ))
+    else:
+        rows.append(make_row(
+            hypothesis="H1", dataset=dataset, split=split_name,
+            condition="fusion:shuffled", metric="auroc",
+            value=None, ci_low=None, ci_high=None,
+            n_items=n_total_test, n_groups=n_groups_test, n_excluded=n_total_test,
+            config_hash=c_hash, notes="shuffled-label control; not run: fusion not run",
+        ))
+
+    if notes:
+        for r in rows:
+            if r.notes:
+                r.notes = f"{r.notes}; {notes}"
+            else:
+                r.notes = notes
+
+    target_scorecard = scorecard_path or "results/scorecard.jsonl"
+    append_rows(rows, path=target_scorecard)
+
+    print(f"\nScorecard rows computed for {dataset} ({len(rows)} conditions):")
+    print(f"{'Condition':30s} {'Metric':12s} {'Value':>7s} {'CI':>18s} {'n':>6s} {'Excl':>5s}")
+    print("-" * 84)
+    for r in rows:
+        val_str = f"{r.value:.3f}" if r.value is not None else "null"
+        ci_str = f"[{r.ci_low:.3f}, {r.ci_high:.3f}]" if r.ci_low is not None and r.ci_high is not None else "-"
+        print(f"{r.condition:30s} {r.metric:12s} {val_str:>7s} {ci_str:>18s} {r.n_items:>6d} {r.n_excluded:>5d}")
+
+    return rows
+
+
 def run_probes(
     dataset: str,
     split_name: str = "test",
@@ -299,6 +1109,17 @@ def run_probes(
 ) -> List[ScorecardRow]:
     root = Path(data_root or DATA_ROOT)
     splits_path = Path(splits_dir or "splits")
+
+    if dataset in REFLEX_DATASETS:
+        return _run_reflex_probes(
+            dataset=dataset,
+            split_name=split_name,
+            root=root,
+            splits_path=splits_path,
+            scorecard_path=scorecard_path,
+            judge_model_tag=judge_model_tag,
+            notes=notes,
+        )
 
     items_path = root / "items" / dataset / "items.jsonl"
     if not items_path.exists():
@@ -539,7 +1360,6 @@ def run_probes(
         has_transcripts = any(t.strip() for t in texts_tr)
 
         if has_transcripts:
-            import warnings
             from sklearn.feature_extraction.text import TfidfVectorizer
 
             tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=2)

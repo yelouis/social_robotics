@@ -13,6 +13,7 @@ from typing import List, Optional, Union
 from config import DATA_ROOT
 from features.audio import NonverbalAudioEncoder
 from features.cache import FeatureCache
+from features.face import ReflexFaceEncoder, ReflexSpeechEncoder
 from features.visual import FrameEncoder
 from harness.items import read_items
 from harness.splits import load_split
@@ -40,6 +41,10 @@ def run_extraction(
         encoder = FrameEncoder(encoder_id=encoder_id)
     elif encoder_id == "e2v-plus-large":
         encoder = NonverbalAudioEncoder()
+    elif encoder_id == "reflex-face-v1":
+        encoder = ReflexFaceEncoder()
+    elif encoder_id == "reflex-speech-v1":
+        encoder = ReflexSpeechEncoder()
     else:
         raise ValueError(f"Unknown encoder: {encoder_id}")
 
@@ -89,19 +94,23 @@ def run_extraction(
                 continue
 
             # Between-items memory watchdog (if model was loaded / processed items)
-            if items_out > 0:
-                release_fn = getattr(encoder, "release", lambda: None)
-                reload_fn = getattr(encoder, "_ensure_loaded", lambda: None)
-                memguard.check(step_name, release=release_fn, reload=reload_fn)
+            if encoder_id in ("siglip-b16-224", "siglip-b16-224-u9", "e2v-plus-large"):
+                if items_out > 0:
+                    release_fn = getattr(encoder, "release", lambda: None)
+                    reload_fn = getattr(encoder, "_ensure_loaded", lambda: None)
+                    memguard.check(step_name, release=release_fn, reload=reload_fn)
 
             item_t0 = time.time()
             try:
-                if encoder_id in ("siglip-b16-224", "siglip-b16-224-u9"):
+                if encoder_id in ("reflex-face-v1", "reflex-speech-v1"):
+                    window = item.reaction_window_sec
+                    feat = encoder.encode_item(item)
+                elif encoder_id in ("siglip-b16-224", "siglip-b16-224-u9"):
                     window = item.action_window_sec
+                    feat = encoder.encode_window(item.video_path, window)
                 else:
                     window = item.reaction_window_sec
-
-                feat = encoder.encode_window(item.video_path, window)
+                    feat = encoder.encode_window(item.video_path, window)
                 elapsed_ms = (time.time() - item_t0) * 1000.0
 
                 cache.save(item.item_id, feat, window, elapsed_ms)
@@ -158,7 +167,12 @@ def run_extraction(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract features for dataset and encoder")
     parser.add_argument("--dataset", required=True, help="Dataset name")
-    parser.add_argument("--encoder", required=True, choices=["siglip-b16-224", "siglip-b16-224-u9", "e2v-plus-large"], help="Encoder id")
+    parser.add_argument(
+        "--encoder",
+        required=True,
+        choices=["siglip-b16-224", "siglip-b16-224-u9", "e2v-plus-large", "reflex-face-v1", "reflex-speech-v1"],
+        help="Encoder id",
+    )
     parser.add_argument("--split", default="all", choices=["train", "test", "all"], help="Split to process")
     parser.add_argument("--force", action="store_true", help="Force recomputation of cached features")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of items")
