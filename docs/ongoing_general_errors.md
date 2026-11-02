@@ -595,6 +595,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 
 **Wave B (specified November 1, 2026):**
 - R8 — Wave B REFLEX contract (`05_wave_b_reflex.md`) and execution guide (`agent_execution_guide.md` items B1–B4) specified after Option E (`M4` bounced, `M5` no reply) was superseded by REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0). Baseline battery re-verified bare on `65882bf` (G1 exit 0, G2 106 passed 3/3, G3 4/4 PASS).
+- B1 — REFLEX download, extraction, items and splits — git log --grep "(b1)" — Dataset.zip downloaded (37.22 GB, MD5 334caac04f3e607ac91182dea7a03929) and verified; 55 participant directories verified (10/10 files present); archive deleted (1.0 TiB free); reflex items (1,208 items, 604 pos / 604 neg) and reflex_resolve items (604 items, 488 pos / 116 neg) built with 0 validation errors; group-disjoint splits verified (38 train, 17 test, 0 straddling); banned-word check clean (0 occurrences); G1–G3 exit 0 (121 fast passed 3/3, G3 4/4 PASS).
 
 ---
 

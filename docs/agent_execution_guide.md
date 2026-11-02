@@ -69,7 +69,7 @@
 | HoloAssist (`holoassist`, `holoassist_audible`, `holoassist_pool`) | `raw/holoassist/`, `items/…`, `features/…`, `judge/…` | complete; per-session audibility in `runs/holoassist_session_audibility.jsonl` |
 | RoboReward (all of it) | `raw/roboreward/` (`DOWNLOAD.json`: 54,140 files, 43,204,474,744 bytes) | complete; `items/roboreward/` (4,000 train pool + 1,517 test); `features/roboreward/siglip-b16-224-u9/`; `judge/roboreward/gemma4_26b/` |
 | Wave D artefacts | `transfer/{labeler,scaler,heads,curve_scores}.npz`, `transfer/holoassist_pool_pseudolabels.jsonl` | complete (v1) |
-| REFLEX | `raw/reflex/` | **to be downloaded in B1** (`37,219,808,401` bytes, MD5 `334caac04f3e607ac91182dea7a03929`) |
+| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items) | complete (downloaded in B1, archive deleted) |
 
 ### 1.4 Gates (run bare November 1, 2026 on `65882bf`, with `TMPDIR` on the SSD; the regression bar)
 
@@ -376,7 +376,7 @@ For each item in §2 (B1 -> B2 -> B3 -> B4):
 
 - [x] A1–A15 and D1–D4 delivered and verified (§5.1).
 - [x] Wave B REFLEX contract pre-registered (`05_wave_b_reflex.md`, November 1, 2026) and baseline battery re-verified bare (§1.4).
-- [ ] **B1:** REFLEX downloaded (`37,219,808,401` bytes, MD5 verified, archive deleted), extracted (55 participants × 10 files), and `reflex` + `reflex_resolve` items and splits built and validated.
+- [x] **B1:** REFLEX downloaded (`37,219,808,401` bytes, MD5 verified, archive deleted), extracted (55 participants × 10 files), and `reflex` + `reflex_resolve` items and splits built and validated.
 - [ ] **B2:** `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d) implemented, wired into `features.extract` and `harness.probes`, and verified by unit tests.
 - [ ] **B3:** Features (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judges (`qwen2.5vl:7b` train+test, `gemma4:26b` test) run on `reflex` and `reflex_resolve` under `memguard`.
 - [ ] **B4:** Scorecard rows appended for `reflex` and `reflex_resolve`, MicroDuck face probes (`{reflex,reflex_resolve}_face_probe.npz`) exported and verified, `docs/evals/<date>_reflex_h1.md` generated, and guide closed out to `Queue Complete`.
