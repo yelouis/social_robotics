@@ -22,11 +22,14 @@ src/harness/metrics.py     auroc_ci(), delta_auroc_ci(), spearman_ci()
 src/harness/probes.py      fit/evaluate the probe conditions (§6)
 src/harness/scorecard.py   ScorecardRow, append_rows(), CLI (python -m harness.scorecard)
 src/features/cache.py      FeatureCache
-src/features/visual.py     FrameEncoder       (SigLIP)
+src/features/visual.py     FrameEncoder       (SigLIP: siglip-b16-224, siglip-b16-224-u9)
 src/features/audio.py      NonverbalAudioEncoder (emotion2vec+)
+src/features/face.py       ReflexFaceEncoder (reflex-face-v1) + ReflexSpeechEncoder (reflex-speech-v1) (Wave B)
 src/judge/vlm_judge.py     VLMJudge (local ollama + Gemini anchor)
 src/sources/oops.py        Oops! adapter      -> items.jsonl
 src/sources/holoassist.py  HoloAssist adapter -> items.jsonl
+src/sources/roboreward.py  RoboReward adapter -> items.jsonl (Wave D)
+src/sources/reflex.py      REFLEX adapter     -> items/{reflex,reflex_resolve}/items.jsonl (Wave B)
 src/shared/memguard.py     memory admission, heavy lock, between-item watchdog (§12)
 splits/<dataset>.json      tracked split files
 results/scorecard.jsonl    tracked scorecard history
@@ -42,7 +45,7 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 | field | type | meaning |
 |---|---|---|
 | `item_id` | str | `"<dataset>:<source-native id>:<index>"`, unique, stable across reruns |
-| `dataset` | str | `oops` \| `holoassist` \| `holoassist_audible` \| `verdict` \| `bad` (`holoassist_audible`: the audible-session evaluation set, `02_data_sources.md`; added October 20, 2026). Wave D adds `roboreward` and `holoassist_pool` (`04_wave_d_robot_check.md` §2; added October 21, 2026) |
+| `dataset` | str | `oops` \| `holoassist` \| `holoassist_audible` \| `verdict` \| `bad` (`holoassist_audible`: the audible-session evaluation set, `02_data_sources.md`; added October 20, 2026). Wave D adds `roboreward` and `holoassist_pool` (`04_wave_d_robot_check.md` §2; added October 21, 2026). Wave B adds `reflex` and `reflex_resolve` (`05_wave_b_reflex.md` §3; added November 1, 2026) |
 | `group_id` | str | the person/session unit that must never straddle a split (§5) |
 | `video_path` | str | absolute path under `DATA_ROOT` |
 | `action_window_sec` | [float, float] | what the judge and the action probe see |
@@ -100,12 +103,13 @@ Each source adapter writes `DATA_ROOT/items/<dataset>/items.jsonl`, one JSON obj
 |---|---|---|
 | `judge` | Action-window frames + `context_text`; **no audio, no reaction window** | Zero-shot VLM (§8). Score = P(good) |
 | `judge-large` | The same as `judge` | Zero-shot `gemma4:26b` (§8 "Large local judge"). **Test split only.** Enters `action_best` at ≥ 90% coverage; never enters `fusion`. *(Added October 10, 2026: Issue 5, option B)* |
-| `action-probe` | SigLIP features of the action window | Logistic regression |
-| `react-nonverbal` | emotion2vec+ embedding of the reaction-window audio; **no transcript** | Logistic regression |
-| `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | **Score = `1 − spoke`**: silence scores higher P(good), because `label = 1` means correct. The direction is fixed a priori from A4's label-level rates (an instructor spoke after 67.98% of mistakes vs. 30.87% of correct actions), never chosen on test. *HoloAssist only.* It answers "is the emotion signal more than 'they said something'?" |
+| `action-probe` | SigLIP features of the action window (`siglip-b16-224` on Oops!/HoloAssist; `siglip-b16-224-u9` on REFLEX) | Logistic regression |
+| `react-face` | Facial AUs, gaze, head rotation/velocity, facial valence/arousal, and arm posture (`reflex-face-v1`, 153-d `float32`; `05_wave_b_reflex.md` §4.1) | Logistic regression. *REFLEX datasets (`reflex`, `reflex_resolve`); added November 1, 2026 (DW2)* |
+| `react-nonverbal` | emotion2vec+ embedding of the reaction-window audio (`e2v-plus-large` on Oops!/HoloAssist) or Hume vocal prosody (`reflex-speech-v1`, 96-d `float32` on REFLEX); **no transcript** | Logistic regression |
+| `react-spoke` | One binary feature: did the reactor speak in the reaction window (from annotations) | **Score = `1 − spoke`**: silence scores higher P(good), because `label = 1` means correct. The direction is fixed a priori from A4's label-level rates (an instructor spoke after 67.98% of mistakes vs. 30.87% of correct actions), never chosen on test. *HoloAssist and REFLEX datasets.* It answers "is the emotion signal more than 'they said something'?" |
 | `react-full` | Transcript text in the reaction window | TF-IDF (`ngram_range=(1,2)`, `min_df=2`) + logistic regression. *Only where the dataset provides transcripts* |
-| `step-prior` | The step text only (`meta.verb`, `meta.noun`); **no frames** | **HoloAssist datasets only** *(added October 20, 2026, Issue 7 A)*. Score = the train-split P(label = 1 \| verb, noun), with hierarchical smoothing (below). It enters `action_best`. On Oops! (constant `context_text`) it is a `not run` row |
-| `fusion` | Oops!: `[logit(judge), action-probe features, react-nonverbal features]`. **HoloAssist datasets: `[logit(judge), logit(step-prior), action-probe features, react-nonverbal features]`** | Logistic regression |
+| `step-prior` | The step text only (`meta.verb`, `meta.noun`); **no frames** | **HoloAssist and REFLEX datasets** *(added October 20, 2026, Issue 7 A; extended to REFLEX November 1, 2026)*. Score = the train-split P(label = 1 \| verb, noun), with hierarchical smoothing (below). It enters `action_best`. On Oops! (constant `context_text`) it is a `not run` row |
+| `fusion` | Oops!: `[logit(judge), action-probe features, react-nonverbal features]`. **HoloAssist datasets: `[logit(judge), logit(step-prior), action-probe features, react-nonverbal features]`. REFLEX datasets (`05_wave_b_reflex.md` §5): `[logit(judge), logit(step-prior), action-probe features, react-face features]` (plus `[spoke, zero-filled react-nonverbal features]` on `reflex_resolve` when ≥ 2 classes have train speech)** | Logistic regression |
 | `action-fusion` | `fusion`'s inputs **minus the reaction features** | Logistic regression, fit on **exactly fusion's train items** and scored on fusion's test items, so the two differ only in the reaction features. If fusion cannot run, it is fit on the items with judge and action features. It is an action-only control and enters `action_best` *(added October 20, 2026)* |
 
 **`step-prior`, exactly** *(Issue 7 A)*:
@@ -167,6 +171,8 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
   - `oops`: `Is everything still going as the person intended at this point, with no accident or failure yet?`
   - `verdict` (Wave B): `Will the person rate this item highly (8 or more out of 10)?`
   - `roboreward` (Wave D reference only; added October 21, 2026): `Did the robot complete the task successfully by the end of the video?`
+  - `reflex` (Wave B; added November 1, 2026): `Is the robot performing the step normally at this point, with no failure yet?`
+  - `reflex_resolve` (Wave B; added November 1, 2026): `Will the human and the robot successfully resolve this failure and complete the step?`
 - **Parse:** the first match of `\b(100|[1-9]?\d)\b`, divided by 100. If no match, retry up to 2 more times with `temperature` 0.3. If all 3 attempts fail, `judge_prob = null`; the item is excluded from `judge` and `fusion` and counted in `n_excluded`.
 - **Cache:** `DATA_ROOT/judge/<dataset>/<model_tag>/<prompt_hash>.jsonl`, one line per item: `{item_id, judge_prob, raw, attempts, elapsed_ms}`. The `prompt_hash` is the first 12 hex digits of the SHA-256 of `template + question + "frames=4;side=768;q=90"`. A cached item is never re-queried.
 
@@ -203,7 +209,10 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
 | Encoder id | What | Exact spec |
 |---|---|---|
 | `siglip-b16-224` | Action-window visual | `transformers` `SiglipModel.from_pretrained("google/siglip-base-patch16-224").get_image_features`. Frames at `t = s, s+1, s+2, …` strictly below `e`, plus `e` itself (so at least 2); each L2-normalized, then mean-pooled → 768-d float32. Device `mps` if available, else `cpu` |
+| `siglip-b16-224-u9` | Action-window visual (9 uniform frames; Wave D & Wave B) | Same SigLIP model and device as `siglip-b16-224`, sampling 9 uniformly spaced frames at `t_k = s + k·(e − s)/8` (`k = 0..8`), L2-normalized per frame and mean-pooled → 768-d float32 |
 | `e2v-plus-large` | Reaction-window non-verbal audio | `funasr` `AutoModel(model="iic/emotion2vec_plus_large")`, `generate(<16 kHz mono wav>, granularity="utterance", extract_embedding=True)` → 1024-d float32. Audio is cut with ffmpeg (`-ac 1 -ar 16000`). **The embedding is used as features; its emotion-category outputs are never used** |
+| `reflex-face-v1` | Reaction-window facial AUs, gaze, head rotation/velocity, facial valence/arousal, arm posture (Wave B, `DW2`) | `ReflexFaceEncoder` (`src/features/face.py`; `05_wave_b_reflex.md` §4.1): aggregates 46 OpenFace columns (`mean`, `std`, `max` = 138-d + 3-d head angular velocity std = 141-d), 2 Facetorch columns (`Valence`, `Arousal` × 3 = 6-d), and 2 Body posture columns (`Crossed Arms`, `Arms behind back` × 3 = 6-d) over `meta.reaction_frames` → 153-d float32 |
+| `reflex-speech-v1` | Reaction-window participant vocal prosody (Wave B) | `ReflexSpeechEncoder` (`src/features/face.py`; `05_wave_b_reflex.md` §4.2): aggregates 48 Hume speech-prosody columns (`mean`, `max`) across participant utterances in `speech.csv` overlapping `meta.wall_reaction_window_sec` → 96-d float32 |
 
 **Cache:** `DATA_ROOT/features/<dataset>/<encoder_id>/<sanitized item_id>.npy`, plus `index.jsonl` (`item_id`, `shape`, `window`, `elapsed_ms`). Extraction is resumable: existing files are skipped unless `--force`. A failure is logged to `errors.jsonl` with its traceback, and never written as zeros.
 
@@ -229,14 +238,15 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
      - Clause 1, "the judge is strong": one line per judge condition with a value. It **held** iff `ci_low > 0.5` **and** AUROC ≥ the action-probe's AUROC − 0.05.
      - Clause 2, "Δ ≈ 0": it **held** iff the **ablation Δ** (`fusion_minus_action_fusion`) CI contains 0. The `fusion_minus_action_best` row is printed as a context line *(amended October 20, 2026)*.
      - Implemented by `tools/report_oops.py` `prediction_check`.
-   - **Hidden outcome (HoloAssist, verdict videos):**
-     - Clause 1, "reaction-only beats action_best": `react-nonverbal`'s `ci_low` > the `action_best` AUROC.
-     - Clause 2, "reactions add to the action-only model": the **ablation Δ** `ci_low > 0`.
-     - **The pass bar (proposed, `00_thesis.md`; amended October 20, 2026):** `react-nonverbal` ≥ 0.65 **and** the ablation Δ ≥ +0.03 with `ci_low > 0`.
+   - **Hidden outcome (HoloAssist, verdict videos, REFLEX):**
+     - Primary reaction condition (`<react_primary>`): `react-nonverbal` on HoloAssist datasets; `react-face` on REFLEX datasets (`reflex`, `reflex_resolve`; `05_wave_b_reflex.md` §6).
+     - Clause 1, "reaction-only beats action_best": `<react_primary>`'s `ci_low` > the `action_best` AUROC.
+     - Clause 2, "reactions add to the action-only model": the **ablation Δ** (`fusion_minus_action_fusion`) `ci_low > 0`.
+     - **The pass bar (proposed, `00_thesis.md`; amended October 20, 2026 & November 1, 2026):** `<react_primary>` ≥ 0.65 **and** the ablation Δ ≥ +0.03 with `ci_low > 0`.
      - **A context line, with no verdict:** `fusion_minus_action_best`, printed so that a fusion model losing to the best single control (e.g. `step-prior`) is shown plainly.
      - A clause whose rows did not run is `not tested`, never inferred.
-     - `react-spoke` and `react-full` appear only as context lines without a verdict.
-     - Implemented by `tools/report_holoassist.py` `prediction_check_hidden` (guide item A9b).
+     - `react-spoke` and `react-full` (plus `react-nonverbal` on REFLEX) appear as context lines without a verdict.
+     - Implemented by `tools/report_holoassist.py` `prediction_check_hidden` (guide item A9b) and `tools/report_reflex.py` `prediction_check_reflex` (guide item B4).
 9. **A shuffled-label control is a leak detector, and the check is one-sided** *(added October 21, 2026)*.
    - It **fails** iff its `ci_low > 0.5` (above chance: something leaks). That is a STOP.
    - A CI lying entirely **below** 0.5 is reported as `below chance (one permutation; not a leak)`, never as a failure. One permutation's bootstrap CI covers only the resampling of test items, not the variation between permutations.

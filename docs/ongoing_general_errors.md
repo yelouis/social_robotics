@@ -10,6 +10,17 @@
 
 ## 1. Open & in-flight
 
+**November 1, 2026: Wave B pivoted to REFLEX (`05_wave_b_reflex.md`; items B1–B4 in `agent_execution_guide.md`).**
+- **What happened:** Option E for Issue 1 did not yield access (`M4` `amfed@affectiva.com` bounced; `M5` taste-liking database author did not reply), and `BAD` (Issue 4) requires an institutional IRB. In chat on November 1, 2026, the maintainer approved pivoting Wave B to the open-access **REFLEX** dataset ([Zenodo 14590226](https://zenodo.org/records/14590226), `CC BY 4.0`, 37.22 GB, 55 participants collaborating with a Baxter robot across 604 failure episodes) and instructed: *"Yes, do this but don't actually code up Wave B, we will have an implementation model handle that."*
+- **Approved build:** **Wave B (items B1–B4)** in [`agent_execution_guide.md`](agent_execution_guide.md), implementing [`05_wave_b_reflex.md`](05_wave_b_reflex.md) (`reflex` and `reflex_resolve`, `ReflexFaceEncoder` `reflex-face-v1` fulfilling `DW2`, `ReflexSpeechEncoder` `reflex-speech-v1`, and exported face probes for Stage A MicroDuck `DW6`).
+- **Baseline battery (run bare November 1, 2026 on `65882bf`, with `TMPDIR` on the SSD):**
+  - `memguard --status`: 57.6 GB available, pressure 1, heavy lock free, no Ollama models loaded; 1.0 TiB free on `/Volumes/Extreme SSD`.
+  - **G1:** exit 0 (`All checks passed!`).
+  - **G2:** exit 0, **106 passed, 11 deselected**, 3 runs out of 3 (62.45 s, 58.91 s, 62.32 s).
+  - **G3:** exit 0, `4 PASS`.
+  - **G4:** not re-run in this docs-only session (no code changed since `65882bf`).
+- **Decisions pending:** none.
+
 **October 8, 2026: the project was reoriented.**
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
 - **Approved build:** **Wave A**, the evaluation harness plus the first H1 numbers on Oops! and HoloAssist ([`agent_execution_guide.md`](agent_execution_guide.md)).
@@ -323,6 +334,11 @@
   - the dataset's first author, Daniel McDuff (current address not yet found);
   - or drop AM-FED and wait on M5.
 
+**Decision (November 1, 2026): Pivot Wave B to REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0)**, by the maintainer in chat (*"It doesn't seem like I am able to get database access for Wave B. What should I do about that?"* → *"Yes, do this but don't actually code up Wave B, we will have an implementation model handle that"*):
+- Neither M4 (bounced) nor M5 (no reply) produced dataset access.
+- Wave B now uses **REFLEX** v1.1.0 ([Zenodo 14590226](https://zenodo.org/records/14590226), 37.22 GB, 55 participants, 604 robot-failure episodes), which requires no email or EULA and provides both immediate reactions to robot failures (`reflex`: `Pre` vs. `Failure`) and hidden-outcome post-explanation resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with pre-anonymization facial AUs/gaze/head/posture (`reflex-face-v1`, fulfilling `DW2`) and vocal prosody (`reflex-speech-v1`).
+- Full pre-registered contract: [`05_wave_b_reflex.md`](05_wave_b_reflex.md); build queue: [`agent_execution_guide.md`](agent_execution_guide.md) (B1–B4).
+
 Your selection: _____
 
 ---
@@ -370,6 +386,9 @@ Your selection: _____
 - *Cons:* loses the "reactions *to robots*" claim, which is the most robotics-relevant result.
 
 **Recommendation:** send A now (free). If C is also out, the realistic routes to a robot-reaction result are **B** (an academic partner) or a yes on A. Otherwise accept **D**: H2 transfer is shown on HoloAssist and AM-FED+, and "reactions *to robots*" waits for stage A (the microduck).
+
+**Decision (November 1, 2026): Replaced by REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0)**:
+- By pivoting Wave B to **REFLEX** (`00_thesis.md` entry 28; [`05_wave_b_reflex.md`](05_wave_b_reflex.md)), the project now evaluates human facial, postural and vocal reactions to a physical robot directly in Wave B without needing `BAD`'s institutional IRB.
 
 Your selection: _____
 
@@ -474,11 +493,11 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
 
 | Id | Action | Why | Status |
 |---|---|---|---|
-| M1 | Request **BAD dataset** access (QDR account → Request Access / "Contact Owner"), asking whether an independent researcher can qualify, and email the **ERR@HRI 3.0** organizers about post-challenge access | H2 targets: reactions to robots. BAD requires an IRB-reviewed protocol from an affiliated institution (Issue 4). Drafts: `maintainer_access_requests.md` M1a/M1b | Open |
+| M1 | Request **BAD dataset** access (QDR account → Request Access / "Contact Owner"), asking whether an independent researcher can qualify, and email the **ERR@HRI 3.0** organizers about post-challenge access | H2 targets: reactions to robots. BAD requires an IRB-reviewed protocol from an affiliated institution (Issue 4). Drafts: `maintainer_access_requests.md` M1a/M1b | Superseded November 1 by **REFLEX** (`10.5281/zenodo.14590226`, CC BY 4.0) |
 | M2 | Add an "Archived (October 2026)" note to the 6 public `louisye/social-robotics-*` Hugging Face cards | They describe the v0 pipeline as current | ✅ Done October 9 (wording confirmed by the maintainer; 6 HF commits) |
-| M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional |
-| M4 | Request **AM-FED / AM-FED+** (sign the EULA only if Affectiva confirms it) | Issue 1 option E: reactions + self-reported liking | **Sent October 23; bounced** (`amfed@affectiva.com` rejected). Next route: the maintainer's call (Issue 1, Decision) |
-| M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | **Sent October 23** (5:20 PM PT) to the first author, `dibeklioglu@cs.bilkent.edu.tr`. Awaiting a reply |
+| M3 | Create a **YouTube Data API v3** key (a Google Cloud project with the API enabled) | Only for *counting* (Issue 1, option C); never for downloading | Optional / not needed for Wave B |
+| M4 | Request **AM-FED / AM-FED+** (sign the EULA only if Affectiva confirms it) | Issue 1 option E: reactions + self-reported liking | **Closed November 1** (`amfed@affectiva.com` bounced October 23; superseded by REFLEX) |
+| M5 | Ask the authors of the **taste-liking** database for access | Issue 1 option E | **Closed November 1** (sent October 23, no reply; superseded by REFLEX) |
 | M6 | Enable billing on Google AI Studio project for `GOOGLE_API_KEY` | Free Tier daily ceiling is 20 req/day for `gemini-3.6-flash`; 1,072 test items require paid tier for full `judge-frontier` run (11 evaluated before 429) | Not needed: Issue 5 was decided as **option B** (a larger local judge) on October 10. The frontier judge stays on the free tier |
 
 ---
@@ -505,6 +524,8 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
 - **L16: A prior pulls with its norm, so compare priors at equal strength, and check a head's zero-shot transfer first.**
   - Wave D's reaction and shuffled priors had norm ~1 and moved predictions by 0.015; the true-label prior had norm 27 and moved them by 0.33.
   - All three heads were at chance on robot videos by themselves, which a one-line check would have shown before the curve was built.
+- **L17: Inspect primary dataset files before specifying encoders or time windows.**
+  - In REFLEX (`14590226`), `video_cam1.mp4` is video-only (no audio track) with the human participant segmented out in black for GDPR privacy, while pre-anonymization facial/body/speech features are shipped in CSVs; `D1` is named `D1-Decay-Smooth` in `Dataset.zip` (not `Decay-Slow` as in `DatasetGuide.md`); `video_cam2.mp4` is missing for 2 of 55 participants; `analysis.csv`'s `Object` column contains failure-mode notes (`"White Cube - Drop"`); and `video_cam1.mp4` container timestamps (`(Frame - 1) / fps`) drift from wall-clock `Seconds` in `time.csv` and `speech.csv`. Inspecting the archive before writing `05_wave_b_reflex.md` prevented five silent pipeline failures.
 
 ---
 
@@ -572,16 +593,19 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
     - What to do next is **Issue 10**.
 - R7 — Designer verification of A15 and D1–D4 (October 22, 2026): all five items match their specs. The findings are Issue 10 (Wave D's two design flaws and the diagnostics), an accepted memguard logging change, two document fixes and a stray duplicate file. Design updated: `04_wave_d_robot_check.md` §8 (the v1 result and notes), `02_data_sources.md` (durations), `00_thesis.md` entry 25.
 
+**Wave B (specified November 1, 2026):**
+- R8 — Wave B REFLEX contract (`05_wave_b_reflex.md`) and execution guide (`agent_execution_guide.md` items B1–B4) specified after Option E (`M4` bounced, `M5` no reply) was superseded by REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0). Baseline battery re-verified bare on `65882bf` (G1 exit 0, G2 106 passed 3/3, G3 4/4 PASS).
+
 ---
 
 ## 4. Deferred work (do not start without its trigger)
 
 | Id | Work | Trigger to start |
 |---|---|---|
-| DW1 | **Wave B: verdict-video H1 pilot** (~200 videos; face + non-verbal audio; ASR verdict parsing) | Issue 1 selected **and** Wave A closed **and** the designer has written the Wave B spec. Wave A is closed (A14, October 21; A15 is a report fix only) |
-| DW2 | Face encoder (`react-face`) | Part of the Wave B spec |
-| DW3 | **H2 transfer** to HoloAssist / AM-FED+ (+ BAD only if the QDR request is granted); scaling curves | Wave B closed |
+| DW1 | **Wave B: REFLEX multimodal human-robot reaction H1 (`reflex`, `reflex_resolve`)** | **Active now** (`05_wave_b_reflex.md`; items B1–B4 in `agent_execution_guide.md`, approved November 1, 2026) |
+| DW2 | **Face encoder (`react-face`, `reflex-face-v1`)** | **Active now** (part of Wave B item B2, `05_wave_b_reflex.md` §4.1) |
+| DW3 | **H2 transfer** across reaction datasets (`reflex`, `reflex_resolve`, `holoassist_audible`) | Wave B (B1–B4) closed |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
-| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | Wave A shows reaction signal on ≥ 1 dataset **and** the designer has written the Wave D spec. **Status (October 21): met by the rule** on `holoassist_audible` (ablation gain +0.021 [0.006, 0.034]). **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**, accepted as Wave D's result (Issue 10 = A). The follow-up is DW7 |
-| DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor.** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Hardware acquired **and** H2 done **and** the maintainer opts in (deferred October 9: *"maybe we don't worry about the someone reacting to the robot yet"*) |
-| DW7 | **Robot transfer, revisited (offline H3, a new pre-registered spec).** It uses Wave B's reaction model and a human video source closer to robot manipulation (e.g. third-person tabletop work with outcome labels). v1's lessons apply: check a derived pool's class counts per stratum (L15); compare priors at equal norm, and check each head's zero-shot transfer first (L16) | Wave B shows a reaction gain (an ablation gain with `ci_low > 0`) **and** a closer human source is identified **and** the designer has written the spec (Issue 10 = A) |
+| DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**, accepted as Wave D's result (Issue 10 = A). The follow-up is DW7 |
+| DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor (Pollen Robotics MicroDuck).** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) using the face/reaction probe architecture validated in Wave B (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Wave B (B1–B4) closed **and** hardware ready **and** the maintainer opts in |
+| DW7 | **Robot transfer, revisited (offline H3, a new pre-registered spec).** It uses Wave B's REFLEX reaction model and third-person tabletop robot/human manipulation data (`reflex` → `roboreward`). v1's lessons apply: check a derived pool's class counts per stratum (L15); compare priors at equal norm, and check each head's zero-shot transfer first (L16) | Wave B shows a reaction gain (an ablation gain with `ci_low > 0`) **and** the designer has written the spec (Issue 10 = A) |

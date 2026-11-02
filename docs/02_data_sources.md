@@ -4,11 +4,12 @@ Every source must provide three things: an **action**, a **reaction** from someo
 
 | Source | Outcome visible in the action? | Reaction channel | Outcome label | Role | Access |
 |---|---|---|---|---|---|
-| **Verdict videos** (web) | **Hidden** | Taster's face + voice before the verdict | Spoken verdict ("7 out of 10"), parsed from ASR | H1 core; H2 training corpus and scaling curve | Web; sourcing decision pending (Issue 1) |
+| **REFLEX** (`reflex`, `reflex_resolve`) | **Partly visible** (`reflex`: `Pre` vs `Failure`) / **Hidden** (`reflex_resolve`: `Resolved?` after `Failure + Explanation`) | Human partner's facial AUs, gaze, head rotation/velocity, valence/arousal, arm posture (`react-face`) + vocal prosody (`react-nonverbal`) | Robot failure (`Pre` vs `Failure`) and post-explanation collaborative resolution (`Resolved?` `TRUE` vs `FALSE`) | **Wave B H1 core (`05_wave_b_reflex.md`)** + robot-reaction benchmark + Stage A MicroDuck pretraining (`DW2`, `DW6`) | **Public download ([Zenodo 14590226](https://zenodo.org/records/14590226), CC BY 4.0, 37.22 GB)** |
+| **Verdict videos** (web / AM-FED+ / taste-liking) | **Hidden** | Taster's face + voice before the verdict | Spoken verdict ("7 out of 10") or self-reported liking | Superseded for Wave B by REFLEX after Option E (`M4` bounced, `M5` no reply) did not yield access (`00_thesis.md` entry 28) | Superseded (Issue 1) |
 | **HoloAssist** | **Hidden / partly visible** | Remote instructor's voice | Mistake annotations per action segment | H1 first-person; H2 target | Public download ([site](https://holoassist.github.io)) |
 | **Oops!** | **Visible** | Filmer's audio (laughs, gasps), visible spectators | Failure-onset timestamp | H1 visible-outcome contrast | Public download ([site](https://oops.cs.columbia.edu/data)) |
-| **BAD** / **ERR@HRI 3.0** | Visible (stimulus video) | Webcam face of the viewer | Failure vs. control stimulus | H2 target: reactions *to robots* | Controlled access: an IRB-reviewed protocol from an affiliated institution (Issue 4) |
-| **REACT** | — | Reactions to robots + explicit feedback | Explicit evaluative feedback | H2 target candidate | Check availability |
+| **RoboReward** | **Visible** (vision-only subset) | None (robot rollouts) | Task completion reward (`5` vs `≤ 2`) | Wave D offline H3 (`04_wave_d_robot_check.md`) | Public download ([Hugging Face](https://huggingface.co/datasets/teetone/RoboReward), CC BY 4.0) |
+| **BAD** / **ERR@HRI 3.0** | Visible (stimulus video) | Webcam face of the viewer | Failure vs. control stimulus | Replaced by REFLEX (Issue 4, November 1, 2026) | Controlled access: IRB required |
 | **Ego4D v0 corpus** (archived) | — | Bystanders | **None** | Optional: false-positive rate on steady-state co-activity | Derived data on the SSD; raw videos deleted October 8 (re-download by id) |
 
 ---
@@ -293,7 +294,42 @@ The VLM judge should be strong here, because the failure is visible. That is the
 - These are 20,000 actions from the 548 audible sessions that are not `holoassist_audible` items, in the natural class proportion. They are a pretraining set for Wave D's human heads, not an evaluation set.
 - The definition is pinned in `04_wave_d_robot_check.md` §2.2.
 
-## BAD / ERR@HRI / REACT: reactions to robots
+## REFLEX: multimodal human reactions to robot failures and explanations (Wave B, added November 1, 2026)
+
+Fifty-five human participants collaborate with a physical Baxter robot on a tabletop object-sorting task across five robot explanation strategies while the robot commits programmed manipulation failures (`Pick`, `Carry`, `Place`) and explains them (Naoum et al., KTH, HRI 2025; arXiv:2502.14185).
+
+**Facts & Archive Schema (verified November 1, 2026 against Zenodo API and `Dataset.zip` central directory):**
+- **Source:** [Zenodo 14590226](https://zenodo.org/records/14590226) (`DOI: 10.5281/zenodo.14590226`, version 1.1.0, March 2, 2025; **CC BY 4.0**).
+- **Archive file:** `Dataset.zip` (`https://zenodo.org/api/records/14590226/files/Dataset.zip/content`), **37,219,808,401 bytes** (37.22 GB), MD5 **`334caac04f3e607ac91182dea7a03929`**.
+- **Directory layout under `DATA_ROOT/raw/reflex/Dataset/`:**
+  - 5 strategy folders, 11 participants each (**55 participants total**):
+    - `C1-Fixed-Low/C1-1` … `C1-11`
+    - `C2-Fixed-Medium/C2-1` … `C2-11`
+    - `C3-Fixed-High/C3-1` … `C3-11`
+    - `D1-Decay-Smooth/D1-1` … `D1-11` *(named `Decay-Slow` in the paper's `DatasetGuide.md`, but the directory in `Dataset.zip` is `D1-Decay-Smooth`)*
+    - `D2-Decay-Rapid/D2-1` … `D2-11`
+  - Every participant directory contains 10 required files: `analysis.csv`, `body.csv`, `facetorch.csv`, `gaze.csv`, `hume.csv`, `openface.csv`, `questionnaire.csv`, `speech.csv`, `time.csv`, and `video_cam1.mp4` (`video_cam2.mp4` is missing in `C1-Fixed-Low/C1-10` and `D1-Decay-Smooth/D1-3` and is not used).
+  - The zip contains `__MACOSX/` and `._*` AppleDouble entries; extraction and any glob over `DATA_ROOT` must ignore them (`shared.fsutil.data_glob`).
+- **Video anonymization & why `video_cam1.mp4` is reaction-masked by construction:**
+  - `video_cam1.mp4` is encoded at $\approx 4.4444\text{ Hz}$ (`40/9` fps via `cv2.VideoWriter`) with **no audio stream**.
+  - For GDPR privacy (`arXiv:2502.14185` §IV-1), **the human participant is segmented out with a black mask** in `video_cam1.mp4`, while the **Baxter robot and tabletop objects remain visible**.
+  - Therefore, passing `video_cam1.mp4` to `judge` (`qwen2.5vl:7b`), `judge-large` (`gemma4:26b`), and `action-probe` (`siglip-b16-224-u9`) shows the robot's physical action with the participant's facial and body reactions masked out.
+  - Meanwhile, the REFLEX authors ran **OpenFace 2.0**, **Facetorch**, **MediaPipe Pose**, and **Hume Expression Measurement (Face + Speech Prosody)** on the **unmasked raw recordings before anonymization** and released the per-frame and per-utterance outputs in the CSV files.
+- **CSV schemas & frame/time alignment (pinned in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §2–§4):**
+  - `time.csv`: columns `Frame, Stamp, Timestamp, Seconds, Time`. `Frame` is 1-indexed (`1 … N`, matching `video_cam1.mp4` frames); `Seconds` is elapsed wall-clock seconds from Frame 1.
+  - `analysis.csv`: columns `Participant, Strategy, Round No., Object, Action, Explanation Level, State, Start Frame, End Frame, Start, End, Resolved?`.
+    - Contains **604 robot-failure episodes** across the 55 participants (2,416 rows: each episode is a contiguous 4-row block with `State` in `Pre`, `Failure`, `Explanation`, `Resolution`).
+    - On the 604 `Failure` rows, `Resolved?` is `"TRUE"` on **477**, `"FALSE"` on **116**, and empty/other on **11**.
+    - **Leakage warning (Lesson L12):** the `Object` column contains annotator failure descriptions (e.g. `"White Cube - Drop"`, `"Red Toy (Nothing inside)"`, `"Cup (Wrong Cup)"`). `Object` is **never** included in `context_text` or `meta.noun`.
+  - `openface.csv`: 1-indexed `frame`, `confidence`, `success`, 8 gaze columns, 3 head rotation columns (`pose_Rx, pose_Ry, pose_Rz`), 17 continuous AU intensities (`AU*_r`), and 18 binary AU presences (`AU*_c`).
+  - `facetorch.csv`: 0-indexed `Frame ID` (`= Frame - 1`), `Valence`, `Arousal`, `Dominance`.
+  - `body.csv`: 0-indexed `Frame` (`= Frame - 1`), `Crossed Arms` (`TRUE`/`FALSE`), `Arms behind back` (`TRUE`/`FALSE`), and 33 MediaPipe 3D pose landmarks.
+  - `speech.csv`: utterance-level `BeginTime`, `EndTime` (in wall-clock seconds matching `time.csv` `Seconds`), `Transcript`, `Id` (`"robot"`, `"participant"`, `"robot/participant"`), and 48 Hume vocal prosody dimensions (`Admiration` … `Triumph`).
+- **Two evaluation datasets (pinned in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §3):**
+  1. **`reflex` (1,208 candidate items across 55 participant groups):** immediate reaction to robot failure (`Pre` `label = 1` vs. `Failure` `label = 0`), with `react-face` (`reflex-face-v1`, 153-d `float32`) as the primary reaction channel.
+  2. **`reflex_resolve` (593 candidate items across 55 participant groups):** hidden-outcome collaborative resolution (`[Failure.Start Frame, Explanation.End Frame]` action window before resolution $\rightarrow$ `Resolved?` `TRUE` `label = 1` vs. `FALSE` `label = 0`), evaluated with both `react-face` (`reflex-face-v1`, 153-d) and `react-nonverbal` (`reflex-speech-v1`, 96-d), plus `step-prior` on `(action, explanation_level)`.
+
+## BAD / ERR@HRI / REACT: reactions to robots (superseded by REFLEX, November 1, 2026)
 
 **If BAD access is granted, these commitments from the access request bind the project:**
 - BAD is a held-out evaluation set only, with no training on it;
