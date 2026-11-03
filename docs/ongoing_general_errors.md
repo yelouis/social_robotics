@@ -447,6 +447,10 @@ Your selection: _____
 
 **Recommendation:** Option A if Tenth Spring ComfyUI generation has concluded or can be paused; otherwise Option C so Wave B analysis can proceed to completion with the already-complete `qwen2.5vl:7b` and `siglip-b16-224-u9` features.
 
+**Decision (November 2, 2026): Wait for ComfyUI to complete (Maintainer instruction)**:
+- In chat, the maintainer instructed: *"Just wait and check every hour or so to see if comfyUI is done"*.
+- The agent will check PID 66217 and memory guard status every hour. Once ComfyUI finishes and available memory rises with pressure dropping to 1, Step 5 (`reflex` test) and Step 6 (`reflex_resolve` test) with `gemma4:26b` will run to complete Item B3.
+
 Your selection: _____
 
 ---
