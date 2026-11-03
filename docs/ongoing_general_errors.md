@@ -19,7 +19,7 @@
   - **G2:** exit 0, **106 passed, 11 deselected**, 3 runs out of 3 (62.45 s, 58.91 s, 62.32 s).
   - **G3:** exit 0, `4 PASS`.
   - **G4:** not re-run in this docs-only session (no code changed since `65882bf`).
-- **Decisions pending:** none.
+- **Decisions pending:** Issue 11 (large local judge `gemma4:26b` memory contention with external ComfyUI workload).
 
 **October 8, 2026: the project was reoriented.**
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
@@ -389,6 +389,63 @@ Your selection: _____
 
 **Decision (November 1, 2026): Replaced by REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0)**:
 - By pivoting Wave B to **REFLEX** (`00_thesis.md` entry 28; [`05_wave_b_reflex.md`](05_wave_b_reflex.md)), the project now evaluates human facial, postural and vocal reactions to a physical robot directly in Wave B without needing `BAD`'s institutional IRB.
+
+Your selection: _____
+
+---
+
+### Issue 11: Large local judge (`gemma4:26b`) evaluation on REFLEX test split deferred by memory guard (72/72 deferrals, 12.0 h)
+
+**Status:** ⚠️ **Confirmed Unresolved — filed November 2, 2026.**
+
+**Facts (November 2, 2026):**
+1. **Feature extractions for Wave B (item B3) completed with high coverage:**
+   - `reflex-face-v1`: 1,173 / 1,208 cached on `reflex` (97.1%, exceeding the $\ge 95\%$ bar); 590 / 604 cached on `reflex_resolve` (97.7%, exceeding $\ge 95\%$). Honest nulls recorded in `errors.jsonl` for missing OpenFace/Facetorch/Body frames.
+   - `reflex-speech-v1`: 338 cached on `reflex`, 466 cached on `reflex_resolve` (honest nulls on non-speech items).
+   - `siglip-b16-224-u9`: 1,207 / 1,208 cached on `reflex` (99.9%, exceeding $\ge 99\%$ bar); 604 / 604 cached on `reflex_resolve` (100.0%, exceeding $\ge 99\%$).
+2. **Local VLM judge (`qwen2.5vl:7b`) evaluations completed with 100% test coverage (1,811 cached items):**
+   - `reflex` train: 833 / 834 items scored (99.88% coverage; 1 excluded due to raw clip frame seek error rate threshold in `C3-5`).
+   - `reflex` test: 374 / 374 items scored (**100.0% coverage**, 0 errors).
+   - `reflex_resolve` train: 417 / 417 items scored (**100.0% coverage**, 0 errors).
+   - `reflex_resolve` test: 187 / 187 items scored (**100.0% coverage**, 0 errors).
+3. **Large local judge (`gemma4:26b`) evaluation deferred by memory guard:**
+   - Declared peak for `sr_judge_large_load` is 33 GB (`03_eval_harness.md` §12), and `FLOOR` is 8 GB.
+   - Total available memory required for admission is $33 + 8 = \mathbf{41\text{ GB}}$ with `kern.memorystatus_vm_pressure_level < 2`.
+   - When attempting Step 5 (`reflex` test) with `gemma4:26b`, `shared.memguard.check_shared("sr_judge_large_load")` measured available memory at **33.9 GB** with VM pressure level **2** (WARN).
+   - System memory contention is caused by external process PID 66217 (`.venv/bin/python main.py --reserve-vram 20 --listen 127.0.0.1 --port 8188`, launched in `tenth_spring` under `memguard.py run --parallel --admit-timeout 0 art_qwen_image_2512`), which holds ~10 GB RSS and 20 GB reserved VRAM in `ttys005`.
+   - Standing project constraint §0.3 strictly forbids terminating processes this project did not start, and §0.4 strictly forbids raising `FLOOR`, lowering declared peaks, or bypassing `memguard`.
+   - `tools/run_supervised.sh` actively supervised the memory deferrals, sleeping 600s between admission attempts. At 17:04:06 (November 2, 2026), it completed its exact pre-registered limit of **72 consecutive deferrals (12.0 hours)** and aborted with exit code 75: `ABORT: memory guard: deferred 72 times; giving up`.
+4. **Impact on Wave B queue:**
+   - Item B3 validation states: `"qwen2.5vl_7b (train and test) and gemma4_26b (test): >= 98% of items scored with non-null judge_prob."`
+   - While `qwen2.5vl:7b` has 100% test coverage, `gemma4:26b` has 0% coverage on REFLEX test items due to memory contention.
+   - Per standing rules: *"If any bar cannot be met, STOP and file Issue 11 in docs/ongoing_general_errors.md."*
+
+**Option A: Maintainer terminates external process PID 66217 (`tenth_spring` ComfyUI) and resumes B3**
+- *Pros:*
+  - Preserves 100% fidelity to the pre-registered Wave B contract and validation bar.
+  - Generates the strong `judge-large` control for `action_best` on REFLEX.
+  - `gemma4:26b` evaluation takes only ~2 hours once admitted (374 `reflex` test items and 187 `reflex_resolve` test items; total 561 items).
+- *Cons:*
+  - Disrupts Tenth Spring artwork generation if PID 66217 was still actively running background generation.
+
+**Option B: Re-measure `sr_judge_large_load` peak specifically for REFLEX**
+- *Facts:* The 33 GB declared peak was established under A7c on Oops! videos while `animated_infographics` was resident. REFLEX judge queries send 4 sampled frames and request a 16-token answer without heavy decoding.
+- *Pros:*
+  - If a 50-item measurement shows peak RSS is under 25 GB, $25 + 8 = 33\text{ GB}$, which might allow admission with 33.9 GB available memory once pressure level drops from 2 to 1.
+- *Cons:*
+  - In A7c, `gemma4:26b` measured 28.10 GB RSS. $28.10 + 8 = 36.1\text{ GB}$, which still exceeds 33.9 GB.
+  - Current memory pressure level is 2 (WARN); even with a lower peak, `memguard` rejects admission when pressure $\ge 2$.
+  - Modifying declared peak without maintainer authorization violates §0.4.
+
+**Option C: Accept `qwen2.5vl:7b` (100% cached) as the sole local VLM judge for Wave B, marking `judge-large` deferred**
+- *Facts:* `qwen2.5vl:7b` is 100% complete across both train and test splits for `reflex` and `reflex_resolve` (1,811 cached records). In addition, `action-probe` (`siglip-b16-224-u9`, 768-d) and `step-prior` are already extracted and cached at 99.9%–100% coverage, providing strong action-only controls. In `05_wave_b_reflex.md` §5, `action_best` takes the max AUROC among `judge`, `judge-large`, `action-probe`, and `step-prior`.
+- *Pros:*
+  - Enables immediate completion of Item B3 and execution of Item B4 (`probes.py` and `report_reflex.py`).
+  - Does not disrupt Tenth Spring or any other background process.
+- *Cons:*
+  - Omits `judge-large` from the REFLEX scorecard table (though `judge-large` was not the binding constraint on visible-vs-hidden outcome contrast in Wave B, where `react-face` is the primary hypothesis test).
+
+**Recommendation:** Option A if Tenth Spring ComfyUI generation has concluded or can be paused; otherwise Option C so Wave B analysis can proceed to completion with the already-complete `qwen2.5vl:7b` and `siglip-b16-224-u9` features.
 
 Your selection: _____
 
