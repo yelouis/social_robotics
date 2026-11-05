@@ -19,7 +19,7 @@
   - **G2:** exit 0, **106 passed, 11 deselected**, 3 runs out of 3 (62.45 s, 58.91 s, 62.32 s).
   - **G3:** exit 0, `4 PASS`.
   - **G4:** not re-run in this docs-only session (no code changed since `65882bf`).
-- **Decisions pending:** Issue 11 (large local judge `gemma4:26b` memory contention with external ComfyUI workload).
+- **Decisions pending:** none (Issue 11 resolved November 4, 2026 in B3 after external ComfyUI PID 66217 exited and `gemma4:26b` scored 100% of `reflex` and `reflex_resolve` test items).
 
 **October 8, 2026: the project was reoriented.**
 - **What happened:** the v0 Social-Affective Filter is archived at tag `v0-saf-final` (why: [`LESSONS_v0.md`](LESSONS_v0.md)). The tree now holds the new grounding docs plus three utilities: `src/shared/vlm_client.py`, `src/models_config.py` and `tools/`.
@@ -396,7 +396,7 @@ Your selection: _____
 
 ### Issue 11: Large local judge (`gemma4:26b`) evaluation on REFLEX test split deferred by memory guard (72/72 deferrals, 12.0 h)
 
-**Status:** ⚠️ **Confirmed Unresolved — filed November 2, 2026.**
+**Status:** ✅ **Resolved November 4, 2026 (B3; external ComfyUI PID 66217 finished, available memory rose to 57.0 GB at pressure level 1, and `gemma4:26b` scored 374/374 `reflex` test items and 187/187 `reflex_resolve` test items with 0 errors).**
 
 **Facts (November 2, 2026):**
 1. **Feature extractions for Wave B (item B3) completed with high coverage:**
@@ -450,6 +450,7 @@ Your selection: _____
 **Decision (November 2, 2026): Wait for ComfyUI to complete (Maintainer instruction)**:
 - In chat, the maintainer instructed: *"Just wait and check every hour or so to see if comfyUI is done"*.
 - The agent will check PID 66217 and memory guard status every hour. Once ComfyUI finishes and available memory rises with pressure dropping to 1, Step 5 (`reflex` test) and Step 6 (`reflex_resolve` test) with `gemma4:26b` will run to complete Item B3.
+- **Outcome (November 4, 2026, B3):** External process PID 66217 completed (`memguard --status`: 57.0 GB available, pressure level 1, heavy lock free). `gemma4:26b` evaluated all 374 `reflex` test items (`1,350.20 s` wall-clock, `1,339.09 s` sum `elapsed_ms`, 0 errors) and all 187 `reflex_resolve` test items (`666.35 s` wall-clock, `660.77 s` sum `elapsed_ms`, 0 errors), achieving 100.0% test coverage on both datasets without unloading `gemma4:26b`.
 
 Your selection: _____
 
@@ -658,6 +659,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - R8 — Wave B REFLEX contract (`05_wave_b_reflex.md`) and execution guide (`agent_execution_guide.md` items B1–B4) specified after Option E (`M4` bounced, `M5` no reply) was superseded by REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0). Baseline battery re-verified bare on `65882bf` (G1 exit 0, G2 106 passed 3/3, G3 4/4 PASS).
 - B1 — REFLEX download, extraction, items and splits — git log --grep "(b1)" — Dataset.zip downloaded (37.22 GB, MD5 334caac04f3e607ac91182dea7a03929) and verified; 55 participant directories verified (10/10 files present); archive deleted (1.0 TiB free); reflex items (1,208 items, 604 pos / 604 neg) and reflex_resolve items (604 items, 488 pos / 116 neg) built with 0 validation errors; group-disjoint splits verified (38 train, 17 test, 0 straddling); banned-word check clean (0 occurrences); G1–G3 exit 0 (121 fast passed 3/3, G3 4/4 PASS).
 - B2 — REFLEX reaction encoders, CLI wiring, judge questions, and probe conditions — git log --grep "(b2)" — ReflexFaceEncoder (153-d) and ReflexSpeechEncoder (96-d) implemented with honest nulls; extract.py wired with memguard bypass for CSV reaction features; vlm_judge questions added; 20 REFLEX probe conditions implemented in probes.py including MicroDuck face probe export to transfer/{dataset}_face_probe.npz; test_reflex_encoders_and_probes passes 5/5; 10-item real extraction smoke test verified (face 10/10, speech 1/10 with 9 honest nulls); battery exit 0 (G1 exit 0, G2 121 passed 3/3, G3 4/4 PASS).
+- B3 — REFLEX feature extraction and VLM judge evaluation — git log --grep "(b3)" — reflex (1,208 items): reflex-face-v1 1,173/1,208 (97.10%, 35 honest nulls, 55.19s), reflex-speech-v1 338/1,208 (27.98%, 0.03s), siglip-b16-224-u9 1,207/1,208 (99.92%, 1 seek error, 3,794.85s), qwen2.5vl_7b 1,207/1,208 (train 833/834 [99.88%], test 374/374 [100.0%], 12,068.26s), gemma4_26b test 374/374 (100.0%, 0 errors, 1,350.20s wall / 1,339.09s sum); reflex_resolve (604 items): reflex-face-v1 590/604 (97.68%, 14 honest nulls, 53.98s), reflex-speech-v1 466/604 (77.15%, 0.06s), siglip-b16-224-u9 604/604 (100.0%, 0 errors, 1,933.80s), qwen2.5vl_7b 604/604 (train 417/417 [100.0%], test 187/187 [100.0%], 6,200.09s), gemma4_26b test 187/187 (100.0%, 0 errors, 666.35s wall / 660.77s sum); Issue 11 resolved; G1–G4 exit 0 (G1 exit 0, G2 115 passed 3/3, G3 4/4 PASS, G4 11/11 passed in 205.56s).
 
 ---
 

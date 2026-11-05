@@ -69,16 +69,16 @@
 | HoloAssist (`holoassist`, `holoassist_audible`, `holoassist_pool`) | `raw/holoassist/`, `items/…`, `features/…`, `judge/…` | complete; per-session audibility in `runs/holoassist_session_audibility.jsonl` |
 | RoboReward (all of it) | `raw/roboreward/` (`DOWNLOAD.json`: 54,140 files, 43,204,474,744 bytes) | complete; `items/roboreward/` (4,000 train pool + 1,517 test); `features/roboreward/siglip-b16-224-u9/`; `judge/roboreward/gemma4_26b/` |
 | Wave D artefacts | `transfer/{labeler,scaler,heads,curve_scores}.npz`, `transfer/holoassist_pool_pseudolabels.jsonl` | complete (v1) |
-| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items) | complete (downloaded in B1, archive deleted) |
+| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items); `features/{reflex,reflex_resolve}/{reflex-face-v1,reflex-speech-v1,siglip-b16-224-u9}/`; `judge/{reflex,reflex_resolve}/{qwen2.5vl_7b,gemma4_26b}/` | complete (B1–B3) |
 
-### 1.4 Gates (run bare November 1, 2026 on `65882bf`, with `TMPDIR` on the SSD; the regression bar)
+### 1.4 Gates (run bare November 4, 2026 on B3, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on `65882bf` (November 1, 2026) |
+| # | Gate | Command | Result on B3 (November 4, 2026) |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · `All checks passed!` |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **106 passed, 11 deselected**, 3 runs out of 3 (62.45 s, 58.91 s, 62.32 s) |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **115 passed, 11 deselected**, 3 runs out of 3 (73.08 s, 69.92 s, 69.17 s) |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS (`planted signal auroc=0.830 [0.807, 0.852]`, `null ci=[0.459, 0.523]`, `grouping ratio=4.66`, `paired delta ci_low=0.138`) |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | Not re-run in this docs-only session (no code changed since `65882bf`, where G4 passed **11/11** in 124 s) |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **11 passed, 115 deselected** (205.56 s) |
 
 ### 1.5 Headline results (the scorecard is the source)
 
@@ -378,5 +378,5 @@ For each item in §2 (B1 -> B2 -> B3 -> B4):
 - [x] Wave B REFLEX contract pre-registered (`05_wave_b_reflex.md`, November 1, 2026) and baseline battery re-verified bare (§1.4).
 - [x] **B1:** REFLEX downloaded (`37,219,808,401` bytes, MD5 verified, archive deleted), extracted (55 participants × 10 files), and `reflex` + `reflex_resolve` items and splits built and validated.
 - [x] **B2:** `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d) implemented, wired into `features.extract` and `harness.probes`, and verified by unit tests.
-- [ ] **B3:** Features (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judges (`qwen2.5vl:7b` train+test, `gemma4:26b` test) run on `reflex` and `reflex_resolve` under `memguard`.
+- [x] **B3:** Features (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judges (`qwen2.5vl:7b` train+test, `gemma4:26b` test) run on `reflex` and `reflex_resolve` under `memguard`.
 - [ ] **B4:** Scorecard rows appended for `reflex` and `reflex_resolve`, MicroDuck face probes (`{reflex,reflex_resolve}_face_probe.npz`) exported and verified, `docs/evals/<date>_reflex_h1.md` generated, and guide closed out to `Queue Complete`.
