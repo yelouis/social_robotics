@@ -76,6 +76,7 @@ On data with known outcomes, observer reactions predict the outcome **and add in
   - On **hidden-outcome** data (verdict videos, HoloAssist mistakes), (b) > (a) and (c) > (a).
 - **Pass (proposed; amended October 20, 2026, decision 20; Wave B spec November 1, 2026, decision 28):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 (`react-nonverbal` on HoloAssist; `react-face` on REFLEX, [`05_wave_b_reflex.md`](05_wave_b_reflex.md)) **and** the ablation gain, fusion − `action-fusion` (the same model without the reaction features), ≥ +0.03 with the paired CI excluding 0. Fusion − `action_best` is still reported beside it.
 - **Kill (restated November 1, 2026, decision 28):** if **neither** `reflex` **nor** `reflex_resolve` in Wave B ([`05_wave_b_reflex.md`](05_wave_b_reflex.md) §6) achieves a positive ablation gain (`fusion_minus_action_fusion` `ci_low > 0`) **and** `react-face` fails to beat chance (`ci_low ≤ 0.5`) on both datasets, human facial/postural reactions do not carry usable reward signal on REFLEX; stop and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
+  - **Wave B v1 (November 4, 2026): PROCEED** by this rule, through `reflex` `react-face` alone. The designer found that clause to be a window-length artifact (entry 29). What happens next is Issue 12.
 
 ### H2: Scale and transfer
 A reaction model trained on web video transfers to held-out datasets it never saw, including **reactions to robots** (BAD, ERR@HRI) and **first-person** data (HoloAssist), and improves with more web data.
@@ -113,8 +114,8 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 | Wave | Deliverable | Gate |
 |---|---|---|
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
-| **B** (≈ weeks 4–7) | **Multimodal human reactions to a physical robot (`REFLEX`, [`05_wave_b_reflex.md`](05_wave_b_reflex.md))**: immediate reaction to robot failure (`reflex`: `Pre` vs. `Failure`) and hidden-outcome collaborative resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with `react-face` (`reflex-face-v1`, DW2) and `react-nonverbal` (`reflex-speech-v1`) | **Issue 1 & Issue 4** pivoted to REFLEX (November 1, 2026); Wave A & D v1 closed |
-| **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | Wave B closed |
+| **B** (≈ weeks 4–7) | **Multimodal human reactions to a physical robot (`REFLEX`, [`05_wave_b_reflex.md`](05_wave_b_reflex.md))**: immediate reaction to robot failure (`reflex`: `Pre` vs. `Failure`) and hidden-outcome collaborative resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with `react-face` (`reflex-face-v1`, DW2) and `react-nonverbal` (`reflex-speech-v1`) | **Issue 1 & Issue 4** pivoted to REFLEX (November 1, 2026); Wave A & D v1 closed. **v1 done November 4** (entry 29) |
+| **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | Wave B closed **and Issue 12 selected** |
 | **D** (≈ weeks 7–10, alongside C) | **Robot check (offline H3)**: on RoboReward, does reaction-labeled human task video make a robot success detector more accurate with fewer robot labels? *(v1 completed October 22: NOT SUPPORTED)* | Wave A shows reaction signal on ≥ 1 dataset; spec written by the designer after Wave A |
 | **E** (≈ weeks 11–12) | Paper write-up + Stage A MicroDuck live reaction demo (`DW6`, if hardware ready) | — |
 
@@ -223,6 +224,20 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Encoders & MicroDuck preparation:** `ReflexFaceEncoder` (`reflex-face-v1`, 153-d `float32`, fulfilling `DW2` `react-face`) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d `float32`, `react-nonverbal`), plus exported linear probes (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) ready for `DW6` (Stage A live MicroDuck).
     - **Division of labor:** per maintainer instruction (*"Yes, do this but don't actually code up Wave B, we will have an implementation model handle that"*), the designer writes `05_wave_b_reflex.md` and `agent_execution_guide.md` items B1–B4, and the implementing agent writes the code and runs the evaluation.
 
+**2026-11-04** (the implementing agent, then the designer's verification):
+29. **Wave B v1 result: PROCEED by the pre-registered rule, through one clause that the designer found to be a window-length artifact.**
+    - **Rows:** `2026-11-05T05:49:35Z`–`05:49:51Z`.
+    - **`reflex`:** `react-face` 0.609 [0.569, 0.644] (`ci_low > 0.5`, the PROCEED clause); ablation Δ +0.023 [−0.004, 0.045].
+    - **`reflex_resolve`:** `react-face` 0.552 [0.440, 0.663]; `react-nonverbal` 0.660 [0.545, 0.766]; ablation Δ +0.036 [−0.002, 0.078]; `step-prior` 0.938.
+    - **H1's pass bar is not met on either dataset,** and neither prediction clause held.
+    - **The designer's verification:**
+      - the implementation is faithful;
+      - but `fail` reaction windows are longer than `pre` windows, and window length alone scores 0.735;
+      - with equal-length windows, `react-face` falls to 0.511–0.525, chance.
+      - The masked video also shows the participant's silhouette. In `reflex_resolve`, the outcome follows the step (`place` fails), and its reaction window includes the resolution itself.
+      - Details: `05_wave_b_reflex.md` §7.
+    - **The verdict stands as recorded.** What to do next (write up, run a corrected v2, or proceed) is **Issue 12**.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **No decision is open.** Wave B (items B1–B4 in [`agent_execution_guide.md`](agent_execution_guide.md)) is approved for implementation.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) is resolved. **Open: Issue 12**, what to do after Wave B v1 (entry 29). Wave C (`DW3`), Stage A (`DW6`) and robot transfer (`DW7`) wait on it.

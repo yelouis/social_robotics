@@ -1,26 +1,29 @@
-# Agent Execution Guide: Queue Complete: Wave B delivered; awaiting maintainer review for Wave C (H2 transfer) / DW6 (Stage A MicroDuck)
+# Agent Execution Guide: Active Build: A16 + B4b (test-fixture timeout; Wave B report correction), then waiting on Issue 12, November 4, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:**
   - On October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
-  - Waves A and D v1 (`A1`–`A15`, `D1`–`D4`; commits `651039b` … `65882bf`) are complete and verified by the designer (§1.5, §5.1).
-  - On November 1, 2026, after Option E for Issue 1 (`M4` `amfed@affectiva.com` bounced; `M5` taste-liking database author did not reply) failed to yield access and `BAD` (Issue 4) remained gated behind an institutional IRB, the maintainer approved pivoting Wave B to the open-access **REFLEX** dataset ([Zenodo 14590226](https://zenodo.org/records/14590226), DOI `10.5281/zenodo.14590226`, **CC BY 4.0**, 37.22 GB, 55 participants reacting to a physical Baxter robot across 604 failure episodes; `00_thesis.md` entry 28).
-  - On November 4, 2026, **Wave B (`B1` → `B2` → `B3` → `B4`)** was completed and verified (§1.4, §1.5, §5.1; report at [`docs/evals/2026-11-04_reflex_h1.md`](evals/2026-11-04_reflex_h1.md)).
-- **Current status:** **`Queue Complete: Wave B delivered; awaiting maintainer review for Wave C (H2 transfer) / DW6 (Stage A MicroDuck)`**.
-  - Wave B evaluated human facial/gaze/head/posture reactions (`react-face`, encoder `reflex-face-v1`, fulfilling `DW2`) and vocal prosody reactions (`react-nonverbal`, encoder `reflex-speech-v1`) on two datasets derived from REFLEX:
-    1. `reflex` (1,208 items): immediate reaction to a robot manipulation failure (`Pre` `label = 1` vs. `Failure` `label = 0`).
-    2. `reflex_resolve` (604 items): hidden-outcome collaborative resolution (`[Failure.Start Frame, Explanation.End Frame]` action window before resolution $\rightarrow$ `Resolved?` `TRUE` `label = 1` vs. `FALSE` `label = 0`).
-  - It also exported the fitted `react-face` linear probes (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) for downstream use in `DW6` (Stage A live emotional feedback on the Pollen Robotics MicroDuck).
+  - **Waves A, D and B are complete and verified by the designer:** A1–A15, D1–D4 and B1–B4, commits `651039b` … `dcb44be` (§5.1).
+  - **Wave B (REFLEX) recorded the pre-registered verdict PROCEED,** through one clause: `reflex` `react-face` 0.609 [0.569, 0.644].
+    - The designer's verification found that clause to be a **window-length artifact** (`05_wave_b_reflex.md` §7).
+    - What to do next is **Issue 12**, which belongs to the maintainer.
+- **What is approved now, two small fixes, in this order:**
+  1. **A16:** bound the `say` audio fixture with a timeout, so the slow tests cannot hang.
+  2. **B4b:** make the Wave B report generator compute what it states, regenerate the report, and reproduce the designer's post-hoc diagnostics in code.
+- **What you must not touch:**
+  - any scorecard row, cache, split or item file;
+  - the pre-registered verdicts;
+  - anything Issue 12 will decide (§4).
 
-**Every path, number, field name and literal string in this guide and in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) is a decision, not a suggestion.**
+**Every path, number, field name and literal string in this guide is a decision, not a suggestion. Implement as written; do not substitute your own values.**
 
 ---
 
-## 0. Standing constraints (apply to every item)
+## 0. Standing constraints (they apply to every item)
 
 1. **The battery is the regression bar.**
-   - Run `scripts/battery.sh` bare (`--slow` when the item touches or runs models). G2 must pass **3 times in a row** with `TMPDIR` on the SSD.
-   - Read every exit code bare.
+   - Run `scripts/battery.sh` bare (`--slow` when the item touches the slow tests). G2 must pass **3 times in a row** with the `TMPDIR` below.
+   - Read every exit code bare. A gate that did not run is reported as *not run*, never as passed.
 2. **Environment.**
    - Run from the repo root with `./venv/bin/python` (Python **3.9.6**) and `PYTHONPATH=src`. Python 3.9 syntax only (no `match`, no runtime `X | Y`).
    - Before running anything:
@@ -29,57 +32,54 @@
      export TMPDIR="/Volumes/Extreme SSD/tmp"
      export SR_NO_MODEL_BANNER=1
      ```
-3. **Dependencies and models are frozen.** No new pip packages, no new model downloads, and no Ollama pulls. The only approved data download is `Dataset.zip` from Zenodo `14590226` in item **B1** (`05_wave_b_reflex.md` §1).
-4. **Data lives under `DATA_ROOT`** (`/Volumes/Extreme SSD/social_robotics`; exFAT, 1.0 TiB free). No video or audio on the internal disk. Never delete anything you did not create (except deleting `DATA_ROOT/raw/reflex/Dataset.zip` after B1 verifies extraction, as required by `05_wave_b_reflex.md` §1). All globs over the SSD must use `shared.fsutil.data_glob` (Lesson L13).
-5. **Long runs (> 30 min) run detached** (`tools/daemonize.py` + `tools/run_supervised.sh`; confirm `PPID 1`). Runners are resumable and end with the count line (`items_in=... items_out=... excluded=... elapsed_s=...`).
-6. **Memory (`03_eval_harness.md` §12).**
-   - Never run two model-loading jobs at once.
-   - Run `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` before each model job and record its output. Exit 75 is never a pass.
-   - **`gemma4:26b` is shared with `animated_infographics`; never unload it.**
-7. **The scorecard is append-only.** Nulls carry derived reasons. Reports are generated from rows. Verdicts follow the pinned rules (`03_eval_harness.md` §11.8; `05_wave_b_reflex.md` §6).
-8. **Pre-registered rules are never changed after their result is seen.** That includes `05_wave_b_reflex.md` §1–§6, the pass bars and the kill rule.
-9. **Commits:**
-   - one item = one Conventional Commit on `main` (`feat(b1): …`, `feat(b2): …`, `feat(b3): …`, `feat(b4): …`), with the WHY, the red and green runs, and any missed validation bar in the body (L14);
-   - stage by explicit paths only;
-   - record the resolution line in `docs/ongoing_general_errors.md` §3;
+3. **Dependencies, models and downloads are frozen.** No new pip packages, no new model downloads, no Ollama pulls, and no data downloads.
+4. **Data lives under `DATA_ROOT`** (`/Volumes/Extreme SSD/social_robotics`; exFAT, 1.0 TiB free).
+   - **Neither item writes anything under `DATA_ROOT`.**
+   - Never delete anything you did not create.
+   - Every glob over the SSD uses `shared.fsutil.data_glob` (L13).
+5. **Memory (`03_eval_harness.md` §12).** Neither item loads a model. Do not run either item while another of this project's model jobs runs. **`gemma4:26b` is shared with another project; never unload it.**
+6. **The scorecard is append-only, and neither item appends to it.** The post-hoc diagnostics are written to `docs/evals/`, never to `results/scorecard.jsonl`.
+7. **Pre-registered rules and recorded verdicts are never changed.** That covers `05_wave_b_reflex.md` §1–§6 and the PROCEED verdict. The designer's notes sit beside the verdict; they do not replace it.
+8. **Commits:**
+   - one item = one Conventional Commit on `main` (`test(a16): …`, `fix(b4b): …`), with the WHY, the red and green runs, and any missed validation bar in the body (L14);
+   - stage explicit paths only;
+   - add the item's line to `docs/ongoing_general_errors.md` §3;
    - push with `/usr/bin/git push origin main`;
    - no branches, no PRs, never amend.
-10. **When a contract and this guide disagree, or a bar cannot be met, STOP and file a new issue** (the next number is **Issue 11**) in `docs/ongoing_general_errors.md`, with options.
-11. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer.
+9. **When a contract and this guide disagree, or a bar cannot be met, STOP and file a new issue** (the next number is **Issue 13**) in `docs/ongoing_general_errors.md`, with options.
+10. **Never fill in a `Your selection: _____` line.** Issue 12 belongs to the maintainer.
 
 ---
 
-## 1. Verified baseline (November 1, 2026; designer, this session)
+## 1. Verified baseline (November 4, 2026; the designer, this session)
 
 ### 1.1 Environment
 
 - **Host:** Mac Studio M4 Max, 64 GB; macOS (Darwin 25.6); ffmpeg 8.1.
-- **External SSD (`/Volumes/Extreme SSD`):** 1.0 TiB free (`df -h`).
-- **Memory guard (`python -m shared.memguard --status`):** Available memory `57.6 GB` (pressure level `1`), heavy lock `free`, Ollama models `(none loaded)`.
-- **`venv`, Python 3.9.6:** torch 2.8.0, transformers 4.46.3, funasr 1.3.1, scikit-learn 1.6.1, scipy 1.13.1, numpy 2.0.2, huggingface_hub 0.36.2, ruff 0.15.11, pytest 8.4.2.
+- **SSD:** 1.0 TiB free.
+- **`memguard --status`:** 48.6 GB available, pressure 1, heavy lock free, `gemma4:26b` resident (shared).
+- **`venv`:** Python 3.9.6, torch 2.8.0, transformers 4.46.3, scikit-learn 1.6.1, scipy 1.13.1, numpy 2.0.2, huggingface_hub 0.36.2, ruff 0.15.11, pytest 8.4.2.
 
 ### 1.2 Repository
 
-- `HEAD` at baseline verification: `65882bf` (`docs: record Issue 1 = E and the October 23 access requests (M4, M5)`), plus this November 1, 2026 Wave B specification commit.
+- `HEAD` is `dcb44be` (`feat(b4)`) plus the designer's November 4 docs commit. The working tree is clean.
 
-### 1.3 Data on the SSD
+### 1.3 Data on the SSD (complete; read-only for both items)
 
-| What | Where | State |
-|---|---|---|
-| Oops! | `raw/oops/`, `items/oops/`, `features/oops/`, `judge/oops/` | complete |
-| HoloAssist (`holoassist`, `holoassist_audible`, `holoassist_pool`) | `raw/holoassist/`, `items/…`, `features/…`, `judge/…` | complete; per-session audibility in `runs/holoassist_session_audibility.jsonl` |
-| RoboReward (all of it) | `raw/roboreward/` (`DOWNLOAD.json`: 54,140 files, 43,204,474,744 bytes) | complete; `items/roboreward/` (4,000 train pool + 1,517 test); `features/roboreward/siglip-b16-224-u9/`; `judge/roboreward/gemma4_26b/` |
-| Wave D artefacts | `transfer/{labeler,scaler,heads,curve_scores}.npz`, `transfer/holoassist_pool_pseudolabels.jsonl` | complete (v1) |
-| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items); `features/{reflex,reflex_resolve}/{reflex-face-v1,reflex-speech-v1,siglip-b16-224-u9}/`; `judge/{reflex,reflex_resolve}/{qwen2.5vl_7b,gemma4_26b}/`; `transfer/{reflex,reflex_resolve}_face_probe.npz` | complete (B1–B4) |
+| What | Where |
+|---|---|
+| Oops!, HoloAssist (`holoassist`, `holoassist_audible`, `holoassist_pool`) | `raw/`, `items/`, `features/`, `judge/` |
+| RoboReward and the Wave D v1 artefacts | `raw/roboreward/`, `items/roboreward/`, `transfer/{labeler,scaler,heads,curve_scores}.npz` |
+| REFLEX | `raw/reflex/Dataset/` (55 participants; `DOWNLOAD.json` `verified: true`); `items/{reflex,reflex_resolve}/`; `features/{reflex,reflex_resolve}/{reflex-face-v1,reflex-speech-v1,siglip-b16-224-u9}/`; `judge/{reflex,reflex_resolve}/{qwen2.5vl_7b,gemma4_26b}/`; `transfer/{reflex,reflex_resolve}_face_probe.npz` |
 
-### 1.4 Gates (run bare November 4, 2026 on B4, with `TMPDIR` on the SSD; the regression bar)
+### 1.4 Gates (run bare November 4, 2026 on `dcb44be`, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on B4 (November 4, 2026) |
+| # | Gate | Command | Result |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · `All checks passed!` |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **122 passed, 11 deselected**, 3 runs out of 3 (68.97 s, 73.31 s, 72.08 s) |
-| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS (`planted signal auroc=0.830 [0.807, 0.852]`, `null ci=[0.459, 0.523]`, `grouping ratio=4.66`, `paired delta ci_low=0.138`) |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **11 passed, 122 deselected** (70.96 s) |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **122 passed, 11 deselected**, 3 runs out of 3 (68.55 s, 67.28 s, 66.44 s) |
+| G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS (`planted signal auroc=0.830 [0.807, 0.852]`, `null ci=[0.459, 0.523]`, `ratio=4.66`, `paired delta ci_low=0.138`) |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | **First run: hung 9.6 min** in the `say` fixture (`tests/test_features.py:146`). The designer stopped the hung `say`, giving 3 setup errors and exit 1. **Rerun: exit 0, 11 passed, 122 deselected (75.35 s).** A16 fixes the hang |
 
 ### 1.5 Headline results (the scorecard is the source)
 
@@ -87,205 +87,159 @@
 |---|---|---|
 | `oops` | ablation gain +0.015 [−0.001, 0.029]; `action-probe` 0.779; `judge-large` 0.708 | `2026-10-21T04:12:36–42Z` |
 | `holoassist` | `step-prior` 0.751; `action-fusion` 0.682; no reaction Δ (the audio was inaudible in most sessions) | `2026-10-21T04:12:57Z–04:13:02Z` |
-| `holoassist_audible` | `react-nonverbal` 0.654; **ablation gain +0.021 [0.006, 0.034]**; fusion − `step-prior` −0.065 | `2026-10-21T16:50:20–30Z` |
-| `roboreward` (Wave D v1) | **NOT SUPPORTED**: `gain:react:N=100` +0.0009 [−0.0006, 0.0024]; `gain:truth:N=100` −0.0507; `robot-full` 0.657; `judge-large` 0.747 | `2026-10-22T14:22:28Z–14:24:54Z` |
-| `reflex` (Wave B) | **`react-face` 0.609 [0.569, 0.644]** (`ci_low > 0.5`, Kill Rule **PROCEED**); `fusion` 0.817; `action-fusion` 0.794; ablation Δ +0.023 [−0.004, 0.045]; `action-probe` 0.730; `judge` 0.720 | `2026-11-05T05:49:35Z–42Z` |
-| `reflex_resolve` (Wave B) | `react-nonverbal` 0.660 [0.545, 0.766]; `react-face` 0.552 [0.440, 0.663]; `fusion` 0.749; `action-fusion` 0.713; ablation Δ +0.036 [−0.002, 0.078]; `step-prior` 0.938; `action-probe` 0.721 | `2026-11-05T05:49:45Z–51Z` |
+| `holoassist_audible` | `react-nonverbal` 0.654; **ablation gain +0.021 [0.006, 0.034]**, mostly *whether the instructor spoke*; fusion − `step-prior` −0.065 | `2026-10-21T16:50:20–30Z` |
+| `roboreward` (Wave D v1) | **NOT SUPPORTED**: `gain:react:N=100` +0.0009 [−0.0006, 0.0024] | `2026-10-22T14:22:28Z–14:24:54Z` |
+| `reflex` (Wave B) | `react-face` 0.609 [0.569, 0.644], the **PROCEED** clause, **found to be a window-length artifact** (§4 note); ablation Δ +0.023 [−0.004, 0.045]; `action-fusion` 0.794; `judge` 0.720; `judge-large` 0.500 (it answered 100 on every item) | `2026-11-05T05:49:35Z–42Z` |
+| `reflex_resolve` (Wave B) | `react-face` 0.552 [0.440, 0.663]; `react-nonverbal` 0.660 [0.545, 0.766]; ablation Δ +0.036 [−0.002, 0.078]; **`step-prior` 0.938** (the outcome follows the step); fusion − `step-prior` −0.192 | `2026-11-05T05:49:45Z–51Z` |
 
 ---
 
 ## 2. Execution order
 
-Execute strictly in order, one commit per item on `main`:
+| # | Item | Why this position |
+|---|---|---|
+| 1 | **A16**: a timeout and retries for the `say` fixture | B4b's validation runs the battery. A16 removes the hang that stalled G4 on November 4, so B4b's gates can be trusted to finish |
+| 2 | **B4b**: Wave B report generator computes what it states; post-hoc diagnostics in code | It needs a battery that cannot hang. It also touches only `tools/`, `tests/` and `docs/evals/` |
 
-1. **`B1`** — REFLEX download (`tools/download_reflex.py`), extraction, and item/split builder (`src/sources/reflex.py`) for `reflex` and `reflex_resolve`.
-2. **`B2`** — REFLEX reaction encoders (`src/features/face.py`: `reflex-face-v1` and `reflex-speech-v1`), CLI wiring (`src/features/extract.py`), judge questions (`src/judge/vlm_judge.py`), and probe conditions (`src/harness/probes.py`).
-3. **`B3`** — REFLEX feature extraction (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judge runs (`qwen2.5vl:7b` train+test, `gemma4:26b` test) on `reflex` and `reflex_resolve`.
-4. **`B4`** — Wave B probe evaluation, scorecard rows, exported MicroDuck face probes (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`), evaluation report (`tools/report_reflex.py`), and Wave B close-out.
+After B4b, the queue is empty (§9).
 
 ---
 
 ## 3. The items
 
-### Item B1 — REFLEX download, verification, extraction, and item/split builder (`reflex` and `reflex_resolve`)
+### Item A16: bound the `say` audio fixture with a timeout and retries
 
-**Read first:** [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §1–§3, [`02_data_sources.md`](02_data_sources.md) → REFLEX, [`03_eval_harness.md`](03_eval_harness.md) §3 & §5.
+**What this means for the user:** today, one stalled text-to-speech call can hang the slow tests forever, so a validation run never finishes and nobody knows whether it passed.
 
-**Deliverables:**
+**The gap:**
+- `tests/test_features.py:146–147` (fixture `audio_fixtures`) runs `subprocess.run(["say", "-v", "Samantha", ...], check=True)` and the same for `"Daniel"`, with **no `timeout`**.
+- On November 4, 2026 one call sat in state `S` at 0% CPU for 9.6 minutes. The same command, run seconds later, returned in 1 s.
 
-1. **`tools/download_reflex.py`:**
-   - Resumable single-stream download of `https://zenodo.org/api/records/14590226/files/Dataset.zip/content` to `DATA_ROOT/raw/reflex/Dataset.zip`.
-   - **Rate-limit constraint (`05_wave_b_reflex.md` §1):** Zenodo returns `HTTP 429` on multi-connection downloads. Use a single sequential stream (`curl -L -C - --retry 5 --retry-delay 10 -o <zip_path> <url>` or single-connection Python HTTP with `Range` header on resume) and update `DATA_ROOT/raw/reflex/progress.json` so `tools/run_supervised.sh` can monitor progress.
-   - Verify exact byte size `37219808401` and MD5 `334caac04f3e607ac91182dea7a03929`.
-   - Extract `Dataset.zip` into `DATA_ROOT/raw/reflex/`, skipping any zip member whose path starts with `__MACOSX/` or whose basename starts with `._`.
-   - Verify all 5 strategy folders (`C1-Fixed-Low`, `C2-Fixed-Medium`, `C3-Fixed-High`, `D1-Decay-Smooth`, `D2-Decay-Rapid`) and all 55 participant folders (`11` per strategy), confirming that every participant directory contains all 10 required files (`analysis.csv`, `body.csv`, `facetorch.csv`, `gaze.csv`, `hume.csv`, `openface.csv`, `questionnaire.csv`, `speech.csv`, `time.csv`, `video_cam1.mp4`).
-   - Delete `DATA_ROOT/raw/reflex/Dataset.zip` after verification and write `DATA_ROOT/raw/reflex/DOWNLOAD.json` with `{zenodo_record: "14590226", doi: "10.5281/zenodo.14590226", license: "CC-BY-4.0", zip_bytes: 37219808401, zip_md5: "334caac04f3e607ac91182dea7a03929", n_participants: 55, verified: true, archive_deleted: true, ts: ...}`.
-   - If `DATA_ROOT/raw/reflex/DOWNLOAD.json` already exists with `verified: true` and all 55×10 files exist on disk, exit 0 idempotently without re-downloading (unless `--force` is passed).
+**Implementation:**
+1. In `tests/test_features.py`, add a module-level helper:
+   ```python
+   def _say_to_file(voice: str, out_path: Path, text: str, attempts: int = 3, timeout_s: float = 60.0) -> None:
+   ```
+   - Each attempt runs `subprocess.run(["say", "-v", voice, "-o", str(out_path), text], check=True, timeout=timeout_s)`.
+   - On `subprocess.TimeoutExpired`, delete `out_path` if it exists, then try again.
+   - After `attempts` timeouts, raise `RuntimeError(f"say timed out {attempts} times ({timeout_s:.0f} s each) for voice {voice}")`.
+   - **Do not `pytest.skip`.** A fixture that cannot build its input is a failure, not a pass.
+2. Replace the two `say` calls in `audio_fixtures` with `_say_to_file("Samantha", sam_aiff, sentence)` and `_say_to_file("Daniel", dan_aiff, sentence)`.
+3. Leave the `ffmpeg` calls alone. They finish in milliseconds on generated input.
 
-2. **`src/sources/reflex.py`:**
-   - CLI: `PYTHONPATH=src ./venv/bin/python -m sources.reflex --dataset {reflex,reflex_resolve,all} [--force-split]`.
-   - Implements the exact item, time-mapping, metadata, and split rules of `05_wave_b_reflex.md` §2–§3:
-     - Uses `ffprobe` on each participant's `video_cam1.mp4` to read container `fps` (`r_frame_rate` / `avg_frame_rate`) and container `duration`.
-     - Maps 1-indexed frame bounds `[sf, ef]` to container seconds `[round((sf - 1) / fps, 4), round(min(duration, (ef - 1) / fps), 4)]` for `action_window_sec` and `reaction_window_sec`.
-     - Maps 1-indexed frame bounds `[sf, ef]` to wall-clock seconds via `time.csv` (`Seconds` column) for `meta["wall_action_window_sec"]` and `meta["wall_reaction_window_sec"]`.
-     - Computes `meta["spoke"]` (`0` or `1`) and `meta["transcript"]` from `speech.csv` rows where `Id.strip().lower() in {"participant", "robot/participant"}` and `[BeginTime, EndTime]` overlaps `wall_reaction_window_sec`.
-     - **Never** includes `Object`, `State`, or `Resolved?` in `context_text` (`05_wave_b_reflex.md` §3.2–§3.3).
-     - Validates items with `validate_items()`, writes `DATA_ROOT/items/{reflex,reflex_resolve}/items.jsonl` and `stats.json` (recording total episodes seen, items kept per class, and skip counts by reason: `missing_video`, `invalid_frames`, `invalid_window`, `missing_resolved_label`), and writes `splits/{reflex,reflex_resolve}.json` using the shared 55-participant grouped 70/30 partition (`38` train participants / `17` test participants, `default_rng(0)`).
+**Validation:**
+- New **fast** tests (not marked `slow`), in `tests/test_features.py`:
+  - **(falsifying)** `test_say_helper_passes_timeout`: monkeypatch `subprocess.run` with a recorder and call `_say_to_file`. Assert the recorded call has `timeout == 60.0` and `check is True`. *Against today's code, which passes no `timeout`, this fails.*
+  - `test_say_helper_retries_then_succeeds`: the fake raises `subprocess.TimeoutExpired` twice, then returns. Assert exactly 3 calls and no exception.
+  - `test_say_helper_raises_after_three_timeouts`: the fake always raises `TimeoutExpired`. Assert `RuntimeError` matching `"say timed out 3 times"`, and that a partial file created by the fake was deleted.
+- Run `scripts/battery.sh --slow` bare. G4 must show **11 passed**, and G2 runs 3 times in a row with **125 passed** (122 + 3 new).
+- Commit `test(a16): bound the say audio fixture with a timeout and retries`.
 
-3. **`tests/test_reflex_source.py`:**
-   - Fast unit tests on a synthetic REFLEX directory fixture (2 strategies, 4 participants, synthetic `analysis.csv`, `time.csv`, `speech.csv`, and tiny `ffmpeg`-generated `video_cam1.mp4`) verifying:
-     - 1-indexed frame to container-second conversion (`(sf - 1) / fps`) vs. wall-clock second lookup in `time.csv`;
-     - `reflex` `pre` (`label=1`) vs `fail` (`label=0`, reaction window capped at `min(Explanation.End Frame, Failure.End Frame + 22, max_frame)`);
-     - `reflex_resolve` (`label=1` on `TRUE`, `label=0` on `FALSE`, skipping empty/other `Resolved?` with reason `missing_resolved_label`, action window `[Failure.Start Frame, Explanation.End Frame]` vs. reaction window `[Failure.Start Frame, Resolution.End Frame]`);
-     - `Object` leakage test: a banned failure word (`"Drop"`, `"Wrong"`, `"Fail"`) placed in `analysis.csv`'s `Object` column never appears in `context_text` or `meta.noun`;
-     - identical train/test participant sets between `reflex` and `reflex_resolve` (`0` straddling groups).
-
-**Validation (must all pass before committing `B1`):**
-- Run `tools/download_reflex.py` detached via `tools/daemonize.py` + `tools/run_supervised.sh` (confirm `PPID 1`).
-- Confirm `DATA_ROOT/raw/reflex/DOWNLOAD.json` has `verified: true` and `archive_deleted: true`, and `df -h "/Volumes/Extreme SSD"` shows ≥ 900 GiB free.
-- Run `PYTHONPATH=src ./venv/bin/python -m sources.reflex --dataset all` and verify:
-  - `validate_items()` returns `0` errors on both `reflex` and `reflex_resolve`;
-  - `splits/reflex.json` and `splits/reflex_resolve.json` have `38` train groups, `17` test groups, and `0` straddling groups;
-  - no item's `context_text` contains any substring from `{"drop", "wrong", "fail", "true", "false", "resolved"}` (case-insensitive).
-- Run `scripts/battery.sh` bare (with G2 3 times in a row).
-- Commit as `feat(b1): download REFLEX and build reflex and reflex_resolve items and splits` and push to `main`.
+**Blast radius:** `tests/test_features.py` only. The `docs/ongoing_general_errors.md` §3 line goes in the same commit.
 
 ---
 
-### Item B2 — REFLEX reaction encoders (`src/features/face.py`), CLI wiring (`src/features/extract.py`), judge questions (`src/judge/vlm_judge.py`), and probe conditions (`src/harness/probes.py`)
+### Item B4b: the Wave B report generator computes what it states; the post-hoc diagnostics in code
 
-**Read first:** [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §4–§5, [`03_eval_harness.md`](03_eval_harness.md) §6, §8, §9.
+**What this means for the user:**
+- **Today:** the Wave B report states resolution counts that do not exist in the data, and the finding that PROCEED is a window-length artifact exists only as the designer's scratch computation.
+- **After B4b:** every number in the report is computed, and anyone can rerun the diagnostics behind Issue 12.
 
-**Deliverables:**
+**The gap:**
+- **`tools/report_reflex.py:711–730` appends three hand-written paragraphs** (three `md.append(...)` calls at lines 711, 720 and 726, after the section header at line 710) (section "3.3 Shuffled-Control & Methodological Notes"), with literal numbers in the prose:
+  1. **The leak-check paragraph:** its numbers (`0.5100`, `0.0626`, `[0.3302, 0.6526]`, `0.6025`, "92nd percentile") are correct, but they are typed in.
+  2. **The step-prior paragraph is false.**
+     - It quotes `475 / 478 = 99.4%` and `13 / 126 = 10.3%`, which are not in the data, and names an "`Explain` column" (the column is `Explanation Level`).
+     - **Actual resolution by explanation level:** high 165/187, medium 115/143, low 106/143, zero 102/131.
+     - **By step:** `pick` 219/219, `carry` 198/220, `place` 71/165.
+  3. **The `judge-large` paragraph:** its counts are typed in.
+- **This broke L10 and B4's own validation** ("every number matches"). The designer's note at the end of `docs/evals/2026-11-04_reflex_h1.md` records the error.
 
-1. **`src/features/face.py`:**
-   - Implement `ReflexFaceEncoder` (`encoder_id = "reflex-face-v1"`, output shape `(153,)`, `dtype = np.float32`) and `ReflexSpeechEncoder` (`encoder_id = "reflex-speech-v1"`, output shape `(96,)`, `dtype = np.float32`) following `05_wave_b_reflex.md` §4.1–§4.2 to the letter:
-     - Strip whitespace from all CSV column headers on load (`openface.csv` columns have leading spaces like `" frame"`).
-     - Cache parsed per-participant CSV tables in memory keyed by `str(participant_dir)` so extracting all items of a participant reads each CSV only once.
-     - Enforce the 1-indexed (`openface.csv` `frame` in `[rsf, ref]`) vs. 0-indexed (`facetorch.csv` `Frame ID` and `body.csv` `Frame` in `[rsf - 1, ref - 1]`) mapping.
-     - Enforce the honest-null rule (Lesson L3): raise `RuntimeError` if `0` valid rows match in `openface.csv` (`success == 1` and `confidence >= 0.7`), `facetorch.csv`, `body.csv`, or `speech.csv` (for `reflex-speech-v1`), or if any output element is `NaN`/`Inf`. Never write a zero vector on missing data.
+**Implementation:**
+1. **`tools/report_reflex.py`: delete the three hard-coded `md.append(...)` paragraphs at lines 711–730, and generate section 3.3 from data:**
+   - **(a) Resolution by step and by explanation level** for `reflex_resolve`, read from `DATA_ROOT/items/reflex_resolve/items.jsonl`:
+     - two Markdown tables, one by `meta.verb` and one by `meta.noun`;
+     - columns `level | resolved | total | rate`, where `rate` is a percentage with one decimal place and no `%` sign;
+     - one set over all items, and one over the test split.
+     - **The heading must name the column `Explanation Level`.**
+   - **(b) For every `:shuffled` row whose `leak_check_label` starts with `FAIL`:** compute a 50-seed permutation null in code.
+     - Seeds `0 … 49`; for each, `np.random.default_rng(seed).shuffle` a copy of `y_train`.
+     - Use the same feature cache, and the same `StandardScaler` + `LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")` fit on the train items with valid features, as `harness.probes`.
+     - Score the test items with valid features.
+     - Print mean, SD (`ddof=0`), min, max, the seed-0 value, the seed-0 percentile among the 50, and how many of the 50 the true-label condition's test AUROC beats.
+     - Supported for `react-face`, `react-nonverbal` and `action-probe`. For any other condition, print `permutation null not computed for <condition>`.
+     - **Expected for `reflex_resolve` `react-nonverbal:shuffled`:** mean 0.5100, SD 0.0626, min 0.3302, max 0.6526, seed 0 = 0.6025; the true label beats 50 of 50.
+   - **(c) The constant-judge note:** for each judge cache and dataset, if one `judge_prob` value covers ≥ 95% of the test items, print `"<model> answered prob=<v> on <k> of <n> test items (AUROC <value from the row>)"`. Expected: `gemma4_26b` on `reflex`, prob 1.0 on 374 of 374.
+   - **(d) Preserve the designer's note.** When the output file already exists and contains a line starting with `## Designer note`, copy everything from that line to the end of the file verbatim to the end of the regenerated file, preceded by a line `---`.
+2. **New `tools/diag_reflex_posthoc.py`:** reproduces the designer's post-hoc diagnostics and writes `docs/evals/2026-11-04_reflex_posthoc.json`, an object keyed by the names below, each value `{"value", "ci_low", "ci_high", "n_test"}`.
+   - **Read-only.** No cache writes, no scorecard rows.
+   - **Probes:** `StandardScaler` + `LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")`, fit on train items with valid features.
+   - **CIs:** `harness.metrics.auroc_ci` (grouped, 1,000 resamples, seed 0). Deltas use `harness.metrics.delta_auroc_ci(y, score_base, score_new, groups)`.
+   - **On new windows,** call `features.face.ReflexFaceEncoder().encode(participant_dir, a, b)` or `ReflexSpeechEncoder().encode(participant_dir, wr_s, wr_e)` directly. A `RuntimeError` means that item has no features.
 
-2. **`src/features/extract.py`:**
-   - Add `"reflex-face-v1"` and `"reflex-speech-v1"` to `--encoder` choices and `run_extraction()`.
-   - For `"reflex-face-v1"` and `"reflex-speech-v1"`, pass `item` (or `item.video_path, item.reaction_window_sec, item.meta`) to the encoder; do not enter `memguard` for these lightweight CSV encoders (keep `memguard` for `siglip-b16-224`, `siglip-b16-224-u9`, and `e2v-plus-large`).
+   | Key | Definition | Expected (3 dp) |
+   |---|---|---|
+   | `reflex.react_face` | cached `reflex-face-v1` | 0.608 [0.569, 0.644] |
+   | `reflex.window_length` | score = s·L, L = `reaction_frames[1] − reaction_frames[0] + 1`, s = +1 if train AUROC(L) ≥ 0.5 else −1; test items with valid face features | 0.735 [0.675, 0.796]; train AUROC 0.775 with s = −1 |
+   | `reflex.face_means_only` | the 50 dims whose name (`get_reflex_face_feature_names()`) ends in `_mean` | 0.515 [0.471, 0.564] |
+   | `reflex.length_plus_face_minus_length` | LR on `[L]` vs LR on `[L, 153 face dims]`, Δ = second − first | −0.069 [−0.103, −0.030] |
+   | `reflex.face_equal_length_start` | per episode, K = min(pre length, fail length) of the two reaction windows; window `[rsf, rsf + K − 1]` for both items | 0.525 [0.473, 0.572], n_test 342 |
+   | `reflex.face_equal_length_end` | as above, window `[ref − K + 1, ref]` | 0.511 [0.457, 0.561], n_test 343 |
+   | `reflex_resolve.react_face` | cached `reflex-face-v1` | 0.552 [0.440, 0.663] |
+   | `reflex_resolve.face_before_resolution` | window = `meta.action_frames` | 0.545 [0.461, 0.634], n_test 173 |
+   | `reflex_resolve.nonverbal_before_resolution` | speech window = `meta.wall_action_window_sec` | 0.643 [0.480, 0.843], n_test 104 (16 negatives) |
+   | `reflex_resolve.step_prior` | `harness.probes.step_prior_scores` on test items with valid face features | 0.941 [0.886, 0.980] |
+   | `reflex_resolve.step_prior_plus_face_minus_step_prior` | LR on `[logit(step-prior LOO train), 153 face dims]` vs the step-prior test scores | −0.121 [−0.193, −0.059] |
 
-3. **`src/judge/vlm_judge.py`:**
-   - Add the two verbatim questions to `DATASET_QUESTIONS` (`03_eval_harness.md` §8; `05_wave_b_reflex.md` §3.2–§3.3):
-     - `"reflex": "Is the robot performing the step normally at this point, with no failure yet?"`
-     - `"reflex_resolve": "Will the human and the robot successfully resolve this failure and complete the step?"`
+3. **`tests/test_report_reflex.py`: add fast tests** (synthetic fixtures; no `DATA_ROOT`):
+   - **(falsifying)** `test_resolution_tables_are_computed`: build 9 synthetic `reflex_resolve` items (verbs `pick` 3/3, `carry` 2/3, `place` 1/3 resolved; two nouns). Assert that the generated section 3.3 contains `| pick | 3 | 3 | 100.0 |`, `| carry | 2 | 3 | 66.7 |` and `| place | 1 | 3 | 33.3 |`, and that it contains neither `475` nor `Explain column`. *Against today's code this fails: it prints the hard-coded paragraph.*
+   - `test_designer_note_preserved`: write an output file ending in `## Designer note\nkeep me\n`, regenerate, and assert the file ends with `## Designer note\nkeep me\n`.
+   - `test_permutation_null_only_for_fail_rows`: rows with one `FAIL` and one `pass` shuffled row. Assert that exactly one null block is printed, for the `FAIL` condition.
+4. **Regenerate the report in place:**
+   ```bash
+   PYTHONPATH=src ./venv/bin/python tools/report_reflex.py --date 2026-11-04
+   ```
 
-4. **`src/harness/probes.py`:**
-   - Add `REFLEX_DATASETS = ("reflex", "reflex_resolve")` support per `05_wave_b_reflex.md` §5:
-     - Keep `oops`, `holoassist`, and `holoassist_audible` paths 100% unchanged (their config hashes and scorecard values must remain identical).
-     - On `REFLEX_DATASETS`:
-       - Load action features from `siglip-b16-224-u9`, face reaction features from `reflex-face-v1` (condition `react-face` + `react-face:shuffled`), and speech prosody features from `reflex-speech-v1` (condition `react-nonverbal` + `react-nonverbal:shuffled` + diagnostic `react-nonverbal|spoke=1`).
-       - Handle sparse speech gracefully (`03_eval_harness.md` §6): if `valid_re_tr` has `< 2` classes or `0` items, or if `valid_re_te` has `< 2` classes on test, write a clean `not run` or `partial: ...; metric undefined: ...` row for `react-nonverbal` and `react-nonverbal:shuffled` rather than raising from `LogisticRegression.fit` or `auroc_ci`. Likewise, if `react-full` TF-IDF has an empty vocabulary or `< 2` classes, write a clean `not run` row with derived notes.
-       - Compute `step-prior` and `step-prior:shuffled` via `step_prior_scores()` on `(meta.verb, meta.noun)`, entering `action_best`, `action-fusion`, and `fusion`.
-       - Fit `fusion` and `action-fusion` on `fusion_tr_mask = valid_j_tr & valid_act_tr & valid_face_tr` and score on `fusion_te_mask = valid_j_te & valid_act_te & valid_face_te` per `05_wave_b_reflex.md` §5.
-       - Save the fitted `react-face` probe (`mean`, `scale`, `coef`, `intercept`, `dataset`) to `DATA_ROOT/transfer/{dataset}_face_probe.npz`.
+**Validation (all must pass before committing):**
+- `PYTHONPATH=src ./venv/bin/python tools/diag_reflex_posthoc.py` exits 0.
+- **Every value in the JSON matches §3's table to 3 decimal places** (CI bounds within ±0.001), with `n_test` exact. **A mismatch is a STOP:** file Issue 13 with both values. Do not edit the table.
+- **`git diff docs/evals/2026-11-04_reflex_h1.md` changes only section 3.3.**
+  - The designer's note is byte-identical.
+  - §1, §2 and §4–§7, including the 20 example descriptions, are unchanged. The two `.tsv` files are byte-identical; check with `git diff --stat`.
+- `grep -rn "475 / 478\|13 / 126\|Explain column" tools/ docs/evals/` returns nothing, except the designer's note in the report, which quotes the old error.
+- `git diff results/scorecard.jsonl` is empty, and no file under `DATA_ROOT` has an mtime after you started.
+- `scripts/battery.sh` bare, with G2 3 times in a row.
+- Commit `fix(b4b): compute Wave B report notes from data; reproduce designer post-hoc diagnostics`.
 
-5. **`tests/test_reflex_encoders_and_probes.py`:**
-   - Fast synthetic unit tests covering:
-     - `ReflexFaceEncoder`: exact 153-d output shape/dtype, whitespace-padded OpenFace header handling, 1-indexed vs. 0-indexed frame alignment, and raising `RuntimeError` when `confidence < 0.7` or `success == 0` on all frames in the window;
-     - `ReflexSpeechEncoder`: exact 96-d output shape/dtype on overlapping participant utterances, ignoring `"robot"`-only rows, and raising `RuntimeError` when no participant speech overlaps the window;
-     - `run_probes` on synthetic `reflex` and `reflex_resolve` caches: produces all expected conditions (`judge`, `judge-large`, `judge-frontier`, `action-probe`, `react-face`, `react-nonverbal`, `react-nonverbal|spoke=1`, `react-spoke`, `react-full`, `step-prior`, `fusion`, `action-fusion`, `fusion_minus_action_fusion`, `fusion_minus_action_best`, plus the 6 `:shuffled` controls), handles sparse speech without crashing, and writes `{dataset}_face_probe.npz`.
-
-**Validation (must all pass before committing `B2`):**
-- Run `pytest -q tests/test_reflex_encoders_and_probes.py`.
-- Smoke-test `reflex-face-v1` and `reflex-speech-v1` extraction on `--limit 10` real items from `reflex` and `reflex_resolve`, confirming shapes `(153,)` and `(96,)` and finite `float32` values.
-- Run `scripts/battery.sh` bare (with G2 3 times in a row).
-- Commit as `feat(b2): add reflex-face-v1 and reflex-speech-v1 encoders and REFLEX probe conditions` and push to `main`.
-
----
-
-### Item B3 — REFLEX feature extraction and VLM judge evaluation (`reflex` and `reflex_resolve`)
-
-**Read first:** [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §4–§5, [`03_eval_harness.md`](03_eval_harness.md) §8, §9, §12.
-
-**Deliverables (data & cache artefacts under `DATA_ROOT`; no code changes required unless a bug is found):**
-
-1. **Extract CSV reaction features (`reflex-face-v1` and `reflex-speech-v1`) on all items:**
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex --encoder reflex-face-v1 --split all`
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex --encoder reflex-speech-v1 --split all`
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex_resolve --encoder reflex-face-v1 --split all`
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex_resolve --encoder reflex-speech-v1 --split all`
-
-2. **Extract action visual features (`siglip-b16-224-u9`) sequentially under `memguard`:**
-   - Record `PYTHONPATH=src ./venv/bin/python -m shared.memguard --status` first.
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex --encoder siglip-b16-224-u9 --split all`
-   - `PYTHONPATH=src ./venv/bin/python -m features.extract --dataset reflex_resolve --encoder siglip-b16-224-u9 --split all`
-
-3. **Run VLM judges sequentially under `memguard` (use detached supervision via `tools/daemonize.py` + `tools/run_supervised.sh` for any run > 30 min; confirm `PPID 1`):**
-   - Local judge (`qwen2.5vl:7b`, `--backend ollama`) on `train` and `test` for `reflex` and `reflex_resolve`:
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex --split train --backend ollama`
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex --split test --backend ollama`
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex_resolve --split train --backend ollama`
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex_resolve --split test --backend ollama`
-   - Large local judge (`gemma4:26b`, `--backend ollama-large`, test split only; **never unload `gemma4:26b`**) on `reflex` and `reflex_resolve`:
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex --split test --backend ollama-large`
-     - `PYTHONPATH=src ./venv/bin/python -m judge.vlm_judge --dataset reflex_resolve --split test --backend ollama-large`
-
-**Validation (must all pass before committing `B3`):**
-- Verify coverage on both `reflex` and `reflex_resolve`:
-  - `siglip-b16-224-u9`: $\ge 99\%$ of items cached;
-  - `reflex-face-v1`: $\ge 95\%$ of items cached (any exclusions logged in `errors.jsonl` with honest `no valid OpenFace/Facetorch/Body frames` reasons);
-  - `qwen2.5vl_7b` (`train` and `test`) and `gemma4_26b` (`test`): $\ge 98\%$ of items scored with non-null `judge_prob`.
-- Run `scripts/battery.sh --slow` bare (with G2 3 times in a row).
-- Record the B3 resolution line (exact counts, coverage %, and wall-clock times) in `docs/ongoing_general_errors.md` §3, commit as `feat(b3): extract REFLEX features and evaluate local and large VLM judges` and push to `main`.
-
----
-
-### Item B4 — Wave B probe evaluation, scorecard rows, `tools/report_reflex.py`, MicroDuck probe verification, and Wave B close-out
-
-**Read first:** [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §5–§6, [`03_eval_harness.md`](03_eval_harness.md) §11.8–§11.9.
-
-**Deliverables:**
-
-1. **Run probes and append scorecard rows for `reflex` and `reflex_resolve`:**
-   - `PYTHONPATH=src ./venv/bin/python -m harness.probes --dataset reflex`
-   - `PYTHONPATH=src ./venv/bin/python -m harness.probes --dataset reflex_resolve`
-   - Verify `PYTHONPATH=src ./venv/bin/python -m harness.scorecard` displays all rows for `reflex` and `reflex_resolve`.
-   - Verify `DATA_ROOT/transfer/reflex_face_probe.npz` and `DATA_ROOT/transfer/reflex_resolve_face_probe.npz` exist on disk, contain finite `mean`, `scale`, `coef`, and `intercept` arrays (`coef.shape == (1, 153)`), and reproduce the scorecard `react-face` test AUROC to 4 decimal places when applied directly to the test split's cached `reflex-face-v1` features.
-
-2. **`tools/report_reflex.py` and `tests/test_report_reflex.py`:**
-   - Implement `prediction_check_reflex(rows, dataset)` following `03_eval_harness.md` §11.8 and `05_wave_b_reflex.md` §6:
-     - Clause 1, `"reaction-only beats action_best"`: `react-face`'s `ci_low > action_best` AUROC (`held` / `did not hold` / `not tested`).
-     - Clause 2, `"reactions add to the action-only model"`: `fusion_minus_action_fusion`'s `ci_low > 0` (`held` / `did not hold` / `not tested`).
-     - H1 pass bar: `react-face >= 0.65` and `fusion_minus_action_fusion >= +0.03` with `ci_low > 0` (`met` / `not met` / `not testable`).
-     - Context line (no verdict): `fusion − action_best`, `judge`, `judge-large`, `action-probe`, `step-prior`, `action-fusion`, `react-nonverbal`, `react-spoke`, `react-full`.
-   - Generate `docs/evals/<date>_reflex_h1.md` covering both `reflex` and `reflex_resolve` in one comprehensive Wave B report:
-     - Executive summary, prediction checks for `reflex` and `reflex_resolve`, and the pre-registered Wave B kill-rule evaluation (`05_wave_b_reflex.md` §6);
-     - Full conditions tables and one-sided leak-check tables (`leak_check_label` from `src/harness/reporting.py`; fails iff `ci_low > 0.5`);
-     - Judge diagnostics and answer distributions (`qwen2.5vl:7b` and `gemma4:26b`);
-     - Compute and wall-clock times computed from the caches (`index.jsonl` and judge `.jsonl`);
-     - Stage A MicroDuck artifact summary (`reflex_face_probe.npz` and `reflex_resolve_face_probe.npz`, plus top-5 positive and top-5 negative standardized feature weights by name from the 153-d `reflex-face-v1` vector);
-     - 10 sampled test items per dataset (5 `label = 1`, 5 `label = 0`, `default_rng(0)`) with verified visual descriptions of the frames in `video_cam1.mp4` (never template text; inspect the extracted frames first per Lesson L8/A7b), plus TSV exports `docs/evals/<date>_reflex_examples.tsv` and `docs/evals/<date>_reflex_resolve_examples.tsv`.
-   - Add fast unit tests in `tests/test_report_reflex.py` testing `prediction_check_reflex` on synthetic row dicts (all clauses held/met, did not hold/not met, and missing/null rows).
-
-3. **Close out Wave B in the docs:**
-   - Update `docs/agent_execution_guide.md`:
-     - Update §1.4 (latest bare battery numbers) and §1.5 (add `reflex` and `reflex_resolve` headline results with row timestamps);
-     - Move `B1`–`B4` to §5.1 (`Already delivered`);
-     - Set the guide header and status to `Queue Complete: Wave B delivered; awaiting maintainer review for Wave C (H2 transfer) / DW6 (Stage A MicroDuck)`.
-   - Record `B4` in `docs/ongoing_general_errors.md` §3.
-
-**Validation (must all pass before committing `B4`):**
-- Confirm all leak checks pass (`ci_low <= 0.5` on every `:shuffled` row across `reflex` and `reflex_resolve`; if any has `ci_low > 0.5`, STOP and investigate).
-- Open and read `docs/evals/<date>_reflex_h1.md` and both `.tsv` files, verifying that every number matches `results/scorecard.jsonl` and no template placeholder text exists.
-- Run `scripts/battery.sh --slow` bare (with G2 3 times in a row).
-- Commit as `feat(b4): evaluate Wave B REFLEX probes, export MicroDuck face probes, and generate Wave B report` and push to `main`.
+**Blast radius, all in one commit:**
+- `tools/report_reflex.py`;
+- `tools/diag_reflex_posthoc.py` (new);
+- `tests/test_report_reflex.py`;
+- `docs/evals/2026-11-04_reflex_h1.md` (regenerated);
+- `docs/evals/2026-11-04_reflex_posthoc.json` (new);
+- the `docs/ongoing_general_errors.md` §3 line.
 
 ---
 
 ## 4. Deferred: do NOT start
 
+**Everything below waits on Issue 12** (`docs/ongoing_general_errors.md`): A, write up; B, Wave B v2; C, proceed as recorded; D, request another dataset.
+
 | Work | Trigger | Who writes the spec |
 |---|---|---|
-| **Wave C: H2 cross-dataset transfer** (`DW3`) | Wave B (`B1`–`B4`) complete and verified by the designer | The designer |
-| **Stage A live MicroDuck demo** (`DW6`) | Wave B (`B1`–`B4`) complete, MicroDuck hardware ready, and maintainer opts in | The designer |
-| **Robot transfer, revisited** (`DW7`, offline H3 v2 with REFLEX) | Wave B shows a reaction gain (`ci_low > 0`) **and** the designer writes the pre-registered spec | The designer |
-| **Wave D v2** (HoloAssist → RoboReward with v1's two flaws fixed) | **Not selected** (Issue 10 = A). Do not run it | — |
-| **Ego4D false-positive set** (`DW4`) | Wave C+ | The designer |
+| **Wave B v2** (REFLEX with the flaws fixed: equal-length windows plus a window-length row, reactions cut before the resolution, transcripts from `Text`, a fusion that cannot lose to its step prior) | Issue 12 = B | The designer |
+| **Write-up** (negative result plus method lessons) | Issue 12 = A | The designer |
+| **CANDOR request** (hidden outcome, faces) | Issue 12 = D; the maintainer approves the request text | The designer drafts; the maintainer approves before anything is sent |
+| **Wave C: H2 transfer** (DW3) | Issue 12 selects a path that calls for transfer | The designer |
+| **Stage A live MicroDuck demo** (DW6) | Issue 12 selected **and** a validated reaction reader exists (the REFLEX face probes read window length, L18) **and** hardware ready **and** the maintainer opts in | The designer |
+| **Robot transfer, revisited** (DW7) | A reaction gain with `ci_low > 0` on Wave B (**not met by v1**) **and** a spec | The designer |
+| **Wave D v2** | **Not selected** (Issue 10 = A) | — |
+| **Ego4D false-positive set** (DW4) | Wave C+ | The designer |
+
+**The note behind Issue 12, so you do not "fix" it yourself:**
+- A `fail` item's reaction window is longer than a `pre` item's (45.7 vs 35.5 frames), and `reflex-face-v1`'s `max`/`std` features grow with length.
+- Window length alone scores 0.735. With equal-length windows, `react-face` falls to chance.
+- The verdict stays as recorded. Any re-run is a new, pre-registered spec, written only after Issue 12.
 
 ---
 
@@ -300,31 +254,41 @@ Execute strictly in order, one commit per item on `main`:
 | A9, A9b, A10 | `3f0b78d`, `6744719`, `492bd79` | the Wave A summary (corrected); `shared.fsutil.data_glob` |
 | A11–A14 | `abbc273`, `608c729`, `eea8933`, `d6d9c54` | `step-prior`, `action-fusion`, the ablation Δ; per-session audibility; `holoassist_audible`; the Wave A completion |
 | A15 | `347f242` | the computed caveat; the one-sided leak label in the reports |
-| D1 | `f3f982c` | `holoassist_pool`, the reaction labeler, the pseudo-labels (the refactor is byte-identical) |
-| D2 | `d18dbbf` | `transfer.prior_lr`/`heads`/`curve`, encoder `siglip-b16-224-u9`, `sources.roboreward`, `tools/download_roboreward.py`, `h3_verdict` |
-| D3 | `03ea7eb` | the full, verified RoboReward download; items (0 label-rule violations), split, u9 features, `judge-large` reference |
-| D4 | `315f3a6` | the Wave D v1 curve, its 44 rows, the report and the pre-registered verdict |
-| B1 | `f4c9939` | REFLEX download (`37,219,808,401` bytes, MD5 verified, archive deleted), 55 participants × 10 files verified, `reflex` (1,208 items) and `reflex_resolve` (604 items) items and grouped splits (38 train / 17 test, 0 straddling) |
-| B2 | `5f0631b` | `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d), `extract.py` wiring, `vlm_judge.py` questions, and 20 REFLEX probe conditions in `probes.py` |
-| B3 | `0d146dd` | REFLEX feature extraction (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judge evaluation (`qwen2.5vl:7b` train+test, `gemma4:26b` test) across `reflex` and `reflex_resolve` |
-| B4 | `HEAD` | Wave B REFLEX probe evaluation (40 scorecard rows), exported MicroDuck face probes (`transfer/{reflex,reflex_resolve}_face_probe.npz`), `tools/report_reflex.py`, `docs/evals/2026-11-04_reflex_h1.md` + example TSVs, and Wave B close-out |
+| D1–D4 | `f3f982c`, `d18dbbf`, `03ea7eb`, `315f3a6` | the Wave D v1 pool, transfer code, the RoboReward download and its curve, report and verdict |
+| B1 | `f4c9939` | the REFLEX download (`37,219,808,401` bytes, MD5 verified, archive deleted); 1,208 `reflex` and 604 `reflex_resolve` items; the 38 / 17 participant split. The designer recomputed every item's windows: 0 mismatches |
+| B2 | `5f0631b` | `reflex-face-v1` (153-d), `reflex-speech-v1` (96-d), the judge questions, and the 20 REFLEX probe conditions. Checked line by line against `05_wave_b_reflex.md` §4–§5 |
+| B3 | `0d146dd` | REFLEX features and judges at the coverage claimed (face 97.1% / 97.7%, SigLIP 99.9% / 100%, judges 100% on test) |
+| B4 | `dcb44be` | 40 scorecard rows, the exported face probes (reproduce 0.6085), the report, the TSVs, the 20 example descriptions (two checked against the video). **Its section 3.3 text is corrected by B4b** |
 
 ### 5.2 Accepted equivalents (do not "fix" these back)
 
 - **Oops! "onsets missing" skips a clip if any worker marked no failure.** `extract_frame` retries a seek up to 0.3 s earlier.
 - **`GeminiJudge`:** 32 output tokens, thinking off, and a 429 is not cached. `guard()` holds the heavy lock through the model load only.
 - **Scorecard rows carry the parent commit's `git_sha` with `dirty: true`.**
-- **The HoloAssist group partition is computed over all 1,758 sessions,** and `holoassist_audible` reuses it. Its `not_audible` count includes the 85 sessions without video.
-- **`shared/memguard.py` logs `waited_ms = 0` iff admitted on the first check** (D2; previously, under 50 ms). Admission behavior is unchanged.
-- **`DATA_ROOT/judge/roboreward/gemma4_26b/scores.jsonl`** is a stray duplicate of that judge cache, written in D3. No code reads it. Leave it.
-- **Wave D v1's pool has 0.52% mistakes, and its true-label head is overfit.** These are part of v1's record (`04` §8), **not** bugs to patch. v1 is accepted as the result (Issue 10 = A).
+- **The HoloAssist group partition is computed over all 1,758 sessions,** and `holoassist_audible` reuses it.
+- **`shared/memguard.py` logs `waited_ms = 0` iff admitted on the first check.**
+- **`DATA_ROOT/judge/roboreward/gemma4_26b/scores.jsonl`** is a stray duplicate from D3. Leave it.
+- **Wave D v1's pool and its overfit true-label head** are part of v1's record (`04` §8), not bugs.
+- **B1 normalized `C3-2`'s misspelled header `Resloved?`.**
+  - This gives 604 `reflex_resolve` items (488 / 116), not the spec's expected 593.
+  - The 11 extra episodes are all `TRUE` and are exactly the ones the spec's count missed.
+- **The exported `{dataset}_face_probe.npz` files have no `dataset` key.** The file name carries it.
+- **`react-nonverbal|spoke=1` equals `react-nonverbal` on REFLEX by construction:** speech features exist only where the participant spoke.
+- **`meta.transcript` is empty and `react-full` did not run,** because the spec named `Transcript` and the column is `Text`. v1 keeps this. Only a v2 changes it.
+- **The `reflex_resolve` `react-nonverbal:shuffled` row stays labeled `FAIL`** in the report, with its permutation null beside it. Never relabel a pinned check.
 
 ### 5.3 Maintainer decisions
 
-- **October 8–10:** outcome supervision only, with no human rating; "just ask an LLM" is the control; hidden-outcome data first; Mac Studio only; commit to `main`; Issue 5 → B (`judge-large` `gemma4:26b`).
-- **October 20:** Issue 6 → A (`holoassist_audible`); Issue 7 → A (`step-prior` and ablation gain `fusion_minus_action_fusion`).
-- **October 21–22:** Issue 8 → A (Wave D spec); Issue 9 → B (full RoboReward download); Issue 10 → A (Wave D v1 accepted).
-- **November 1:** **Issue 1 & Issue 4 → REFLEX (`10.5281/zenodo.14590226`, CC BY 4.0).** After Option E (`M4` bounced, `M5` no reply) did not yield access, Wave B pivots to REFLEX (`05_wave_b_reflex.md`, guide items `B1`–`B4`), evaluating `react-face` (`reflex-face-v1`, `DW2`) and `react-nonverbal` (`reflex-speech-v1`) on human reactions to a physical robot and exporting face probes for the Pollen Robotics MicroDuck (`DW6`).
+- **October 8–10:**
+  - outcome supervision only, with no human rating;
+  - "just ask an LLM" is the control;
+  - Mac Studio only;
+  - commit to `main`;
+  - Issue 5 → B.
+- **October 20–22:** Issue 6 → A; Issue 7 → A; Issue 8 → A; Issue 9 → B; Issue 10 → A.
+- **October 23:** Issue 1 → E (the two requests were sent; M4 bounced and M5 got no reply).
+- **November 1:** Wave B moves to **REFLEX** (`00_thesis.md` entry 28). Issues 1 and 4 are resolved by it.
+- **November 2:** Issue 11, wait for the external ComfyUI job rather than stop it.
 
 ### 5.4 Invariants
 
@@ -332,7 +296,17 @@ Execute strictly in order, one commit per item on `main`:
 - **Grouped splits and CIs. Split files are written once. The scorecard is append-only.**
 - **`react-full` is never a headline. `gemma4:26b` is never unloaded by us.**
 - **Shuffled controls never see the true labels. The leak check is one-sided.**
-- **Existing `oops`, `holoassist`, `holoassist_audible`, and `roboreward` caches, splits, and scorecard rows are never modified.**
+- **Existing caches, items, splits and scorecard rows are never modified.** Post-hoc diagnostics never become scorecard rows.
+
+### 5.5 Assessed and rejected: do NOT re-propose
+
+- human rating, rater UIs, golden labels;
+- hand-built affect channels;
+- self-recorded data, studies, academic partners;
+- tuning anything on test results;
+- changing a pre-registered rule or a recorded verdict after seeing its result;
+- fine-tuning encoders end to end (Mac Studio only);
+- circumventing download gates or rate limits.
 
 ---
 
@@ -340,12 +314,12 @@ Execute strictly in order, one commit per item on `main`:
 
 | What | Where |
 |---|---|
-| The thesis, H1–H3, the decision log (entries 1–28) | `00_thesis.md` |
-| Wave B: the REFLEX contract (download, alignment, `reflex` & `reflex_resolve` items, `reflex-face-v1` & `reflex-speech-v1`, probes, pass/kill rules) | `05_wave_b_reflex.md` |
-| The scorecard, conditions, metrics, judges, guardrails (§11), memory guard (§12) | `03_eval_harness.md` |
-| Wave D: the contract (§1–§7) and the v1 result with the designer's notes (§8) | `04_wave_d_robot_check.md` |
-| Datasets: REFLEX, Oops!, HoloAssist (`holoassist_audible`, `holoassist_pool`), RoboReward | `02_data_sources.md` |
-| Issues 1–10 (resolved); deferred work DW1–DW7; lessons L1–L17 | `ongoing_general_errors.md` |
+| The thesis, H1–H3, the decision log (entries 1–29) | `00_thesis.md` |
+| Wave B: the REFLEX contract (§1–§6), plus the v1 result and the designer's notes (§7) | `05_wave_b_reflex.md` |
+| Scorecard, conditions, judges, guardrails (§11, including §11.10 window-length control and §11.11 action-only inputs), memory guard (§12) | `03_eval_harness.md` |
+| Wave D: the contract and the v1 result (§8) | `04_wave_d_robot_check.md` |
+| Datasets, including REFLEX "As built" | `02_data_sources.md` |
+| Issue 12 (open); Issues 1–11 (resolved); deferred work DW1–DW7; lessons L1–L19 | `ongoing_general_errors.md` |
 | Reports | `docs/evals/` |
 | Operations | `LESSONS_v0.md` "Operations"; `tools/README.md` |
 
@@ -353,37 +327,32 @@ Execute strictly in order, one commit per item on `main`:
 
 ## 7. Validation standard (for every item)
 
-- **Red first, then green, then falsify.**
-- **Reproduce the stated reference values.** Ensure existing datasets (`oops`, `holoassist`, `holoassist_audible`) are unaffected.
+- **Red first, then green, then falsify.** Each item names its falsifying test; run it against today's code before your change and see it fail.
+- **Reproduce the stated reference values exactly.** A mismatch is a STOP, never a silent update.
 - **A flaky gate is a failing gate.** Run G2 three times with `TMPDIR` on the SSD.
 - **Report every missed validation bar in the commit body** (L14).
-- **Never loosen a bar or change a pre-registered rule to pass it.** File it as **Issue 11**.
+- **Never loosen a bar or change a pre-registered rule to pass it.** File it as **Issue 13**.
 
 ---
 
 ## 8. THE LOOP
 
 ```
-For each item in §2 (B1 -> B2 -> B3 -> B4):
-  (1) Read the item spec in §3 and the referenced sections of 05_wave_b_reflex.md,
-      02_data_sources.md, and 03_eval_harness.md.
-  (2) Write the tests first (red), implement the item (green), and falsify each gate.
-  (3) For any job > 30 min (B1 download, B3 judges), launch detached via
-      tools/daemonize.py + tools/run_supervised.sh and confirm PPID 1.
-      Check shared.memguard --status before every model job.
-  (4) Run scripts/battery.sh bare (--slow when the item ran models; G2 3 times with
-      TMPDIR="/Volumes/Extreme SSD/tmp").
-  (5) Record the resolution in docs/ongoing_general_errors.md §3, stage explicit paths,
-      commit `feat(b<n>): ...` on `main`, and push with `/usr/bin/git push origin main`.
+For each item in §2 (A16 -> B4b):
+  (1) Read the item in §3, and the sections it names.
+  (2) Write the falsifying test first and watch it fail (red); implement (green); falsify each gate.
+  (3) Run scripts/battery.sh bare (--slow for A16; G2 3 times with TMPDIR="/Volumes/Extreme SSD/tmp").
+  (4) Add the item's line to docs/ongoing_general_errors.md §3, stage explicit paths,
+      commit on main, and push with /usr/bin/git push origin main.
 ```
 
 ---
 
-## 9. Definition of Done for Wave B
+## 9. Definition of Done for this state
 
-- [x] A1–A15 and D1–D4 delivered and verified (§5.1).
-- [x] Wave B REFLEX contract pre-registered (`05_wave_b_reflex.md`, November 1, 2026) and baseline battery re-verified bare (§1.4).
-- [x] **B1:** REFLEX downloaded (`37,219,808,401` bytes, MD5 verified, archive deleted), extracted (55 participants × 10 files), and `reflex` + `reflex_resolve` items and splits built and validated.
-- [x] **B2:** `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d) implemented, wired into `features.extract` and `harness.probes`, and verified by unit tests.
-- [x] **B3:** Features (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judges (`qwen2.5vl:7b` train+test, `gemma4:26b` test) run on `reflex` and `reflex_resolve` under `memguard`.
-- [x] **B4:** Scorecard rows appended for `reflex` and `reflex_resolve`, MicroDuck face probes (`{reflex,reflex_resolve}_face_probe.npz`) exported and verified, `docs/evals/<date>_reflex_h1.md` generated, and guide closed out to `Queue Complete`.
+- [x] A1–A15, D1–D4 and B1–B4 delivered and verified (§5.1).
+- [x] Battery measured bare on November 4 (§1.4), including G4's hang and clean rerun.
+- [x] Wave B's verdict is recorded, with the designer's notes beside it (`05` §7; the report's designer note), and Issue 12 is filed.
+- [ ] **A16:** the `say` fixture has a 60 s timeout and 3 attempts; G4 shows 11 passed; G2 shows 125 passed 3 times in a row.
+- [ ] **B4b:** section 3.3 is computed; the posthoc JSON matches §3's table; the designer's note is preserved; nothing outside the blast radius changed.
+- [ ] **Then the queue is empty.** The only legitimate triggers for new work are the maintainer's selection on **Issue 12**, followed by the designer's spec, or a new issue the maintainer raises. **Do not invent work.**

@@ -252,6 +252,15 @@ Answer with a single integer from 0 to 100: your probability (in percent) that t
    - A CI lying entirely **below** 0.5 is reported as `below chance (one permutation; not a leak)`, never as a failure. One permutation's bootstrap CI covers only the resampling of test items, not the variation between permutations.
    - **Evidence:** on `holoassist`, `step-prior:shuffled` = 0.464 [0.440, 0.489] at seed 0. Over 50 permutation seeds the same control averages 0.496 (SD 0.030), and 20% of seeds fall below 0.47 (designer, October 21).
    - Reports label the column `Leak check (fails iff ci_low > 0.5)`.
+   - **Second case (November 4, 2026):** `reflex_resolve` `react-nonverbal:shuffled` = 0.603 [0.507, 0.691] at seed 0. Its 50-seed null averages 0.510 (SD 0.063), so it was a false alarm. The STOP is still the rule: investigate with a permutation null, then report both.
+10. **Window-summary encoders get a window-length control** *(added November 4, 2026, for every future spec)*.
+    - A reaction encoder that summarizes a window with `max`, `std`, counts or sums produces features that grow with the window's length.
+    - If the classes' windows differ in length, the probe can read length instead of the reaction. Wave B's `reflex` did exactly this (`05_wave_b_reflex.md` §7): length alone scored 0.735, and the face probe fell to chance on equal-length windows.
+    - **Rules:**
+      - give both classes equal-length windows by design;
+      - if a spec cannot, it must report a `window-length` row (the length in frames, its sign set on train) beside the reaction rows;
+      - a reaction result that does not beat that row is not a reaction result.
+11. **Check what the "action-only" input actually shows** *(added November 4, 2026)*. Before a spec calls a channel action-only, open sample frames of each class. REFLEX's privacy mask hides the face but keeps the body's silhouette, so posture and gestures reach the "action-only" controls.
 
 ## 12. Memory guard (added October 10, 2026)
 

@@ -211,3 +211,50 @@ Per `00_thesis.md` (H1, Decision 20, and Decision 28) and `03_eval_harness.md` �
 4. **Restated Kill Rule (Decision 20 & Decision 28):**
    - If **neither** `reflex` **nor** `reflex_resolve` achieves a positive ablation gain (`fusion_minus_action_fusion` `ci_low > 0`) **and** `react-face` fails to beat chance (`ci_low <= 0.5`) on both datasets, then human facial/postural reactions do not carry usable reward signal on REFLEX; stop and write up the negative result.
    - Conversely, if `react-face` has `ci_low > 0.5` or `fusion_minus_action_fusion` has `ci_low > 0` on at least one REFLEX dataset, the exported `reflex_face_probe.npz` / `reflex_resolve_face_probe.npz` proceeds to `DW3` (H2 transfer) and `DW6` (Stage A live MicroDuck feedback).
+
+---
+
+## 7. Result of v1 (November 4, 2026), and the designer's post-hoc notes
+
+**The pre-registered verdict is PROCEED** (`docs/evals/2026-11-04_reflex_h1.md`; rows `2026-11-05T05:49:35Z`–`05:49:51Z`). It rests on one clause: `reflex` `react-face` 0.609 [0.569, 0.644], `ci_low > 0.5`.
+- **Every other pre-registered check failed.** The H1 pass bar is not met on either dataset, and clauses 1 and 2 did not hold on either. The ablation Δ is +0.023 [−0.004, 0.045] on `reflex` and +0.036 [−0.002, 0.078] on `reflex_resolve`.
+- **The implementation followed this spec faithfully.** The designer recomputed:
+  - all 1,812 items' frames and container and wall-clock windows, with 0 mismatches;
+  - the split (38 / 17 participants, `default_rng(0)`);
+  - the encoders against §4;
+  - `react-face` (0.608 [0.569, 0.644]), the exported probe (0.6085) and the 50-seed permutation null.
+- **The verdict stands. These notes do not change it.** They record what the designer found, so that no one builds on more than v1 supports. What to do next is **Issue 12** (`ongoing_general_errors.md`).
+
+**Flaws in this spec:**
+1. **§3.2's windows differ in length by class, and §4.1's summaries grow with length.**
+   - A `fail` item's reaction window runs to `Failure.End + 22` frames (mean 45.7 frames), but a `pre` item's is just the `Pre` state (mean 35.5).
+   - `reflex-face-v1` takes each column's `max` and `std` over the window. Both grow with the number of frames.
+   - **This window-length effect is the whole of the PROCEED clause** (diagnostics below).
+2. **The masked video still shows the participant's body.** `video_cam1.mp4` blacks the participant out but keeps their silhouette, so leaning, turning, and a hand raised to the head are visible. Verified on the frames of `reflex:D2-1:10:pre` and `reflex:D1-1:4:fail`. The "action-only" controls (`judge`, `judge-large`, `action-probe`, `action-fusion`) therefore see body reactions, and the opening section's "masked by construction" (point 3) is wrong.
+3. **§3.3's reaction window includes the outcome.** It runs through `Resolution`, while the action window stops before it, so the reaction channels watch the resolution happen. The action-only channels do not.
+4. **§3.3's outcome is set mostly by the step, not the explanation.** Resolution by step: `pick` 219/219, `carry` 198/220, `place` 71/165. By explanation level it is 74–88% at every level.
+5. **Facts in §2–§4 that the archive contradicts:**
+   - the container rate is 4.4 fps for all 55 videos, not 40/9;
+   - the 11 "other" `Resolved?` values are participant `C3-2`'s 11 episodes. Their header is misspelled `Resloved?`, and all 11 are `TRUE`. B1 normalized the header, so `reflex_resolve` has 604 items (488 / 116), not 593;
+   - `speech.csv` has no `Transcript` column. The text is in `Text` (1,105 participant utterances, median 7 words), so `meta.transcript` is empty and `react-full` did not run;
+   - 12 utterances are labeled `robot/ participant` (with a space), which §3.4's rule does not match.
+
+**Exploratory diagnostics** (measured after the result was seen, so they are not evidence for any verdict):
+- **Sources:** cached features, or the B2 encoders on new windows. Probes are the harness's (`StandardScaler` + `LogisticRegression(C=1.0, class_weight="balanced")`); CIs are grouped, 1,000 resamples. Item **B4b** reproduces every number in code.
+- **`reflex`:**
+  - **window length alone** (shorter → `pre`, sign set on train): **0.735 [0.675, 0.796]**, better than `react-face`;
+  - **`react-face` on its 50 `_mean` dims only:** 0.515 [0.471, 0.564];
+  - **`react-face` with equal-length windows** (per episode, both items cut to the shorter length, median 36 frames): 0.525 [0.473, 0.572] start-anchored, 0.511 [0.457, 0.561] end-anchored;
+  - **[window length + face] − [window length]:** −0.069 [−0.103, −0.030].
+- **`reflex_resolve`:**
+  - **reactions cut at the end of `Explanation`** (before the outcome): `react-face` 0.545 [0.461, 0.634]; `react-nonverbal` 0.643 [0.480, 0.843] (104 items, 16 negatives);
+  - **`step-prior` alone:** 0.941 [0.886, 0.980] on the face-scored items. **[step-prior + face] − step-prior:** −0.121 [−0.193, −0.059];
+  - **`react-nonverbal:shuffled`'s leak-check FAIL** (0.603 [0.507, 0.691]) is a single-seed false alarm. Over 50 seeds the null averages 0.5100 (SD 0.0626), seed 0 is 0.6025, and the true-label 0.660 beats all 50 (L14).
+- **Reading:** once window length is equalized, faces carry no detectable signal on REFLEX in either dataset. The exported `reflex_face_probe.npz` mostly encodes window length, so it cannot serve as a live reaction reader (DW6).
+
+**What a v2 would have to fix** (only if Issue 12 selects it):
+- equal-length reaction windows for both classes, with a window-length-only control;
+- `reflex_resolve` reaction windows that end where the action window ends;
+- transcripts from `Text`, and `Id` matched after removing all whitespace;
+- a fusion that cannot lose to its own `step-prior` input.
+- The silhouette leak cannot be removed with the released video.

@@ -311,23 +311,38 @@ Fifty-five human participants collaborate with a physical Baxter robot on a tabl
   - Every participant directory contains 10 required files: `analysis.csv`, `body.csv`, `facetorch.csv`, `gaze.csv`, `hume.csv`, `openface.csv`, `questionnaire.csv`, `speech.csv`, `time.csv`, and `video_cam1.mp4` (`video_cam2.mp4` is missing in `C1-Fixed-Low/C1-10` and `D1-Decay-Smooth/D1-3` and is not used).
   - The zip contains `__MACOSX/` and `._*` AppleDouble entries; extraction and any glob over `DATA_ROOT` must ignore them (`shared.fsutil.data_glob`).
 - **Video anonymization & why `video_cam1.mp4` is reaction-masked by construction:**
-  - `video_cam1.mp4` is encoded at $\approx 4.4444\text{ Hz}$ (`40/9` fps via `cv2.VideoWriter`) with **no audio stream**.
+  - `video_cam1.mp4` is encoded at $\approx 4.4444\text{ Hz}$ (`40/9` fps via `cv2.VideoWriter`) with **no audio stream**. *(**As built:** `ffprobe` reports 4.4 fps (`r_frame_rate` = `avg_frame_rate`) for all 55 videos. The pipeline reads the rate from each file, so nothing depended on 40/9.)*
   - For GDPR privacy (`arXiv:2502.14185` §IV-1), **the human participant is segmented out with a black mask** in `video_cam1.mp4`, while the **Baxter robot and tabletop objects remain visible**.
-  - Therefore, passing `video_cam1.mp4` to `judge` (`qwen2.5vl:7b`), `judge-large` (`gemma4:26b`), and `action-probe` (`siglip-b16-224-u9`) shows the robot's physical action with the participant's facial and body reactions masked out.
+  - Therefore, passing `video_cam1.mp4` to `judge` (`qwen2.5vl:7b`), `judge-large` (`gemma4:26b`), and `action-probe` (`siglip-b16-224-u9`) shows the robot's physical action with the participant's facial and body reactions masked out. *(**Corrected November 4, 2026:** only the face and identity are masked. The black silhouette keeps the participant's posture and gestures visible, such as leaning or a hand raised to the head; see "As built" below.)*
   - Meanwhile, the REFLEX authors ran **OpenFace 2.0**, **Facetorch**, **MediaPipe Pose**, and **Hume Expression Measurement (Face + Speech Prosody)** on the **unmasked raw recordings before anonymization** and released the per-frame and per-utterance outputs in the CSV files.
 - **CSV schemas & frame/time alignment (pinned in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §2–§4):**
   - `time.csv`: columns `Frame, Stamp, Timestamp, Seconds, Time`. `Frame` is 1-indexed (`1 … N`, matching `video_cam1.mp4` frames); `Seconds` is elapsed wall-clock seconds from Frame 1.
   - `analysis.csv`: columns `Participant, Strategy, Round No., Object, Action, Explanation Level, State, Start Frame, End Frame, Start, End, Resolved?`.
     - Contains **604 robot-failure episodes** across the 55 participants (2,416 rows: each episode is a contiguous 4-row block with `State` in `Pre`, `Failure`, `Explanation`, `Resolution`).
-    - On the 604 `Failure` rows, `Resolved?` is `"TRUE"` on **477**, `"FALSE"` on **116**, and empty/other on **11**.
+    - On the 604 `Failure` rows, `Resolved?` is `"TRUE"` on **477**, `"FALSE"` on **116**, and empty/other on **11**. *(**Corrected November 4, 2026:** the 11 are participant `C3-2`'s episodes, whose header is misspelled `Resloved?`. All 11 are `TRUE`, so the true counts are 488 `TRUE` and 116 `FALSE`.)*
     - **Leakage warning (Lesson L12):** the `Object` column contains annotator failure descriptions (e.g. `"White Cube - Drop"`, `"Red Toy (Nothing inside)"`, `"Cup (Wrong Cup)"`). `Object` is **never** included in `context_text` or `meta.noun`.
   - `openface.csv`: 1-indexed `frame`, `confidence`, `success`, 8 gaze columns, 3 head rotation columns (`pose_Rx, pose_Ry, pose_Rz`), 17 continuous AU intensities (`AU*_r`), and 18 binary AU presences (`AU*_c`).
   - `facetorch.csv`: 0-indexed `Frame ID` (`= Frame - 1`), `Valence`, `Arousal`, `Dominance`.
   - `body.csv`: 0-indexed `Frame` (`= Frame - 1`), `Crossed Arms` (`TRUE`/`FALSE`), `Arms behind back` (`TRUE`/`FALSE`), and 33 MediaPipe 3D pose landmarks.
-  - `speech.csv`: utterance-level `BeginTime`, `EndTime` (in wall-clock seconds matching `time.csv` `Seconds`), `Transcript`, `Id` (`"robot"`, `"participant"`, `"robot/participant"`), and 48 Hume vocal prosody dimensions (`Admiration` … `Triumph`).
+  - `speech.csv`: utterance-level `BeginTime`, `EndTime` (in wall-clock seconds matching `time.csv` `Seconds`), `Transcript`, `Id` (`"robot"`, `"participant"`, `"robot/participant"`), and 48 Hume vocal prosody dimensions (`Admiration` … `Triumph`). *(**Corrected November 4, 2026:**)*
+    - *the columns are `Id, Text, BeginTime, EndTime, Confidence, SpeakerConfidence` and then the 48 prosody columns (6–53). There is no `Transcript` column; the words are in `Text`;*
+    - *`Id` also takes `"robot/ participant"` (12 rows, with a space), `"spk_0"` … `"spk_6"` (63 rows) and `"unknown"` (5 rows).*
 - **Two evaluation datasets (pinned in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) §3):**
   1. **`reflex` (1,208 candidate items across 55 participant groups):** immediate reaction to robot failure (`Pre` `label = 1` vs. `Failure` `label = 0`), with `react-face` (`reflex-face-v1`, 153-d `float32`) as the primary reaction channel.
   2. **`reflex_resolve` (593 candidate items across 55 participant groups):** hidden-outcome collaborative resolution (`[Failure.Start Frame, Explanation.End Frame]` action window before resolution $\rightarrow$ `Resolved?` `TRUE` `label = 1` vs. `FALSE` `label = 0`), evaluated with both `react-face` (`reflex-face-v1`, 153-d) and `react-nonverbal` (`reflex-speech-v1`, 96-d), plus `step-prior` on `(action, explanation_level)`.
+
+### As built (B1–B4; verified by the designer, November 4, 2026)
+
+- **Items:**
+  - `reflex` has 1,208 items (604 / 604).
+  - `reflex_resolve` has **604** items (488 resolved / 116 not), because B1 normalized `C3-2`'s `Resloved?` header.
+  - The designer recomputed every item's frame bounds, container seconds and wall-clock seconds from the CSVs: 0 mismatches.
+- **Window lengths differ by class in `reflex`.** Reaction windows average 45.7 frames for `fail` vs. 35.5 for `pre`; action windows average 23.7 vs. 35.5. Window length alone predicts the `reflex` label at 0.735 on test (`05_wave_b_reflex.md` §7).
+- **`reflex_resolve`'s outcome follows the step:**
+  - resolved: `pick` 219/219, `carry` 198/220, `place` 71/165;
+  - by explanation level only 74–88% (high 165/187, medium 115/143, zero 102/131, low 106/143);
+  - a step prior on `(action, explanation level)` scores 0.938 on test.
+- **What the masked video shows:** the robot, the table and the participant's black silhouette. Posture and gestures are visible; the face is not.
 
 ## BAD / ERR@HRI / REACT: reactions to robots (superseded by REFLEX, November 1, 2026)
 
