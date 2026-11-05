@@ -1,15 +1,16 @@
-# Agent Execution Guide: Active Build — Wave B: REFLEX Multimodal Human-Robot Reactions (B1–B4), November 1, 2026
+# Agent Execution Guide: Queue Complete: Wave B delivered; awaiting maintainer review for Wave C (H2 transfer) / DW6 (Stage A MicroDuck)
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:**
   - On October 8, 2026 the project was reoriented to "human reactions as a reward signal, supervised on outcomes". The v0 pipeline is archived at git tag `v0-saf-final` ([`LESSONS_v0.md`](LESSONS_v0.md)).
   - Waves A and D v1 (`A1`–`A15`, `D1`–`D4`; commits `651039b` … `65882bf`) are complete and verified by the designer (§1.5, §5.1).
   - On November 1, 2026, after Option E for Issue 1 (`M4` `amfed@affectiva.com` bounced; `M5` taste-liking database author did not reply) failed to yield access and `BAD` (Issue 4) remained gated behind an institutional IRB, the maintainer approved pivoting Wave B to the open-access **REFLEX** dataset ([Zenodo 14590226](https://zenodo.org/records/14590226), DOI `10.5281/zenodo.14590226`, **CC BY 4.0**, 37.22 GB, 55 participants reacting to a physical Baxter robot across 604 failure episodes; `00_thesis.md` entry 28).
-- **What is approved right now:** **Wave B (`B1` → `B2` → `B3` → `B4`)**, specified in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) and §2–§3 below.
-  - It evaluates human facial/gaze/head/posture reactions (`react-face`, encoder `reflex-face-v1`, fulfilling `DW2`) and vocal prosody reactions (`react-nonverbal`, encoder `reflex-speech-v1`) on two datasets derived from REFLEX:
-    1. `reflex` (1,208 candidate items): immediate reaction to a robot manipulation failure (`Pre` `label = 1` vs. `Failure` `label = 0`).
-    2. `reflex_resolve` (593 candidate items): hidden-outcome collaborative resolution (`[Failure.Start Frame, Explanation.End Frame]` action window before resolution $\rightarrow$ `Resolved?` `TRUE` `label = 1` vs. `FALSE` `label = 0`).
-  - It also exports the fitted `react-face` linear probes (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) for downstream use in `DW6` (Stage A live emotional feedback on the Pollen Robotics MicroDuck).
+  - On November 4, 2026, **Wave B (`B1` → `B2` → `B3` → `B4`)** was completed and verified (§1.4, §1.5, §5.1; report at [`docs/evals/2026-11-04_reflex_h1.md`](evals/2026-11-04_reflex_h1.md)).
+- **Current status:** **`Queue Complete: Wave B delivered; awaiting maintainer review for Wave C (H2 transfer) / DW6 (Stage A MicroDuck)`**.
+  - Wave B evaluated human facial/gaze/head/posture reactions (`react-face`, encoder `reflex-face-v1`, fulfilling `DW2`) and vocal prosody reactions (`react-nonverbal`, encoder `reflex-speech-v1`) on two datasets derived from REFLEX:
+    1. `reflex` (1,208 items): immediate reaction to a robot manipulation failure (`Pre` `label = 1` vs. `Failure` `label = 0`).
+    2. `reflex_resolve` (604 items): hidden-outcome collaborative resolution (`[Failure.Start Frame, Explanation.End Frame]` action window before resolution $\rightarrow$ `Resolved?` `TRUE` `label = 1` vs. `FALSE` `label = 0`).
+  - It also exported the fitted `react-face` linear probes (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) for downstream use in `DW6` (Stage A live emotional feedback on the Pollen Robotics MicroDuck).
 
 **Every path, number, field name and literal string in this guide and in [`05_wave_b_reflex.md`](05_wave_b_reflex.md) is a decision, not a suggestion.**
 
@@ -69,16 +70,16 @@
 | HoloAssist (`holoassist`, `holoassist_audible`, `holoassist_pool`) | `raw/holoassist/`, `items/…`, `features/…`, `judge/…` | complete; per-session audibility in `runs/holoassist_session_audibility.jsonl` |
 | RoboReward (all of it) | `raw/roboreward/` (`DOWNLOAD.json`: 54,140 files, 43,204,474,744 bytes) | complete; `items/roboreward/` (4,000 train pool + 1,517 test); `features/roboreward/siglip-b16-224-u9/`; `judge/roboreward/gemma4_26b/` |
 | Wave D artefacts | `transfer/{labeler,scaler,heads,curve_scores}.npz`, `transfer/holoassist_pool_pseudolabels.jsonl` | complete (v1) |
-| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items); `features/{reflex,reflex_resolve}/{reflex-face-v1,reflex-speech-v1,siglip-b16-224-u9}/`; `judge/{reflex,reflex_resolve}/{qwen2.5vl_7b,gemma4_26b}/` | complete (B1–B3) |
+| REFLEX | `raw/reflex/` (`DOWNLOAD.json`: 55 participants, 665 files); `items/reflex/` (1,208 items); `items/reflex_resolve/` (604 items); `features/{reflex,reflex_resolve}/{reflex-face-v1,reflex-speech-v1,siglip-b16-224-u9}/`; `judge/{reflex,reflex_resolve}/{qwen2.5vl_7b,gemma4_26b}/`; `transfer/{reflex,reflex_resolve}_face_probe.npz` | complete (B1–B4) |
 
-### 1.4 Gates (run bare November 4, 2026 on B3, with `TMPDIR` on the SSD; the regression bar)
+### 1.4 Gates (run bare November 4, 2026 on B4, with `TMPDIR` on the SSD; the regression bar)
 
-| # | Gate | Command | Result on B3 (November 4, 2026) |
+| # | Gate | Command | Result on B4 (November 4, 2026) |
 |---|---|---|---|
 | G1 | Lint | `./venv/bin/ruff check src tests tools` | exit 0 · `All checks passed!` |
-| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **115 passed, 11 deselected**, 3 runs out of 3 (73.08 s, 69.92 s, 69.17 s) |
+| G2 | Fast tests | `SR_NO_MODEL_BANNER=1 ./venv/bin/python -m pytest -q -m "not slow" tests/` | exit 0 · **122 passed, 11 deselected**, 3 runs out of 3 (68.97 s, 73.31 s, 72.08 s) |
 | G3 | Harness self-test | `PYTHONPATH=src ./venv/bin/python -m harness.scorecard --selftest` | exit 0 · 4 PASS (`planted signal auroc=0.830 [0.807, 0.852]`, `null ci=[0.459, 0.523]`, `grouping ratio=4.66`, `paired delta ci_low=0.138`) |
-| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **11 passed, 115 deselected** (205.56 s) |
+| G4 | Slow tests | `… -m pytest -q -m slow tests/` | exit 0 · **11 passed, 122 deselected** (70.96 s) |
 
 ### 1.5 Headline results (the scorecard is the source)
 
@@ -88,6 +89,8 @@
 | `holoassist` | `step-prior` 0.751; `action-fusion` 0.682; no reaction Δ (the audio was inaudible in most sessions) | `2026-10-21T04:12:57Z–04:13:02Z` |
 | `holoassist_audible` | `react-nonverbal` 0.654; **ablation gain +0.021 [0.006, 0.034]**; fusion − `step-prior` −0.065 | `2026-10-21T16:50:20–30Z` |
 | `roboreward` (Wave D v1) | **NOT SUPPORTED**: `gain:react:N=100` +0.0009 [−0.0006, 0.0024]; `gain:truth:N=100` −0.0507; `robot-full` 0.657; `judge-large` 0.747 | `2026-10-22T14:22:28Z–14:24:54Z` |
+| `reflex` (Wave B) | **`react-face` 0.609 [0.569, 0.644]** (`ci_low > 0.5`, Kill Rule **PROCEED**); `fusion` 0.817; `action-fusion` 0.794; ablation Δ +0.023 [−0.004, 0.045]; `action-probe` 0.730; `judge` 0.720 | `2026-11-05T05:49:35Z–42Z` |
+| `reflex_resolve` (Wave B) | `react-nonverbal` 0.660 [0.545, 0.766]; `react-face` 0.552 [0.440, 0.663]; `fusion` 0.749; `action-fusion` 0.713; ablation Δ +0.036 [−0.002, 0.078]; `step-prior` 0.938; `action-probe` 0.721 | `2026-11-05T05:49:45Z–51Z` |
 
 ---
 
@@ -301,6 +304,10 @@ Execute strictly in order, one commit per item on `main`:
 | D2 | `d18dbbf` | `transfer.prior_lr`/`heads`/`curve`, encoder `siglip-b16-224-u9`, `sources.roboreward`, `tools/download_roboreward.py`, `h3_verdict` |
 | D3 | `03ea7eb` | the full, verified RoboReward download; items (0 label-rule violations), split, u9 features, `judge-large` reference |
 | D4 | `315f3a6` | the Wave D v1 curve, its 44 rows, the report and the pre-registered verdict |
+| B1 | `f4c9939` | REFLEX download (`37,219,808,401` bytes, MD5 verified, archive deleted), 55 participants × 10 files verified, `reflex` (1,208 items) and `reflex_resolve` (604 items) items and grouped splits (38 train / 17 test, 0 straddling) |
+| B2 | `5f0631b` | `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d), `extract.py` wiring, `vlm_judge.py` questions, and 20 REFLEX probe conditions in `probes.py` |
+| B3 | `0d146dd` | REFLEX feature extraction (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judge evaluation (`qwen2.5vl:7b` train+test, `gemma4:26b` test) across `reflex` and `reflex_resolve` |
+| B4 | `HEAD` | Wave B REFLEX probe evaluation (40 scorecard rows), exported MicroDuck face probes (`transfer/{reflex,reflex_resolve}_face_probe.npz`), `tools/report_reflex.py`, `docs/evals/2026-11-04_reflex_h1.md` + example TSVs, and Wave B close-out |
 
 ### 5.2 Accepted equivalents (do not "fix" these back)
 
@@ -379,4 +386,4 @@ For each item in §2 (B1 -> B2 -> B3 -> B4):
 - [x] **B1:** REFLEX downloaded (`37,219,808,401` bytes, MD5 verified, archive deleted), extracted (55 participants × 10 files), and `reflex` + `reflex_resolve` items and splits built and validated.
 - [x] **B2:** `ReflexFaceEncoder` (`reflex-face-v1`, 153-d) and `ReflexSpeechEncoder` (`reflex-speech-v1`, 96-d) implemented, wired into `features.extract` and `harness.probes`, and verified by unit tests.
 - [x] **B3:** Features (`reflex-face-v1`, `reflex-speech-v1`, `siglip-b16-224-u9`) and VLM judges (`qwen2.5vl:7b` train+test, `gemma4:26b` test) run on `reflex` and `reflex_resolve` under `memguard`.
-- [ ] **B4:** Scorecard rows appended for `reflex` and `reflex_resolve`, MicroDuck face probes (`{reflex,reflex_resolve}_face_probe.npz`) exported and verified, `docs/evals/<date>_reflex_h1.md` generated, and guide closed out to `Queue Complete`.
+- [x] **B4:** Scorecard rows appended for `reflex` and `reflex_resolve`, MicroDuck face probes (`{reflex,reflex_resolve}_face_probe.npz`) exported and verified, `docs/evals/<date>_reflex_h1.md` generated, and guide closed out to `Queue Complete`.
