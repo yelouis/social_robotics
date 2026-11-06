@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""tools/build_paper_facts.py — Build docs/paper/facts.json, tables T1..T6, and figures F1..F3.
+"""tools/build_paper_facts.py — Build docs/paper/facts.json, tables T1..T6 & B1..B7, and figures F1..F3.
 
-Implements Item E1 (06_writeup.md §4–§5, agent_execution_guide.md §3).
+Implements Items E1 and E1b (06_writeup.md §4–§5, agent_execution_guide.md §3).
 Strictly read-only over DATA_ROOT and results/scorecard.jsonl.
 """
 
@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 from harness.items import read_items  # noqa: E402
 from harness.reporting import leak_check_label  # noqa: E402
 from harness.splits import load_split  # noqa: E402
+from tools.check_paper_numbers import NUM_TOKEN_RE, _token_matches_facts  # noqa: E402
 from tools.report_holoassist import prediction_check_hidden  # noqa: E402
 from tools.report_oops import prediction_check  # noqa: E402
 from tools.report_reflex import evaluate_kill_rule, prediction_check_reflex  # noqa: E402
@@ -42,10 +43,10 @@ RECORDED_FACTS: Dict[str, dict] = {
             "without_drop_value": 0.025,
         },
         "source": "docs/ongoing_general_errors.md §2 Resolved entry 6 (Issue 8)",
-        "quote": (
+        "quotes": [
             "The designer's exploratory strata showed the gain is mostly whether the instructor spoke: "
             "+0.012 [−0.004, 0.030] where they spoke, −0.026 where they were silent, and +0.025 without `drop`."
-        ),
+        ],
     },
     "wave_d/head_zero_shot": {
         "value": {
@@ -55,10 +56,11 @@ RECORDED_FACTS: Dict[str, dict] = {
             "cosine": 0.0,
         },
         "source": "docs/04_wave_d_robot_check.md §8",
-        "quote": (
+        "quotes": [
             "**Each human head on its own, scored on the robot test set:** "
-            "`react` 0.508 [0.475, 0.540], `shuffled` 0.521 [0.487, 0.554], `truth` 0.491 [0.457, 0.522]."
-        ),
+            "`react` 0.508 [0.475, 0.540], `shuffled` 0.521 [0.487, 0.554], `truth` 0.491 [0.457, 0.522]. "
+            "All are at chance, and every head's direction is orthogonal to the no-prior robot detector's (cosine ≈ 0.00)."
+        ],
     },
     "wave_d/well_posed_head": {
         "value": {
@@ -66,10 +68,10 @@ RECORDED_FACTS: Dict[str, dict] = {
             "full_train": {"value": 0.472, "ci_low": 0.437, "ci_high": 0.509},
         },
         "source": "docs/04_wave_d_robot_check.md §8",
-        "quote": (
+        "quotes": [
             "**Well-posed true-label heads:** one fit on `holoassist_audible` train (1,500 + 1,500) "
             "scores 0.550 [0.515, 0.585] on robot test; one fit on full `holoassist` train scores 0.472 [0.437, 0.509]."
-        ),
+        ],
     },
     "wave_d/head_norms": {
         "value": {
@@ -81,7 +83,11 @@ RECORDED_FACTS: Dict[str, dict] = {
             "truth_in_sample_auroc": 0.997,
         },
         "source": "docs/04_wave_d_robot_check.md §8",
-        "quote": "The norms are `react` 0.99, `shuffled` 1.03 and `truth` 26.9.",
+        "quotes": [
+            "The norms are `react` 0.99, `shuffled` 1.03 and `truth` 26.9.",
+            "The `truth` head, fit on 104 mistakes, is overfit: in-sample AUROC 0.997, norm 26.9.",
+            "At N = 100, the `react` and `shuffled` priors moved test predictions by 0.015 on average; `truth` moved them by 0.33.",
+        ],
     },
     "wave_d/pool_mistakes": {
         "value": {
@@ -92,10 +98,10 @@ RECORDED_FACTS: Dict[str, dict] = {
             "audible_mistakes_taken_pct": 92,
         },
         "source": "docs/04_wave_d_robot_check.md §8",
-        "quote": (
+        "quotes": [
             "Wave A's balanced `holoassist_audible` sample had taken about 92% of the audible sessions' mistakes, "
             "so the pool has 104 mistakes in 20,000 (0.52%), and none in the sessions the labeler never saw."
-        ),
+        ],
     },
     "holoassist/step_prior_shuffled_null": {
         "value": {
@@ -106,19 +112,36 @@ RECORDED_FACTS: Dict[str, dict] = {
             "threshold": 0.47,
         },
         "source": "docs/03_eval_harness.md §11.9",
-        "quote": (
+        "quotes": [
             "Over 50 permutation seeds the same control averages 0.496 (SD 0.030), "
             "and 20% of seeds fall below 0.47 (designer, October 21)."
-        ),
+        ],
     },
 }
 
 
+def _collect_leaf_floats(obj: Any, out: List[float]) -> None:
+    if obj is None or isinstance(obj, (bool, str)):
+        return
+    if isinstance(obj, (int, float)):
+        out.append(abs(float(obj)))
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _collect_leaf_floats(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_leaf_floats(v, out)
+
+
 def validate_recorded_facts(recorded: Dict[str, dict], repo_root: Path = REPO_ROOT) -> Dict[str, dict]:
-    """Assert that every recorded fact's quote appears verbatim in its source file."""
+    """Assert that every recorded fact's quotes appear verbatim in its source file and cover every number in value."""
     for key, entry in recorded.items():
-        if not isinstance(entry, dict) or "source" not in entry or "quote" not in entry or "value" not in entry:
+        if not isinstance(entry, dict) or "source" not in entry or "value" not in entry:
             raise ValueError(f"Malformed recorded entry for {key!r}")
+        quotes = entry.get("quotes")
+        if not isinstance(quotes, list) or len(quotes) < 1:
+            raise ValueError(f"Recorded fact {key!r}: missing non-empty 'quotes' list")
         src_spec = str(entry["source"])
         file_part = src_spec.split()[0].rstrip(",")
         candidates = [repo_root / file_part, repo_root / "docs" / file_part]
@@ -130,14 +153,24 @@ def validate_recorded_facts(recorded: Dict[str, dict], repo_root: Path = REPO_RO
         if src_path is None:
             raise ValueError(f"Recorded fact {key!r}: source file not found for {src_spec!r}")
         text = src_path.read_text(encoding="utf-8")
-        quote = str(entry["quote"])
-        if quote not in text:
-            raise ValueError(f"Recorded fact {key!r}: verbatim quote not found in {src_path}: {quote!r}")
+        for q in quotes:
+            q_str = str(q)
+            if not q_str or q_str not in text:
+                raise ValueError(f"Recorded fact {key!r}: verbatim quote not found in {src_path}: {q_str!r}")
+
+        quote_tokens = [m.group(0) for m in NUM_TOKEN_RE.finditer(" ".join(str(q) for q in quotes))]
+        leaf_vals: List[float] = []
+        _collect_leaf_floats(entry["value"], leaf_vals)
+        for v in leaf_vals:
+            if not any(_token_matches_facts(tok, {v}) for tok in quote_tokens):
+                raise ValueError(
+                    f"Recorded fact {key!r}: value leaf {v!r} does not appear in any quote of {quotes!r}"
+                )
     return recorded
 
 
 def load_latest_scorecard_rows(scorecard_path: Path) -> Dict[str, Dict[str, dict]]:
-    """For each (dataset, condition), select the row with the latest ts."""
+    """For each (dataset, condition), select the row with the latest ts while preserving first-appearance order."""
     latest_raw: Dict[Tuple[str, str], dict] = {}
     if scorecard_path.exists():
         for line in scorecard_path.read_text(encoding="utf-8").splitlines():
@@ -174,6 +207,31 @@ def _fmt_cell(row: Optional[dict]) -> str:
     if lo is not None and hi is not None:
         return f"{v:.3f} [{float(lo):.3f}, {float(hi):.3f}]"
     return f"{v:.3f}"
+
+
+def t3_cells(line: str) -> Tuple[str, str, str]:
+    """Build (check, measured, verdict) cells from an imported prediction_check line (Item E1b step 5)."""
+    clean = line.lstrip("- ").strip()
+    if ":**" in clean:
+        chk, rest = clean.split(":**", 1)
+        check = chk.replace("**", "").strip()
+        rest = rest.strip()
+    else:
+        check = clean
+        rest = ""
+
+    if " → " in rest:
+        measured, verdict = rest.rsplit(" → ", 1)
+    else:
+        measured = rest
+        verdict = ""
+
+    measured = measured.strip()
+    if " not run" in measured:
+        measured = measured.split(":", 1)[0].strip()
+
+    verdict = verdict.split(":", 1)[0].strip()
+    return (check, measured, verdict)
 
 
 def _build_dataset_facts(data_root: Path, splits_dir: Path) -> Dict[str, Any]:
@@ -368,24 +426,21 @@ def _build_tables(
         t2_lines.append(f"| `{cond}` | " + " | ".join(cells) + " |")
     (tables_dir / "T2.md").write_text("\n".join(t2_lines) + "\n", encoding="utf-8")
 
-    # T3: Pre-registered checks per H1 dataset
+    # T3: Pre-registered checks per H1 dataset (4 columns: Dataset, Check, Measured, Verdict)
     t3_lines = [
-        "| Dataset | Check | Verdict string |",
-        "|---|---|---|",
+        "| Dataset | Check | Measured | Verdict |",
+        "|---|---|---|---|",
     ]
     for ds in ["oops", "holoassist", "holoassist_audible", "reflex", "reflex_resolve"]:
         for line in pred_checks[ds]:
             clean = line.lstrip("- ").strip()
             if clean.startswith("**Context") or clean.startswith("**Caveat") or clean.startswith("**judge-frontier"):
                 continue
-            if ":**" in clean:
-                chk, rest = clean.split(":**", 1)
-                chk_name = chk.replace("**", "").strip()
-                t3_lines.append(f"| `{ds}` | {chk_name} | {rest.strip()} |")
-            else:
-                t3_lines.append(f"| `{ds}` | Check | {clean} |")
+            chk_name, measured, verdict = t3_cells(line)
+            t3_lines.append(f"| `{ds}` | {chk_name} | {measured} | {verdict} |")
     kr_status, kr_msg = pred_checks["reflex_kill_rule"]
-    t3_lines.append(f"| `reflex` / `reflex_resolve` | Wave B Kill Rule | **{kr_status}** — {kr_msg} |")
+    kr_measured = kr_msg[kr_msg.rfind("(") + 1 : kr_msg.rfind(")")] if "(" in kr_msg and ")" in kr_msg else kr_msg
+    t3_lines.append(f"| `reflex` / `reflex_resolve` | Wave B kill rule (pre-registered) | {kr_measured} | {kr_status} |")
     (tables_dir / "T3.md").write_text("\n".join(t3_lines) + "\n", encoding="utf-8")
 
     # T4: REFLEX post-hoc diagnostics
@@ -393,13 +448,14 @@ def _build_tables(
         "| Diagnostic key | Value [95% CI] | `n_test` |",
         "|---|---|---|",
     ]
+    n_null = scorecard["reflex_resolve"]["react-nonverbal:shuffled"]["n_items"]
     for k, v in posthoc.items():
         if k == "reflex_resolve.nonverbal_shuffled_null":
             val_s = (
                 f"mean {v['mean']:.3f} (SD {v['sd']:.3f}, range [{v['min']:.3f}, {v['max']:.3f}], "
                 f"seed 0 = {v['seed0']:.3f}; true {v['true_value']:.3f} beats {v['true_beats']}/50)"
             )
-            t4_lines.append(f"| `{k}` | {val_s} | 140 |")
+            t4_lines.append(f"| `{k}` | {val_s} | {n_null} |")
         else:
             val_s = f"{v['value']:.3f} [{v['ci_low']:.3f}, {v['ci_high']:.3f}]"
             t4_lines.append(f"| `{k}` | {val_s} | {v['n_test']} |")
@@ -455,6 +511,29 @@ def _build_tables(
         t6_lines.append(f"| `{ds}` | {n_pass} / {n_run} | {fail_col} |")
     (tables_dir / "T6.md").write_text("\n".join(t6_lines) + "\n", encoding="utf-8")
 
+    # B1..B7: Appendix B per-dataset scorecard tables (Item E1b step 9)
+    appendix_b_datasets = [
+        ("B1", "oops"),
+        ("B2", "holoassist"),
+        ("B3", "holoassist_audible"),
+        ("B4", "reflex"),
+        ("B5", "reflex_resolve"),
+        ("B6", "holoassist_pool"),
+        ("B7", "roboreward"),
+    ]
+    for b_id, ds_name in appendix_b_datasets:
+        b_lines = [
+            "| Condition | Value [95% CI] | n_items | n_groups | Row ts |",
+            "|---|---|---|---|---|",
+        ]
+        for cond, row in scorecard.get(ds_name, {}).items():
+            val_cell = _fmt_cell(row)
+            n_i = row.get("n_items")
+            n_g = row.get("n_groups")
+            ts_str = row.get("ts", "")
+            b_lines.append(f"| `{cond}` | {val_cell} | {n_i} | {n_g} | {ts_str} |")
+        (tables_dir / f"{b_id}.md").write_text("\n".join(b_lines) + "\n", encoding="utf-8")
+
 
 def _build_figures(
     scorecard: Dict[str, Dict[str, dict]],
@@ -463,20 +542,38 @@ def _build_figures(
 ) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # F1: Forest plot of ablation Delta (fusion_minus_action_fusion) for the 5 H1 datasets
-    # Note: holoassist was stopped at the audio check; we also show reflex length-controlled Delta so 5 intervals are plotted.
+    # F1: Forest plot of ablation Delta (fusion_minus_action_fusion) for the 5 H1 datasets (5 rows, 4 intervals)
     f1_entries = [
-        ("oops (n=1,072)", scorecard["oops"]["fusion_minus_action_fusion"], "o", "#222222"),
-        ("holoassist (audio check FAIL; not run)", None, "x", "#888888"),
-        ("holoassist_audible (n=1,420)", scorecard["holoassist_audible"]["fusion_minus_action_fusion"], "s", "#000000"),
-        ("reflex (n=345)", scorecard["reflex"]["fusion_minus_action_fusion"], "^", "#333333"),
-        ("reflex_resolve (n=173)", scorecard["reflex_resolve"]["fusion_minus_action_fusion"], "D", "#444444"),
-        ("reflex: [length+face] - [length] (n=345)", posthoc["reflex.length_plus_face_minus_length"], "v", "#666666"),
+        (
+            f"oops (n={scorecard['oops']['fusion_minus_action_fusion']['n_items']:,})",
+            scorecard["oops"]["fusion_minus_action_fusion"],
+            "o",
+            "#222222",
+        ),
+        ("holoassist", None, "x", "#888888"),
+        (
+            f"holoassist_audible (n={scorecard['holoassist_audible']['fusion_minus_action_fusion']['n_items']:,})",
+            scorecard["holoassist_audible"]["fusion_minus_action_fusion"],
+            "s",
+            "#000000",
+        ),
+        (
+            f"reflex (n={scorecard['reflex']['fusion_minus_action_fusion']['n_items']:,})",
+            scorecard["reflex"]["fusion_minus_action_fusion"],
+            "^",
+            "#333333",
+        ),
+        (
+            f"reflex_resolve (n={scorecard['reflex_resolve']['fusion_minus_action_fusion']['n_items']:,})",
+            scorecard["reflex_resolve"]["fusion_minus_action_fusion"],
+            "D",
+            "#444444",
+        ),
     ]
-    fig, ax = plt.subplots(figsize=(7.5, 4.2), dpi=150)
+    fig, ax = plt.subplots(figsize=(7.5, 3.6), dpi=150)
     y_positions = np.arange(len(f1_entries))[::-1]
-    ax.axvline(0.0, color="#333333", linestyle="-", linewidth=1.1, label="Zero gain (Δ = 0.00)")
-    ax.axvline(0.03, color="#555555", linestyle="--", linewidth=1.1, label="H1 pass bar (Δ = +0.03)")
+    ax.axvline(0.0, color="#333333", linestyle="-", linewidth=1.1, label="Δ = 0")
+    ax.axvline(0.03, color="#555555", linestyle="--", linewidth=1.1, label="pass bar +0.03")
 
     for y_pos, (label, row, marker, color) in zip(y_positions, f1_entries):
         if row is not None and row.get("value") is not None:
@@ -495,26 +592,61 @@ def _build_figures(
                 markersize=6.5,
             )
         else:
-            ax.text(0.002, y_pos, "not run (audio check < +3.5 dB)", va="center", ha="left", fontsize=8.5, color="#555555")
+            ax.text(
+                0.002,
+                y_pos,
+                "no Δ: reaction features not extracted (audio check failed)",
+                va="center",
+                ha="left",
+                fontsize=7.8,
+                color="#555555",
+            )
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels([e[0] for e in f1_entries], fontsize=9)
     ax.set_xlabel("Paired Ablation Gain Δ AUROC (fusion − action-fusion, dimensionless)", fontsize=9.5)
-    ax.set_title("H1 Reaction Ablation Gain Across Datasets (95% Group-Bootstrap CI)", fontsize=10.5)
-    ax.set_xlim(-0.12, 0.10)
+    ax.set_title("H1 ablation gain (fusion − action-fusion), 95% grouped-bootstrap CI", fontsize=10.5)
+    ax.set_xlim(-0.06, 0.10)
+    ax.set_xticks([-0.05, 0.0, 0.03, 0.05, 0.10])
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%.2f"))
     ax.grid(axis="x", linestyle=":", alpha=0.5)
-    ax.legend(loc="upper left", fontsize=8.5, frameon=True)
+    ax.legend(loc="lower right", fontsize=8.5, frameon=True)
     fig.tight_layout()
     fig.savefig(figures_dir / "f1_ablation.png", dpi=150)
     plt.close(fig)
 
     # F2: REFLEX react-face AUROC under original windows, means only, equal-length start, equal-length end, and window length alone
     f2_entries = [
-        ("react-face (original windows, n=345)", posthoc["reflex.react_face"], "o", "#111111"),
-        ("react-face (50 _mean dims only, n=345)", posthoc["reflex.face_means_only"], "s", "#444444"),
-        ("react-face (equal-length start, n=342)", posthoc["reflex.face_equal_length_start"], "^", "#555555"),
-        ("react-face (equal-length end, n=343)", posthoc["reflex.face_equal_length_end"], "v", "#666666"),
-        ("window length alone (-L, n=345)", posthoc["reflex.window_length"], "D", "#000000"),
+        (
+            f"react-face (original windows, n={posthoc['reflex.react_face']['n_test']})",
+            posthoc["reflex.react_face"],
+            "o",
+            "#111111",
+        ),
+        (
+            f"react-face (50 _mean dims only, n={posthoc['reflex.face_means_only']['n_test']})",
+            posthoc["reflex.face_means_only"],
+            "s",
+            "#444444",
+        ),
+        (
+            f"react-face (equal-length start, n={posthoc['reflex.face_equal_length_start']['n_test']})",
+            posthoc["reflex.face_equal_length_start"],
+            "^",
+            "#555555",
+        ),
+        (
+            f"react-face (equal-length end, n={posthoc['reflex.face_equal_length_end']['n_test']})",
+            posthoc["reflex.face_equal_length_end"],
+            "v",
+            "#666666",
+        ),
+        (
+            f"window length alone (-L, n={posthoc['reflex.window_length']['n_test']})",
+            posthoc["reflex.window_length"],
+            "D",
+            "#000000",
+        ),
     ]
     fig, ax = plt.subplots(figsize=(7.2, 4.0), dpi=150)
     x_pos = np.arange(len(f2_entries))
@@ -537,11 +669,11 @@ def _build_figures(
     ax.set_xticks(x_pos)
     ax.set_xticklabels(
         [
-            "Original\nwindows",
-            "50 _mean\ndims only",
-            "Equal-length\n(start)",
-            "Equal-length\n(end)",
-            "Window length\nalone (-L)",
+            f"Original\nwindows\n(n={posthoc['reflex.react_face']['n_test']})",
+            f"50 _mean\ndims only\n(n={posthoc['reflex.face_means_only']['n_test']})",
+            f"Equal-length\n(start)\n(n={posthoc['reflex.face_equal_length_start']['n_test']})",
+            f"Equal-length\n(end)\n(n={posthoc['reflex.face_equal_length_end']['n_test']})",
+            f"Window length\nalone (-L)\n(n={posthoc['reflex.window_length']['n_test']})",
         ],
         fontsize=8.5,
     )
@@ -563,6 +695,8 @@ def _build_figures(
         ("truth", "True human-label prior", "D", ":", "#888888"),
     ]
     rr_sc = scorecard["roboreward"]
+    n_te = rr_sc["detector:none:N=50"]["n_items"]
+    n_grp = rr_sc["detector:none:N=50"]["n_groups"]
     fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=150)
     for key, label, marker, ls, color in priors:
         vals = [float(rr_sc[f"detector:{key}:N={n}"]["value"]) for n in budgets]
@@ -576,7 +710,10 @@ def _build_figures(
     ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
     ax.set_xlabel("Labeled Robot Training Clips N (clips, log scale)", fontsize=9.5)
     ax.set_ylabel("20-Draw Mean Test AUROC (dimensionless)", fontsize=9.5)
-    ax.set_title("Wave D (RoboReward, n_test=1,517): Robot Success Detection vs. Label Budget", fontsize=10.2)
+    ax.set_title(
+        f"Wave D (RoboReward, n_test={n_te:,}, n_groups={n_grp:,}): Robot Success Detection vs. Label Budget",
+        fontsize=9.2,
+    )
     ax.grid(True, linestyle=":", alpha=0.5)
     ax.legend(loc="lower right", fontsize=8.5, frameon=True)
     fig.tight_layout()
@@ -632,6 +769,21 @@ def build_all_paper_artifacts(
         "wave_d_budgets": [50, 100, 200, 500, 1000],
         "wave_d_draws_per_budget": 20,
         "reflex_participants": 55,
+        "probe_C": 1.0,                               # 03_eval_harness.md line 134
+        "probe_max_iter": 2000,                       # 03_eval_harness.md line 134
+        "ablation_ci_low_bar": 0.0,                   # 00_thesis.md H1 pass ("the paired CI excluding 0")
+        "permutation_seed_range": [0, 49],            # 03_eval_harness.md §11.9; the B4b null
+        "holoassist_reaction_extension_s": 5.0,       # 02_data_sources.md, HoloAssist item definition ([start, end + 5.0])
+        "oops_pre_window_s": [-4.0, -1.0],            # src/sources/oops.py:170–178
+        "oops_post_window_s": [0.0, 3.0],             # src/sources/oops.py:194–202
+        "audible_threshold_db": 3.5,                  # 02_data_sources.md, holoassist_audible
+        "judge_scale_max": 100,                       # 03_eval_harness.md §8 ("an integer from 0 to 100")
+        "frontier_min_coverage": 0.9,                 # 00_thesis.md entry 16
+        "reflex_face_dims": 153,                      # 05_wave_b_reflex.md §4
+        "reflex_speech_dims": 96,                     # 05_wave_b_reflex.md §4
+        "face_summary_columns": 50,                   # 05_wave_b_reflex.md §4.1 (the _mean dims)
+        "hume_prosody_columns": 48,                   # 05_wave_b_reflex.md §4.2
+        "siglip_dims": 768,                           # 03_eval_harness.md §9
     }
 
     computed: Dict[str, Any] = {
@@ -677,7 +829,7 @@ def build_all_paper_artifacts(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build paper facts.json, tables T1..T6, and figures F1..F3.")
+    parser = argparse.ArgumentParser(description="Build paper facts.json, tables T1..T6 & B1..B7, and figures F1..F3.")
     parser.add_argument(
         "--data-root",
         type=Path,
@@ -697,7 +849,7 @@ def main() -> None:
         posthoc_path=args.posthoc,
         paper_dir=args.paper_dir,
     )
-    print(f"Built {args.paper_dir / 'facts.json'}, tables T1..T6, and figures F1..F3")
+    print(f"Built {args.paper_dir / 'facts.json'}, tables T1..T6 & B1..B7, and figures F1..F3")
 
 
 if __name__ == "__main__":

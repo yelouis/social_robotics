@@ -1547,7 +1547,31 @@
         1000
       ],
       "wave_d_draws_per_budget": 20,
-      "reflex_participants": 55
+      "reflex_participants": 55,
+      "probe_C": 1.0,
+      "probe_max_iter": 2000,
+      "ablation_ci_low_bar": 0.0,
+      "permutation_seed_range": [
+        0,
+        49
+      ],
+      "holoassist_reaction_extension_s": 5.0,
+      "oops_pre_window_s": [
+        -4.0,
+        -1.0
+      ],
+      "oops_post_window_s": [
+        0.0,
+        3.0
+      ],
+      "audible_threshold_db": 3.5,
+      "judge_scale_max": 100,
+      "frontier_min_coverage": 0.9,
+      "reflex_face_dims": 153,
+      "reflex_speech_dims": 96,
+      "face_summary_columns": 50,
+      "hume_prosody_columns": 48,
+      "siglip_dims": 768
     },
     "scorecard/oops/judge": {
       "value": 0.4718,
@@ -3695,7 +3719,31 @@
       1000
     ],
     "constants/wave_d_draws_per_budget": 20,
-    "constants/reflex_participants": 55
+    "constants/reflex_participants": 55,
+    "constants/probe_C": 1.0,
+    "constants/probe_max_iter": 2000,
+    "constants/ablation_ci_low_bar": 0.0,
+    "constants/permutation_seed_range": [
+      0,
+      49
+    ],
+    "constants/holoassist_reaction_extension_s": 5.0,
+    "constants/oops_pre_window_s": [
+      -4.0,
+      -1.0
+    ],
+    "constants/oops_post_window_s": [
+      0.0,
+      3.0
+    ],
+    "constants/audible_threshold_db": 3.5,
+    "constants/judge_scale_max": 100,
+    "constants/frontier_min_coverage": 0.9,
+    "constants/reflex_face_dims": 153,
+    "constants/reflex_speech_dims": 96,
+    "constants/face_summary_columns": 50,
+    "constants/hume_prosody_columns": 48,
+    "constants/siglip_dims": 768
   },
   "recorded": {
     "wave_a/audible_strata": {
@@ -3707,7 +3755,9 @@
         "without_drop_value": 0.025
       },
       "source": "docs/ongoing_general_errors.md \u00a72 Resolved entry 6 (Issue 8)",
-      "quote": "The designer's exploratory strata showed the gain is mostly whether the instructor spoke: +0.012 [\u22120.004, 0.030] where they spoke, \u22120.026 where they were silent, and +0.025 without `drop`."
+      "quotes": [
+        "The designer's exploratory strata showed the gain is mostly whether the instructor spoke: +0.012 [\u22120.004, 0.030] where they spoke, \u22120.026 where they were silent, and +0.025 without `drop`."
+      ]
     },
     "wave_d/head_zero_shot": {
       "value": {
@@ -3729,7 +3779,9 @@
         "cosine": 0.0
       },
       "source": "docs/04_wave_d_robot_check.md \u00a78",
-      "quote": "**Each human head on its own, scored on the robot test set:** `react` 0.508 [0.475, 0.540], `shuffled` 0.521 [0.487, 0.554], `truth` 0.491 [0.457, 0.522]."
+      "quotes": [
+        "**Each human head on its own, scored on the robot test set:** `react` 0.508 [0.475, 0.540], `shuffled` 0.521 [0.487, 0.554], `truth` 0.491 [0.457, 0.522]. All are at chance, and every head's direction is orthogonal to the no-prior robot detector's (cosine \u2248 0.00)."
+      ]
     },
     "wave_d/well_posed_head": {
       "value": {
@@ -3745,7 +3797,9 @@
         }
       },
       "source": "docs/04_wave_d_robot_check.md \u00a78",
-      "quote": "**Well-posed true-label heads:** one fit on `holoassist_audible` train (1,500 + 1,500) scores 0.550 [0.515, 0.585] on robot test; one fit on full `holoassist` train scores 0.472 [0.437, 0.509]."
+      "quotes": [
+        "**Well-posed true-label heads:** one fit on `holoassist_audible` train (1,500 + 1,500) scores 0.550 [0.515, 0.585] on robot test; one fit on full `holoassist` train scores 0.472 [0.437, 0.509]."
+      ]
     },
     "wave_d/head_norms": {
       "value": {
@@ -3757,7 +3811,11 @@
         "truth_in_sample_auroc": 0.997
       },
       "source": "docs/04_wave_d_robot_check.md \u00a78",
-      "quote": "The norms are `react` 0.99, `shuffled` 1.03 and `truth` 26.9."
+      "quotes": [
+        "The norms are `react` 0.99, `shuffled` 1.03 and `truth` 26.9.",
+        "The `truth` head, fit on 104 mistakes, is overfit: in-sample AUROC 0.997, norm 26.9.",
+        "At N = 100, the `react` and `shuffled` priors moved test predictions by 0.015 on average; `truth` moved them by 0.33."
+      ]
     },
     "wave_d/pool_mistakes": {
       "value": {
@@ -3768,7 +3826,9 @@
         "audible_mistakes_taken_pct": 92
       },
       "source": "docs/04_wave_d_robot_check.md \u00a78",
-      "quote": "Wave A's balanced `holoassist_audible` sample had taken about 92% of the audible sessions' mistakes, so the pool has 104 mistakes in 20,000 (0.52%), and none in the sessions the labeler never saw."
+      "quotes": [
+        "Wave A's balanced `holoassist_audible` sample had taken about 92% of the audible sessions' mistakes, so the pool has 104 mistakes in 20,000 (0.52%), and none in the sessions the labeler never saw."
+      ]
     },
     "holoassist/step_prior_shuffled_null": {
       "value": {
@@ -3779,7 +3839,9 @@
         "threshold": 0.47
       },
       "source": "docs/03_eval_harness.md \u00a711.9",
-      "quote": "Over 50 permutation seeds the same control averages 0.496 (SD 0.030), and 20% of seeds fall below 0.47 (designer, October 21)."
+      "quotes": [
+        "Over 50 permutation seeds the same control averages 0.496 (SD 0.030), and 20% of seeds fall below 0.47 (designer, October 21)."
+      ]
     }
   }
 }
