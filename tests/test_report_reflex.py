@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -286,4 +287,173 @@ def test_verified_example_descriptions_complete():
     for k, desc in VERIFIED_EXAMPLE_DESCRIPTIONS.items():
         assert len(desc) > 50, f"Description too short for {k}"
         assert "not described" not in desc.lower()
+
+
+def test_resolution_tables_are_computed(tmp_path: Path):
+    scorecard_file = tmp_path / "scorecard.jsonl"
+    data_root = tmp_path / "data"
+    splits_dir = tmp_path / "splits"
+    out_file = tmp_path / "report.md"
+
+    items_dir = data_root / "items" / "reflex_resolve"
+    items_dir.mkdir(parents=True)
+    splits_dir.mkdir(parents=True)
+    scorecard_file.write_text("", encoding="utf-8")
+
+    resolve_ids = [k for k in VERIFIED_EXAMPLE_DESCRIPTIONS if k.startswith("reflex_resolve:")]
+    # 9 synthetic reflex_resolve items: pick 3/3, carry 2/3, place 1/3 resolved; two nouns ("high", "low")
+    specs = [
+        ("pick", 1, "high"), ("pick", 1, "low"), ("pick", 1, "high"),
+        ("carry", 1, "high"), ("carry", 1, "low"), ("carry", 0, "low"),
+        ("place", 1, "high"), ("place", 0, "low"), ("place", 0, "high"),
+    ]
+    items = []
+    for idx, (verb, label, noun) in enumerate(specs):
+        iid = resolve_ids[idx]
+        items.append({
+            "item_id": iid,
+            "dataset": "reflex_resolve",
+            "video_path": f"/tmp/P{idx}/video_cam1.mp4",
+            "group_id": f"P{idx}",
+            "action_window_sec": [0.0, 2.0],
+            "reaction_window_sec": [0.0, 4.0],
+            "label": label,
+            "label_source": "analysis.csv:Resolved?",
+            "context_text": f"Task: human-robot collaborative object sorting. Step: {verb} object. Explanation level: {noun}.",
+            "meta": {"verb": verb, "noun": noun, "spoke": 0, "transcript": ""},
+        })
+    (items_dir / "items.jsonl").write_text(
+        "\n".join(json.dumps(it) for it in items) + "\n",
+        encoding="utf-8",
+    )
+    tr_ids = [it["item_id"] for it in items[:6]]
+    te_ids = [it["item_id"] for it in items[6:]]
+    canon = json.dumps({"train": sorted(tr_ids), "test": sorted(te_ids)}, sort_keys=True)
+    split_obj = {
+        "train": tr_ids,
+        "test": te_ids,
+        "sha256": hashlib.sha256(canon.encode("utf-8")).hexdigest(),
+    }
+    (splits_dir / "reflex_resolve.json").write_text(json.dumps(split_obj), encoding="utf-8")
+
+    generate_reflex_report(
+        date_str="2026-11-04",
+        scorecard_path=scorecard_file,
+        data_root=data_root,
+        splits_dir=splits_dir,
+        output_path=out_file,
+    )
+    content = out_file.read_text(encoding="utf-8")
+    sec33 = content.split("### 3.3")[1].split("## 4.")[0]
+    assert "| pick | 3 | 3 | 100.0 |" in sec33
+    assert "| carry | 2 | 3 | 66.7 |" in sec33
+    assert "| place | 1 | 3 | 33.3 |" in sec33
+    assert "Explanation Level" in sec33
+    assert "475" not in sec33
+    assert "Explain column" not in sec33
+
+
+def test_designer_note_preserved(tmp_path: Path):
+    scorecard_file = tmp_path / "scorecard.jsonl"
+    data_root = tmp_path / "data"
+    splits_dir = tmp_path / "splits"
+    out_file = tmp_path / "report.md"
+
+    data_root.mkdir(parents=True)
+    splits_dir.mkdir(parents=True)
+    scorecard_file.write_text("", encoding="utf-8")
+    out_file.write_text("# Old report\n\n---\n\n## Designer note\nkeep me\n", encoding="utf-8")
+
+    generate_reflex_report(
+        date_str="2026-11-04",
+        scorecard_path=scorecard_file,
+        data_root=data_root,
+        splits_dir=splits_dir,
+        output_path=out_file,
+    )
+    content = out_file.read_text(encoding="utf-8")
+    assert content.endswith("## Designer note\nkeep me\n")
+    assert "\n---\n\n## Designer note\nkeep me\n" in content or "\n---\n## Designer note\nkeep me\n" in content
+
+
+def test_permutation_null_only_for_fail_rows(tmp_path: Path):
+    scorecard_file = tmp_path / "scorecard.jsonl"
+    data_root = tmp_path / "data"
+    splits_dir = tmp_path / "splits"
+    out_file = tmp_path / "report.md"
+
+    data_root.mkdir(parents=True)
+    splits_dir.mkdir(parents=True)
+
+    # Create synthetic items, split, and speech feature cache for reflex_resolve so the FAIL row computes a 50-seed null
+    items_dir = data_root / "items" / "reflex_resolve"
+    items_dir.mkdir(parents=True)
+    feat_dir = data_root / "features" / "reflex_resolve" / "reflex-speech-v1"
+    feat_dir.mkdir(parents=True)
+
+    resolve_ids = [k for k in VERIFIED_EXAMPLE_DESCRIPTIONS if k.startswith("reflex_resolve:")]
+    rng = np.random.default_rng(0)
+    items = []
+    train_ids, test_ids = [], []
+    for i in range(10):
+        iid = resolve_ids[i]
+        lbl = 1 if i % 2 == 0 else 0
+        items.append({
+            "item_id": iid,
+            "dataset": "reflex_resolve",
+            "video_path": f"/tmp/P{i}/video_cam1.mp4",
+            "group_id": f"P{i}",
+            "action_window_sec": [0.0, 2.0],
+            "reaction_window_sec": [0.0, 4.0],
+            "label": lbl,
+            "label_source": "analysis.csv:Resolved?",
+            "context_text": "Task: human-robot collaborative object sorting. Step: pick object. Explanation level: high.",
+            "meta": {"verb": "pick", "noun": "high", "spoke": 1, "transcript": ""},
+        })
+        if i < 6:
+            train_ids.append(iid)
+        else:
+            test_ids.append(iid)
+        vec = rng.standard_normal(96).astype(np.float32)
+        np.save(feat_dir / f"{iid.replace(':', '_')}.npy", vec)
+
+    (items_dir / "items.jsonl").write_text("\n".join(json.dumps(it) for it in items) + "\n", encoding="utf-8")
+    canon = json.dumps({"train": sorted(train_ids), "test": sorted(test_ids)}, sort_keys=True)
+    (splits_dir / "reflex_resolve.json").write_text(
+        json.dumps({"train": train_ids, "test": test_ids, "sha256": hashlib.sha256(canon.encode("utf-8")).hexdigest()}),
+        encoding="utf-8",
+    )
+
+    mock_rows = [
+        {
+            "hypothesis": "H1", "dataset": "reflex_resolve", "split": "test",
+            "condition": "react-nonverbal", "metric": "auroc",
+            "value": 0.66, "ci_low": 0.55, "ci_high": 0.77,
+        },
+        {
+            "hypothesis": "H1", "dataset": "reflex_resolve", "split": "test",
+            "condition": "react-nonverbal:shuffled", "metric": "auroc",
+            "value": 0.603, "ci_low": 0.507, "ci_high": 0.691,
+        },
+        {
+            "hypothesis": "H1", "dataset": "reflex_resolve", "split": "test",
+            "condition": "react-face:shuffled", "metric": "auroc",
+            "value": 0.52, "ci_low": 0.45, "ci_high": 0.59,
+        },
+    ]
+    scorecard_file.write_text("\n".join(json.dumps(r) for r in mock_rows) + "\n", encoding="utf-8")
+
+    generate_reflex_report(
+        date_str="2026-11-04",
+        scorecard_path=scorecard_file,
+        data_root=data_root,
+        splits_dir=splits_dir,
+        output_path=out_file,
+    )
+    content = out_file.read_text(encoding="utf-8")
+    sec33 = content.split("### 3.3")[1].split("## 4.")[0]
+    assert sec33.count("50-seed permutation null") == 1
+    assert "react-nonverbal:shuffled" in sec33
+    assert "react-face:shuffled" not in sec33
+
 

@@ -17,8 +17,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from features.cache import FeatureCache
 from features.face import get_reflex_face_feature_names
 from harness.items import Item, read_items
+from harness.probes import _safe_predict_proba, load_features_for_items
 from harness.reporting import leak_check_label
 from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
@@ -506,6 +508,225 @@ def extract_top_weights(
     return (top_pos, top_neg)
 
 
+def _format_resolution_table(items: List[Item], key: str, canonical_order: List[str]) -> List[str]:
+    """Build a Markdown table of resolution counts and rates by meta[key]."""
+    counts: Dict[str, List[int]] = {}
+    for it in items:
+        lvl = str(it.meta.get(key, ""))
+        if lvl not in counts:
+            counts[lvl] = [0, 0]
+        counts[lvl][0] += int(it.label == 1)
+        counts[lvl][1] += 1
+
+    ordered_levels = [k for k in canonical_order if k in counts]
+    for k in sorted(counts.keys()):
+        if k not in ordered_levels:
+            ordered_levels.append(k)
+
+    lines = [
+        "| level | resolved | total | rate |",
+        "|---|---|---|---|",
+    ]
+    for lvl in ordered_levels:
+        res, tot = counts[lvl]
+        rate = (100.0 * res / tot) if tot > 0 else 0.0
+        lines.append(f"| {lvl} | {res} | {tot} | {rate:.1f} |")
+    return lines
+
+
+def _compute_permutation_null_line(
+    ds_name: str,
+    cond: str,
+    row: dict,
+    rows_dict: Dict[str, dict],
+    data_root: Path,
+    splits_dir: Path,
+) -> str:
+    """Compute 50-seed permutation null for a failing :shuffled row."""
+    import warnings
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+    from sklearn.preprocessing import StandardScaler
+
+    lk = leak_check_label(row.get("value"), row.get("ci_low"), row.get("ci_high"))
+    base_cond = cond[: -len(":shuffled")] if cond.endswith(":shuffled") else cond
+    encoder_map = {
+        "react-face": "reflex-face-v1",
+        "react-nonverbal": "reflex-speech-v1",
+        "action-probe": "siglip-b16-224-u9",
+    }
+    if base_cond not in encoder_map:
+        return f"- **`{ds_name}` `{cond}` ({fmt_row(row)}, `{lk}`):** permutation null not computed for {base_cond}"
+
+    items_path = data_root / "items" / ds_name / "items.jsonl"
+    split_file = splits_dir / f"{ds_name}.json"
+    cache_dir = data_root / "features" / ds_name / encoder_map[base_cond]
+    if not items_path.exists() or not split_file.exists() or not cache_dir.exists():
+        return f"- **`{ds_name}` `{cond}` ({fmt_row(row)}, `{lk}`):** permutation null not computed for {base_cond}"
+
+    all_items = read_items(items_path)
+    item_map = {it.item_id: it for it in all_items}
+    split_data = load_split(ds_name, path_dir=splits_dir)
+    train_items = [item_map[i] for i in split_data.get("train", []) if i in item_map]
+    test_items = [item_map[i] for i in split_data.get("test", []) if i in item_map]
+
+    y_train = np.array([it.label for it in train_items], dtype=int)
+    y_test = np.array([it.label for it in test_items], dtype=int)
+
+    cache = FeatureCache(dataset=ds_name, encoder_id=encoder_map[base_cond], data_root=data_root)
+    X_tr, valid_tr, _ = load_features_for_items(train_items, cache)
+    X_te, valid_te, _ = load_features_for_items(test_items, cache)
+
+    if int(np.sum(valid_tr)) == 0 or int(np.sum(valid_te)) == 0:
+        return f"- **`{ds_name}` `{cond}` ({fmt_row(row)}, `{lk}`):** permutation null not computed for {base_cond}"
+
+    scaler = StandardScaler().fit(X_tr[valid_tr])
+    X_tr_s = scaler.transform(X_tr[valid_tr])
+    X_te_s = scaler.transform(X_te[valid_te])
+
+    clf_true = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        clf_true.fit(X_tr_s, y_train[valid_tr])
+    true_probs = _safe_predict_proba(clf_true, X_te_s)[:, 1]
+    true_auc = float(roc_auc_score(y_test[valid_te], true_probs))
+
+    null_vals: List[float] = []
+    for seed in range(50):
+        rng = np.random.default_rng(seed)
+        y_sh = y_train.copy()
+        rng.shuffle(y_sh)
+        clf_sh = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clf_sh.fit(X_tr_s, y_sh[valid_tr])
+        sh_probs = _safe_predict_proba(clf_sh, X_te_s)[:, 1]
+        null_vals.append(float(roc_auc_score(y_test[valid_te], sh_probs)))
+
+    arr = np.array(null_vals, dtype=np.float64)
+    mean_v = float(np.mean(arr))
+    sd_v = float(np.std(arr, ddof=0))
+    min_v = float(np.min(arr))
+    max_v = float(np.max(arr))
+    seed0_v = float(arr[0])
+    pct0 = int(round(100.0 * float(np.mean(arr <= seed0_v))))
+    beats = int(np.sum(true_auc > arr))
+    base_row = rows_dict.get(base_cond)
+    true_str = f"{base_row['value']:.3f}" if (base_row and base_row.get("value") is not None) else f"{true_auc:.3f}"
+
+    return (
+        f"- **`{ds_name}` `{cond}` (`{fmt_row(row)}`, `{lk}`) — 50-seed permutation null:** "
+        f"mean `{mean_v:.4f}`, SD `{sd_v:.4f}`, min `{min_v:.4f}`, max `{max_v:.4f}`, "
+        f"seed 0 = `{seed0_v:.4f}` ({pct0}th percentile among the 50); "
+        f"true-label `{base_cond}` (`{true_str}`) beats `{beats}` of `50`."
+    )
+
+
+def _build_section_3_3(
+    reflex_rows: Dict[str, dict],
+    reflex_resolve_rows: Dict[str, dict],
+    data_root: Path,
+    splits_dir: Path,
+) -> List[str]:
+    """Generate section 3.3 entirely from data per Item B4b."""
+    lines: List[str] = ["### 3.3 Shuffled-Control & Methodological Notes (`L12`, `L14`)\n"]
+
+    # (a) Resolution by step and by Explanation Level for reflex_resolve
+    resolve_items_path = data_root / "items" / "reflex_resolve" / "items.jsonl"
+    if resolve_items_path.exists():
+        all_resolve_items = read_items(resolve_items_path)
+        split_file = splits_dir / "reflex_resolve.json"
+        if split_file.exists():
+            sp_data = load_split("reflex_resolve", path_dir=splits_dir)
+            test_set = set(sp_data.get("test", []))
+            test_resolve_items = [it for it in all_resolve_items if it.item_id in test_set]
+        else:
+            test_resolve_items = []
+
+        lines.append("#### `reflex_resolve` Resolution by Step (`meta.verb`) and `Explanation Level` (`meta.noun`) — All Items\n")
+        lines.extend(_format_resolution_table(all_resolve_items, "verb", ["pick", "carry", "place"]))
+        lines.append("")
+        lines.extend(_format_resolution_table(all_resolve_items, "noun", ["high", "medium", "low", "zero"]))
+        lines.append("")
+
+        if test_resolve_items:
+            lines.append("#### `reflex_resolve` Resolution by Step (`meta.verb`) and `Explanation Level` (`meta.noun`) — Test Split\n")
+            lines.extend(_format_resolution_table(test_resolve_items, "verb", ["pick", "carry", "place"]))
+            lines.append("")
+            lines.extend(_format_resolution_table(test_resolve_items, "noun", ["high", "medium", "low", "zero"]))
+            lines.append("")
+
+    # (b) 50-seed permutation null for every :shuffled row whose leak_check_label starts with FAIL
+    shuffled_order = [
+        "action-probe:shuffled",
+        "react-face:shuffled",
+        "react-nonverbal:shuffled",
+        "step-prior:shuffled",
+        "action-fusion:shuffled",
+        "fusion:shuffled",
+    ]
+    for ds_name, rows_dict in [("reflex", reflex_rows), ("reflex_resolve", reflex_resolve_rows)]:
+        seen_sh = set()
+        ordered_sh = [c for c in shuffled_order if c in rows_dict]
+        for c in rows_dict:
+            if c.endswith(":shuffled") and c not in ordered_sh:
+                ordered_sh.append(c)
+        for cond in ordered_sh:
+            if cond in seen_sh:
+                continue
+            seen_sh.add(cond)
+            r = rows_dict[cond]
+            lk = leak_check_label(r.get("value"), r.get("ci_low"), r.get("ci_high"))
+            if lk.startswith("FAIL"):
+                lines.append(_compute_permutation_null_line(ds_name, cond, r, rows_dict, data_root, splits_dir))
+
+    # (c) Constant-judge note
+    for ds_name, rows_dict in [("reflex", reflex_rows), ("reflex_resolve", reflex_resolve_rows)]:
+        split_file = splits_dir / f"{ds_name}.json"
+        if not split_file.exists():
+            continue
+        sp_data = load_split(ds_name, path_dir=splits_dir)
+        test_ids = sp_data.get("test", [])
+        n_test = len(test_ids)
+        if n_test == 0:
+            continue
+        test_set = set(test_ids)
+        q = DATASET_QUESTIONS.get(ds_name, "")
+        p_h = prompt_hash(q)
+        for m_tag, cond_name in [
+            ("qwen2.5vl_7b", "judge"),
+            ("gemma4_26b", "judge-large"),
+            ("gemini-3.6-flash", "judge-frontier"),
+        ]:
+            jf = data_root / "judge" / ds_name / m_tag / f"{p_h}.jsonl"
+            if not jf.exists():
+                continue
+            val_counts: Dict[float, int] = {}
+            for line in jf.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("item_id") in test_set and d.get("judge_prob") is not None:
+                    v = float(d["judge_prob"])
+                    val_counts[v] = val_counts.get(v, 0) + 1
+            if not val_counts:
+                continue
+            top_v, top_k = max(val_counts.items(), key=lambda kv: kv[1])
+            if top_k >= 0.95 * n_test:
+                row_val = rows_dict.get(cond_name, {}).get("value")
+                auroc_s = f"{row_val:.3f}" if row_val is not None else "—"
+                lines.append(
+                    f"- **Constant-judge note (`{ds_name}` `{cond_name}`):** "
+                    f"{m_tag} answered prob={top_v} on {top_k} of {n_test} test items (AUROC {auroc_s})"
+                )
+
+    lines.append("")
+    return lines
+
+
 def _sample_and_format_examples(
     dataset: str,
     data_root: Path,
@@ -707,28 +928,7 @@ def generate_reflex_report(
                 md.append(f"| `{cond}` | {r.get('metric', 'auroc')} | {val_s} | {ci_s} | {n_i} | {n_g} | {n_ex} | {leak} | {notes} |")
         md.append("")
 
-    md.append("### 3.3 Shuffled-Control & Methodological Notes (`L12`, `L14`)\n")
-    md.append(
-        "- **`reflex_resolve` `react-nonverbal:shuffled` (`0.603 [0.507, 0.691]`, `FAIL: above chance (leak)`):** "
-        "11 of the 12 `:shuffled` controls across `reflex` and `reflex_resolve` pass (`ci_low <= 0.5`). "
-        "On `reflex_resolve` test, only `140` items have participant speech (`112` positive `Resolved? = TRUE` vs. `28` negative `Resolved? = FALSE` across 17 test participants), "
-        "and the probe fits 96 prosody dimensions (`reflex-speech-v1`) on `326` train speech items (`p/n = 96/326 = 0.29`). "
-        "Per `Lesson L14`, a 50-seed permutation check (`seed = 0..49` shuffling train labels independently of test) yields mean test AUROC **`0.5100`** (SD **`0.0626`**, range `[0.3302, 0.6526]`), "
-        "with `seed = 0` (`0.6025`) sitting at the **92nd percentile** (58% of seeds > 0.50). "
-        "There is zero label leakage in `ReflexSpeechEncoder` or `run_probes`; the single fixed permutation (`default_rng(0)`) crosses `ci_low = 0.500` by `0.007` due to small-sample variance on the 28 negative test utterances (while true-label `react-nonverbal` scores `0.660 [0.545, 0.766]`, above all 50 null permutations)."
-    )
-    md.append(
-        "- **`reflex_resolve` `step-prior` (`0.938 [0.883, 0.980]`, `Lesson L12`):** "
-        "In `reflex_resolve`, `meta.noun` encodes the robot's explanation detail level (`zero`, `low`, `medium`, `high` from `analysis.csv`'s `Explain` column, `05_wave_b_reflex.md` §3.3). "
-        "Because the REFLEX study protocol resolves almost every failure when the robot provides a `low`, `medium`, or `high` explanation (`475 / 478 = 99.4%` resolved) and fails to resolve most `zero`-explanation episodes (`13 / 126 = 10.3%` resolved), "
-        "the train-split `(verb, explanation_level)` step prior achieves `0.938 [0.883, 0.980]` on test (`step-prior:shuffled` = `0.440 [0.278, 0.593]`, `pass`)."
-    )
-    md.append(
-        "- **`reflex` `judge-large` (`0.500 [0.500, 0.500]`):** "
-        "In `video_cam1.mp4`, the human participant is segmented out with a black mask and the wide-angle camera views the tabletop from across the room. "
-        "When asked *\"Is the robot performing the step normally at this point, with no failure yet?\"* on `reflex`, `gemma4:26b` answered `100` (`prob = 1.0`) on all 374 test items, yielding constant predictions (`AUROC = 0.500`), whereas `qwen2.5vl:7b` (`judge`) achieved `0.720 [0.680, 0.761]` and `action-probe` (`siglip-b16-224-u9`) achieved `0.730 [0.705, 0.767]`."
-    )
-    md.append("")
+    md.extend(_build_section_3_3(reflex_rows, reflex_resolve_rows, data_root, splits_dir))
 
     # Judge diagnostics
     md.append("## 4. Judge Diagnostics & Answer Distributions\n")
@@ -796,9 +996,22 @@ def generate_reflex_report(
     md.append("### 7.2 `reflex_resolve` Sampled Test Items\n")
     md.extend(_sample_and_format_examples("reflex_resolve", data_root, splits_dir, tsv_out=tsv_out_reflex_resolve))
 
+    # Preserve designer note if present in existing output_path
+    designer_suffix = ""
+    if output_path.exists():
+        existing_text = output_path.read_text(encoding="utf-8")
+        m_dn = re.search(r"^## Designer note", existing_text, flags=re.MULTILINE)
+        if m_dn:
+            designer_block = existing_text[m_dn.start() :]
+            prefix_before = existing_text[: m_dn.start()]
+            if prefix_before.endswith("---\n\n"):
+                designer_suffix = "\n---\n\n" + designer_block
+            else:
+                designer_suffix = "\n---\n" + designer_block
+
     # Write markdown
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(md), encoding="utf-8")
+    output_path.write_text("\n".join(md) + designer_suffix, encoding="utf-8")
 
     return output_path
 

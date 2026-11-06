@@ -1,0 +1,77 @@
+{
+  "reflex.react_face": {
+    "value": 0.608482322892862,
+    "ci_low": 0.5688865350705329,
+    "ci_high": 0.6443459226050673,
+    "n_test": 345
+  },
+  "reflex.window_length": {
+    "value": 0.7346081462562172,
+    "ci_low": 0.6752449602125274,
+    "ci_high": 0.7955251651840813,
+    "n_test": 345
+  },
+  "reflex.face_means_only": {
+    "value": 0.5149549670654657,
+    "ci_low": 0.471173608023319,
+    "ci_high": 0.5635412132242384,
+    "n_test": 345
+  },
+  "reflex.length_plus_face_minus_length": {
+    "value": -0.06899448850651968,
+    "ci_low": -0.10323228417280854,
+    "ci_high": -0.030126385565805405,
+    "n_test": 345
+  },
+  "reflex.face_equal_length_start": {
+    "value": 0.5247264021887825,
+    "ci_low": 0.4734061355311356,
+    "ci_high": 0.5720268370264515,
+    "n_test": 342
+  },
+  "reflex.face_equal_length_end": {
+    "value": 0.5112879096967224,
+    "ci_low": 0.45688073589819034,
+    "ci_high": 0.5608328299733252,
+    "n_test": 343
+  },
+  "reflex_resolve.react_face": {
+    "value": 0.5522489777373921,
+    "ci_low": 0.4398726397022604,
+    "ci_high": 0.6631752084118774,
+    "n_test": 173
+  },
+  "reflex_resolve.face_before_resolution": {
+    "value": 0.5454338936846888,
+    "ci_low": 0.46106546838437606,
+    "ci_high": 0.6336585015740718,
+    "n_test": 173
+  },
+  "reflex_resolve.nonverbal_before_resolution": {
+    "value": 0.6434659090909092,
+    "ci_low": 0.48012508936919107,
+    "ci_high": 0.8434239566613161,
+    "n_test": 104
+  },
+  "reflex_resolve.step_prior": {
+    "value": 0.941163107678328,
+    "ci_low": 0.8860631641086187,
+    "ci_high": 0.9799307265619432,
+    "n_test": 173
+  },
+  "reflex_resolve.step_prior_plus_face_minus_step_prior": {
+    "value": -0.12062698773284852,
+    "ci_low": -0.19283163265306127,
+    "ci_high": -0.059115419112850676,
+    "n_test": 173
+  },
+  "reflex_resolve.nonverbal_shuffled_null": {
+    "mean": 0.5100382653061225,
+    "sd": 0.0625898552983528,
+    "min": 0.3301977040816326,
+    "max": 0.6525829081632653,
+    "seed0": 0.6025191326530612,
+    "true_value": 0.6602359693877551,
+    "true_beats": 50
+  }
+}
