@@ -573,6 +573,15 @@ def test_check_shared_warning_stops_and_normal_returns(tmp_path: Path, monkeypat
     assert "pressure=2" in content
 
 
+def test_log_event_goes_to_tmp_under_pytest():
+    import config
+    import shared.memguard as memguard
+    assert Path(memguard.DATA_ROOT) != Path(config.DATA_ROOT)   # first, so the red run writes nothing
+    memguard.log_event("sr_test_probe", "admit", 0, 1.0, 1)
+    log = Path(memguard.DATA_ROOT) / "runs" / "memguard.log"
+    assert "step=sr_test_probe action=admit" in log.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Slow footprint test
 # ---------------------------------------------------------------------------

@@ -938,6 +938,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Findings:** E2's factual errors; the checker's coincidence rate (L20); E1's recorded-quote, T3, T4, F1 and Appendix B deviations; the Wave D reproduction deleting its designer note (L22); fast tests writing the real memguard log; citations written from memory (L21).
   - **Queued:** A18 → A17 → E1b → E2b.
   - **Design updated:** `06_writeup.md` §3–§8; `01_prior_work.md` (verified bibliographic records); `02_data_sources.md` and `05_wave_b_reflex.md` (REFLEX author order).
+- A18 — Keep the fast tests' memory-guard events out of the real log — git log --grep "(a18)" — autouse `_memguard_log_in_tmp` fixture in `tests/conftest.py` redirects `shared.memguard.DATA_ROOT` to `tmp_path_factory.mktemp("memguard_data_root")` during pytest; `test_log_event_goes_to_tmp_under_pytest` in `tests/test_memguard.py` failed red before the fixture and passes green after; `find "/Volumes/Extreme SSD/social_robotics" -newer <marker> -type f` prints nothing after `battery.sh --slow` and two additional G2 runs; G1–G4 exit 0 (G1 exit 0, G2 133 passed 3/3 in 72.76s / 72.72s / 70.66s, G3 4/4 PASS, G4 11/11 passed in 92.97s).
 
 ---
 
