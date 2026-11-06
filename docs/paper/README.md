@@ -5,6 +5,7 @@ All commands below run from the repository root (`/Users/louisye/Desktop/Louis/s
 ## 0. Environment Setup
 
 ```bash
+export DATA_ROOT="/Volumes/Extreme SSD/social_robotics"
 export HF_HOME="/Volumes/Extreme SSD/huggingface_cache"
 export TMPDIR="/Volumes/Extreme SSD/tmp"
 export SR_NO_MODEL_BANNER=1
@@ -36,7 +37,7 @@ PYTHONPATH=src ./venv/bin/python tools/check_paper_numbers.py docs/paper/draft.m
 
 ## 4. Regenerate Dated Evaluation Reports in Place (`docs/evals/`)
 
-The five commands below regenerate the dated evaluation reports in `docs/evals/` **in place** (preserving each file's trailing `*Designer note*` block per A17). Running `git status --short docs/evals docs/paper` afterward must print nothing:
+The five commands below regenerate the dated evaluation reports in `docs/evals/` **in place** (keeping each file's `## Designer note` section per A17). Running `git status --short docs/evals docs/paper` afterward must print nothing:
 
 ```bash
 # Wave A: Oops! visible-outcome H1 report (docs/evals/2026-10-10_oops_h1.md)
