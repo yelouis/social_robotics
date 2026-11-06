@@ -76,7 +76,7 @@ On data with known outcomes, observer reactions predict the outcome **and add in
   - On **hidden-outcome** data (verdict videos, HoloAssist mistakes), (b) > (a) and (c) > (a).
 - **Pass (proposed; amended October 20, 2026, decision 20; Wave B spec November 1, 2026, decision 28):** on hidden-outcome data, reaction-only AUROC ≥ 0.65 (`react-nonverbal` on HoloAssist; `react-face` on REFLEX, [`05_wave_b_reflex.md`](05_wave_b_reflex.md)) **and** the ablation gain, fusion − `action-fusion` (the same model without the reaction features), ≥ +0.03 with the paired CI excluding 0. Fusion − `action_best` is still reported beside it.
 - **Kill (restated November 1, 2026, decision 28):** if **neither** `reflex` **nor** `reflex_resolve` in Wave B ([`05_wave_b_reflex.md`](05_wave_b_reflex.md) §6) achieves a positive ablation gain (`fusion_minus_action_fusion` `ci_low > 0`) **and** `react-face` fails to beat chance (`ci_low ≤ 0.5`) on both datasets, human facial/postural reactions do not carry usable reward signal on REFLEX; stop and write up the negative result. Wave A's HoloAssist and Oops! results are reported, but never trigger the kill rule on their own.
-  - **Wave B v1 (November 4, 2026): PROCEED** by this rule, through `reflex` `react-face` alone. The designer found that clause to be a window-length artifact (entry 29). What happens next is Issue 12.
+  - **Wave B v1 (November 4, 2026): PROCEED** by this rule, through `reflex` `react-face` alone. The designer found that clause to be a window-length artifact (entry 29). **The maintainer recorded Wave B as negative in substance (Issue 12 = A, entry 30).**
 
 ### H2: Scale and transfer
 A reaction model trained on web video transfers to held-out datasets it never saw, including **reactions to robots** (BAD, ERR@HRI) and **first-person** data (HoloAssist), and improves with more web data.
@@ -115,9 +115,9 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 |---|---|---|
 | **A** (≈ weeks 1–4) | Harness (items, splits, metrics, scorecard), encoders, VLM judge. First H1 numbers on **Oops!** (visible-outcome contrast) and **HoloAssist** (first-person, hidden outcome) | HoloAssist independence check (A4) |
 | **B** (≈ weeks 4–7) | **Multimodal human reactions to a physical robot (`REFLEX`, [`05_wave_b_reflex.md`](05_wave_b_reflex.md))**: immediate reaction to robot failure (`reflex`: `Pre` vs. `Failure`) and hidden-outcome collaborative resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with `react-face` (`reflex-face-v1`, DW2) and `react-nonverbal` (`reflex-speech-v1`) | **Issue 1 & Issue 4** pivoted to REFLEX (November 1, 2026); Wave A & D v1 closed. **v1 done November 4** (entry 29) |
-| **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | Wave B closed **and Issue 12 selected** |
+| **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | **Not selected** (Issue 12 = A, entry 30) |
 | **D** (≈ weeks 7–10, alongside C) | **Robot check (offline H3)**: on RoboReward, does reaction-labeled human task video make a robot success detector more accurate with fewer robot labels? *(v1 completed October 22: NOT SUPPORTED)* | Wave A shows reaction signal on ≥ 1 dataset; spec written by the designer after Wave A |
-| **E** (≈ weeks 11–12) | Paper write-up + Stage A MicroDuck live reaction demo (`DW6`, if hardware ready) | — |
+| **E** (≈ weeks 11–12) | **Paper write-up** ([`06_writeup.md`](06_writeup.md); guide items E1–E2). *The Stage A MicroDuck demo (`DW6`) is paused (entry 30)* | Issue 12 = A (November 5) |
 
 ---
 
@@ -238,6 +238,18 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
       - Details: `05_wave_b_reflex.md` §7.
     - **The verdict stands as recorded.** What to do next (write up, run a corrected v2, or proceed) is **Issue 12**.
 
+**2026-11-05** (maintainer, in chat):
+30. **Issue 12 → A: record Wave B as negative in substance, and write up** (*"Ok lets go with option A (write instructions for it)"*).
+    - **The strong thesis is not supported by the data this project could obtain:**
+      - Oops! ≈ 0;
+      - HoloAssist's voice +0.021, mostly *whether the instructor spoke*;
+      - REFLEX: no reaction gain, and its face signal is a window-length artifact;
+      - Wave D: no transfer gain.
+    - **Wave E, the write-up, is next:** [`06_writeup.md`](06_writeup.md), with guide items E1–E2 after A16 and B4b. The paper reports the result and the traps that produce false positives.
+    - **Not selected:** Wave B v2, Wave C (H2 transfer) and robot transfer (DW7).
+    - **Stage A (DW6) is paused** until a validated reaction reader exists.
+    - **A decisive hidden-outcome test with faces (DW8)** stays available if the maintainer opts in.
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) is resolved. **Open: Issue 12**, what to do after Wave B v1 (entry 29). Wave C (`DW3`), Stage A (`DW6`) and robot transfer (`DW7`) wait on it.
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) and **Issue 12** (after Wave B v1: A, write up; entry 30) are resolved. **No decision is open.** The next decisions come at draft review (`06_writeup.md` §8).

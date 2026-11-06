@@ -1,4 +1,4 @@
-# Agent Execution Guide: Active Build: A16 + B4b (test-fixture timeout; Wave B report correction), then waiting on Issue 12, November 4, 2026
+# Agent Execution Guide: Active Build: A16 → B4b → E1 → E2 (fixture timeout; Wave B report correction; the write-up), November 5, 2026
 
 **You are an engineering agent with no memory of this project.**
 - **What happened:**
@@ -6,14 +6,16 @@
   - **Waves A, D and B are complete and verified by the designer:** A1–A15, D1–D4 and B1–B4, commits `651039b` … `dcb44be` (§5.1).
   - **Wave B (REFLEX) recorded the pre-registered verdict PROCEED,** through one clause: `reflex` `react-face` 0.609 [0.569, 0.644].
     - The designer's verification found that clause to be a **window-length artifact** (`05_wave_b_reflex.md` §7).
-    - What to do next is **Issue 12**, which belongs to the maintainer.
-- **What is approved now, two small fixes, in this order:**
+    - On November 5 the maintainer chose **Issue 12 = A**: Wave B is recorded as negative in substance, and the project moves to **the write-up** (Wave E, [`06_writeup.md`](06_writeup.md); `00_thesis.md` entry 30).
+- **What is approved now, four items, in this order:**
   1. **A16:** bound the `say` audio fixture with a timeout, so the slow tests cannot hang.
   2. **B4b:** make the Wave B report generator compute what it states, regenerate the report, and reproduce the designer's post-hoc diagnostics in code.
+  3. **E1:** the paper's fact base, generated tables and figures, and a checker that rejects any number in the prose that is not in the fact base.
+  4. **E2:** the first full draft of the paper, `docs/paper/draft.md`.
 - **What you must not touch:**
   - any scorecard row, cache, split or item file;
   - the pre-registered verdicts;
-  - anything Issue 12 will decide (§4).
+  - the decisions reserved for the maintainer at draft review (`06_writeup.md` §8).
 
 **Every path, number, field name and literal string in this guide is a decision, not a suggestion. Implement as written; do not substitute your own values.**
 
@@ -34,20 +36,20 @@
      ```
 3. **Dependencies, models and downloads are frozen.** No new pip packages, no new model downloads, no Ollama pulls, and no data downloads.
 4. **Data lives under `DATA_ROOT`** (`/Volumes/Extreme SSD/social_robotics`; exFAT, 1.0 TiB free).
-   - **Neither item writes anything under `DATA_ROOT`.**
+   - **No item writes anything under `DATA_ROOT`.**
    - Never delete anything you did not create.
    - Every glob over the SSD uses `shared.fsutil.data_glob` (L13).
-5. **Memory (`03_eval_harness.md` §12).** Neither item loads a model. Do not run either item while another of this project's model jobs runs. **`gemma4:26b` is shared with another project; never unload it.**
-6. **The scorecard is append-only, and neither item appends to it.** The post-hoc diagnostics are written to `docs/evals/`, never to `results/scorecard.jsonl`.
+5. **Memory (`03_eval_harness.md` §12).** No item loads a model. Do not run an item while another of this project's model jobs runs. **`gemma4:26b` is shared with another project; never unload it.**
+6. **The scorecard is append-only, and no item appends to it.** The post-hoc diagnostics go to `docs/evals/` and the paper's facts to `docs/paper/`, never to `results/scorecard.jsonl`.
 7. **Pre-registered rules and recorded verdicts are never changed.** That covers `05_wave_b_reflex.md` §1–§6 and the PROCEED verdict. The designer's notes sit beside the verdict; they do not replace it.
 8. **Commits:**
-   - one item = one Conventional Commit on `main` (`test(a16): …`, `fix(b4b): …`), with the WHY, the red and green runs, and any missed validation bar in the body (L14);
+   - one item = one Conventional Commit on `main` (`test(a16): …`, `fix(b4b): …`, `feat(e1): …`, `docs(e2): …`), with the WHY, the red and green runs, and any missed validation bar in the body (L14);
    - stage explicit paths only;
    - add the item's line to `docs/ongoing_general_errors.md` §3;
    - push with `/usr/bin/git push origin main`;
    - no branches, no PRs, never amend.
 9. **When a contract and this guide disagree, or a bar cannot be met, STOP and file a new issue** (the next number is **Issue 13**) in `docs/ongoing_general_errors.md`, with options.
-10. **Never fill in a `Your selection: _____` line.** Issue 12 belongs to the maintainer.
+10. **Never fill in a `Your selection: _____` line.** It belongs to the maintainer. No issue is open now.
 
 ---
 
@@ -62,7 +64,7 @@
 
 ### 1.2 Repository
 
-- `HEAD` is `dcb44be` (`feat(b4)`) plus the designer's November 4 docs commit. The working tree is clean.
+- `HEAD` is `dcb44be` (`feat(b4)`), plus the designer's November 4 docs commit `3540ee3` and the November 5 docs commit (Issue 12 = A; `06_writeup.md`). The working tree is clean.
 
 ### 1.3 Data on the SSD (complete; read-only for both items)
 
@@ -99,9 +101,11 @@
 | # | Item | Why this position |
 |---|---|---|
 | 1 | **A16**: a timeout and retries for the `say` fixture | B4b's validation runs the battery. A16 removes the hang that stalled G4 on November 4, so B4b's gates can be trusted to finish |
-| 2 | **B4b**: Wave B report generator computes what it states; post-hoc diagnostics in code | It needs a battery that cannot hang. It also touches only `tools/`, `tests/` and `docs/evals/` |
+| 2 | **B4b**: Wave B report generator computes what it states; post-hoc diagnostics in code | It needs a battery that cannot hang. Its JSON of diagnostics is an input to E1 |
+| 3 | **E1**: fact base, tables, figures, number checker | It reads B4b's JSON and the corrected report. E2 cannot be checked without it |
+| 4 | **E2**: the draft | It pastes E1's tables and figures and must pass E1's checker |
 
-After B4b, the queue is empty (§9).
+After E2, the queue is empty (§9).
 
 ---
 
@@ -190,6 +194,7 @@ After B4b, the queue is empty (§9).
    | `reflex_resolve.nonverbal_before_resolution` | speech window = `meta.wall_action_window_sec` | 0.643 [0.480, 0.843], n_test 104 (16 negatives) |
    | `reflex_resolve.step_prior` | `harness.probes.step_prior_scores` on test items with valid face features | 0.941 [0.886, 0.980] |
    | `reflex_resolve.step_prior_plus_face_minus_step_prior` | LR on `[logit(step-prior LOO train), 153 face dims]` vs the step-prior test scores | −0.121 [−0.193, −0.059] |
+   | `reflex_resolve.nonverbal_shuffled_null` | the 50-seed permutation null of step 1(b) for `react-nonverbal`. **This key alone has the shape** `{"mean", "sd", "min", "max", "seed0", "true_value", "true_beats"}` | mean 0.510, sd 0.063, min 0.330, max 0.653, seed0 0.603; true 0.660 beats 50 |
 
 3. **`tests/test_report_reflex.py`: add fast tests** (synthetic fixtures; no `DATA_ROOT`):
    - **(falsifying)** `test_resolution_tables_are_computed`: build 9 synthetic `reflex_resolve` items (verbs `pick` 3/3, `carry` 2/3, `place` 1/3 resolved; two nouns). Assert that the generated section 3.3 contains `| pick | 3 | 3 | 100.0 |`, `| carry | 2 | 3 | 66.7 |` and `| place | 1 | 3 | 33.3 |`, and that it contains neither `475` nor `Explain column`. *Against today's code this fails: it prints the hard-coded paragraph.*
@@ -221,25 +226,124 @@ After B4b, the queue is empty (§9).
 
 ---
 
+### Item E1: the paper's fact base, generated tables and figures, and a number checker
+
+**What this means for the user:** every number in the paper comes from one file built from the data, and a checker refuses any number in the prose that is not in it. Two earlier reports (A7, B4) shipped numbers nobody had computed (L10). The paper must not.
+
+**The gap:** there is no `docs/paper/`. The numbers live in scorecard rows, reports and design docs, and nothing checks prose against them.
+
+**Read first:** [`06_writeup.md`](06_writeup.md) §4 and §5. Every key, table and figure is defined there.
+
+**Implementation:**
+1. **`tools/build_paper_facts.py`**
+   - **CLI:** `PYTHONPATH=src ./venv/bin/python tools/build_paper_facts.py`. It reads `DATA_ROOT` and `results/scorecard.jsonl` but never writes to them.
+   - **Writes:**
+     - `docs/paper/facts.json`, with exactly two top-level keys, `computed` and `recorded` (`06` §4);
+     - the tables `docs/paper/tables/T1.md` … `T6.md`;
+     - the figures `docs/paper/figures/f1_ablation.png`, `f2_window_length.png`, `f3_wave_d.png` (`06` §5).
+   - **`computed`:**
+     - scorecard rows: for each (dataset, condition), the row with the latest `ts`;
+     - every key of B4b's `docs/evals/2026-11-04_reflex_posthoc.json`;
+     - the dataset and named facts of `06` §4.1 items 3–4;
+     - the verdict strings from `prediction_check`, `prediction_check_hidden`, `prediction_check_reflex` and `evaluate_kill_rule`, imported from the existing `tools/report_*.py`;
+     - the constants of `06` §4.1 item 6.
+   - **`recorded`:** the six entries of `06` §4.2, held in a dict inside the script, each `{"value", "source", "quote"}`.
+     - At run time the script asserts that each `quote` occurs **verbatim** in its source file, so a recorded number cannot drift from its document.
+     - Copy each quote exactly as it appears in the file today.
+2. **`tools/check_paper_numbers.py <draft.md>`**
+   - **(a) Tables first.** For every `<!-- table:Tn -->` … `<!-- /table:Tn -->` block, assert the text between the markers equals `docs/paper/tables/Tn.md` byte for byte. Then drop the block.
+   - **(b) Then drop** fenced code blocks, inline code spans, link targets `(...)` after `]`, image lines, arXiv identifiers matching `\d{4}\.\d{4,5}`, ISO dates `\d{4}-\d{2}-\d{2}`, and written dates matching `(January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}(, \d{4})?`.
+   - **(c) Extract numeric tokens** with `(?<![\w.§])[+−-]?\d[\d,]*(?:\.\d+)?%?(?![\w])`. A fraction like `219/219` yields both numbers.
+     - Exempt only bare four-digit integers from 1990 to 2030 (years).
+   - **(d) A token matches** if its absolute value equals the absolute value of some number in `facts.json`, rounded to the token's decimal places.
+     - Percent tokens are compared both as written and divided by 100.
+     - Commas are removed before comparing.
+   - **(e) Output.** Print `checked=<n> matched=<n> unmatched=<n>`. Exit 1 if any token is unmatched, listing each with its line number and the line's text; otherwise exit 0.
+3. **`tests/test_paper_tools.py`** (fast, synthetic, no `DATA_ROOT`):
+   - **(falsifying)** `test_checker_rejects_invented_number`:
+     - facts `{0.7352, 1208, 0.954}`;
+     - draft `"On November 1, 2026, window length scored 0.735 on 1,208 items (95.4%); see §11.10 and L18, as in 2020; the face scored 0.736."`;
+     - assert exit 1 with exactly one unmatched token, `0.736`.
+   - `test_checker_table_drift`: one character changed inside a table block → exit 1.
+   - `test_recorded_quote_must_exist`: a recorded entry whose quote is absent from its (temporary) source file → `ValueError`.
+   - `test_latest_row_wins`: two scorecard rows for one (dataset, condition) → the facts use the later `ts`.
+
+**Validation:**
+- **The builder exits 0** and writes `facts.json`, T1–T6 and F1–F3.
+- **Expected values (a mismatch is a STOP; file Issue 13):**
+  - `computed` reproduces every value in `06` §4.1 items 3–4 exactly;
+  - `scorecard/reflex/react-face/value` rounds to 0.6085 at 4 dp;
+  - `scorecard/holoassist_audible/fusion_minus_action_fusion` is 0.021 [0.006, 0.034] at 3 dp;
+  - `posthoc/reflex.window_length/value` is 0.735 at 3 dp.
+- **T3's verdict strings match** the corresponding lines in the generated reports in `docs/evals/` (`2026-10-10_oops_h1.md`, `2026-10-15_holoassist_h1.md`, `2026-10-21_holoassist_audible_h1.md`, `2026-11-04_reflex_h1.md`).
+- **Open each figure and confirm:**
+  - **F1:** five intervals; only `holoassist_audible`'s lies entirely right of 0, and none reaches +0.03 with `ci_low > 0`;
+  - **F2:** the original-window interval sits above 0.5, both equal-length intervals cover 0.5, and window length alone is the highest point;
+  - **F3:** four overlapping curves.
+- **The four new tests pass,** and the falsifying one fails against a checker stub that always exits 0.
+- **Battery:** `scripts/battery.sh` bare, with G2 3 times in a row.
+- **Commit:** `feat(e1): paper fact base, generated tables and figures, number checker`.
+
+**Blast radius, all in one commit:**
+- `tools/build_paper_facts.py`, `tools/check_paper_numbers.py`, `tests/test_paper_tools.py`;
+- `docs/paper/facts.json`, `docs/paper/tables/T1.md`–`T6.md`, `docs/paper/figures/*.png`;
+- the `docs/ongoing_general_errors.md` §3 line.
+
+---
+
+### Item E2: the first full draft of the paper
+
+**What this means for the user:** a complete, reviewable draft in which every number is checked, ready for the decisions only the maintainer can make (title, author line, venue, what to release).
+
+**The gap:** no draft exists.
+
+**Read first:** all of [`06_writeup.md`](06_writeup.md). The claims (§2), structure (§3), citations (§6) and style (§7) are decisions, not suggestions.
+
+**Implementation:**
+1. **Write `docs/paper/draft.md`:**
+   - **Structure:** the section order and required content of `06` §3, using only claims C1–C5 and never anything on `06` §2's "must not claim" list.
+   - **Tables:** paste T1–T6 verbatim between their markers.
+   - **Figures:** include F1–F3 with relative paths (`figures/f1_ablation.png`), each with a one-sentence caption that states what the figure shows and its sample sizes.
+   - **Author line:** `[AUTHOR NAME], Independent Researcher`, exactly.
+   - **References:** a list at the end with only the allowed citations (`06` §6).
+     - Use what `01_prior_work.md` gives: authors, venue and year where listed, plus the arXiv identifier.
+     - REFLEX is "Naoum et al., HRI 2025, arXiv:2502.14185".
+     - Where a field is not in the repository, write `[CITATION NEEDED: full reference]` instead of guessing.
+2. **Write `docs/paper/README.md`:** the commands, in order, that rebuild everything the paper cites. These are B4b's diagnostics, E1's builder and checker, and each generator under `tools/report_*.py` with the arguments that produced the dated reports.
+
+**Validation:**
+- **The checker passes:** `PYTHONPATH=src ./venv/bin/python tools/check_paper_numbers.py docs/paper/draft.md` exits 0. Put its `checked=… matched=… unmatched=0` line in the commit body.
+- **The Wave B check passes:** a scripted check that every paragraph containing `PROCEED` also contains `window` (`06` §2). Also check that no sentence calls Wave B "passed" or "supported".
+- **The style check passes:** `grep -niw "novel\|groundbreaking\|remarkabl[ey]"` returns nothing.
+- **Citation markers are counted:** list every `[CITATION NEEDED: …]` marker in the commit body.
+- **Length:** the main text (sections 1–9) is 5,000–7,000 words by `wc -w` on those sections. Report the number.
+- **The rendered draft is checked:** open it and confirm the three figures load and every table renders as a table.
+- **Battery:** `scripts/battery.sh` bare.
+- **Commit:** `docs(e2): first full draft of the write-up`.
+
+**Blast radius:** `docs/paper/draft.md`, `docs/paper/README.md`, and the `docs/ongoing_general_errors.md` §3 line.
+
+---
+
 ## 4. Deferred: do NOT start
 
-**Everything below waits on Issue 12** (`docs/ongoing_general_errors.md`): A, write up; B, Wave B v2; C, proceed as recorded; D, request another dataset.
+**Issue 12 was decided November 5 (A: write up).** Nothing below starts without its trigger.
 
-| Work | Trigger | Who writes the spec |
+| Work | Status / trigger | Who writes the spec |
 |---|---|---|
-| **Wave B v2** (REFLEX with the flaws fixed: equal-length windows plus a window-length row, reactions cut before the resolution, transcripts from `Text`, a fusion that cannot lose to its step prior) | Issue 12 = B | The designer |
-| **Write-up** (negative result plus method lessons) | Issue 12 = A | The designer |
-| **CANDOR request** (hidden outcome, faces) | Issue 12 = D; the maintainer approves the request text | The designer drafts; the maintainer approves before anything is sent |
-| **Wave C: H2 transfer** (DW3) | Issue 12 selects a path that calls for transfer | The designer |
-| **Stage A live MicroDuck demo** (DW6) | Issue 12 selected **and** a validated reaction reader exists (the REFLEX face probes read window length, L18) **and** hardware ready **and** the maintainer opts in | The designer |
-| **Robot transfer, revisited** (DW7) | A reaction gain with `ci_low > 0` on Wave B (**not met by v1**) **and** a spec | The designer |
+| **The maintainer's draft review** (title, author line, venue, release, citations; `06_writeup.md` §8) | After E2 and the designer's verification of it | The maintainer decides; the designer turns it into items |
+| **A decisive hidden-outcome test with faces** (DW8; for example CANDOR, Issue 12's option D) | **Maintainer opt-in only.** Any request is drafted by the designer and approved by the maintainer before it is sent | The designer |
+| **Wave B v2** (REFLEX with the flaws fixed) | **Not selected** (Issue 12 = A) | — |
+| **Wave C: H2 transfer** (DW3) | **Not selected** (Issue 12 = A): no reaction model worth transferring | — |
+| **Robot transfer, revisited** (DW7) | **Not selected** (Issue 12 = A); its trigger, a Wave B reaction gain, was not met | — |
+| **Stage A live MicroDuck demo** (DW6) | **Paused:** needs a validated reaction reader (the REFLEX face probes read window length, L18), hardware, and the maintainer's opt-in | The designer |
 | **Wave D v2** | **Not selected** (Issue 10 = A) | — |
-| **Ego4D false-positive set** (DW4) | Wave C+ | The designer |
+| **Ego4D false-positive set** (DW4) | **Not selected** (it served Wave C) | — |
 
 **The note behind Issue 12, so you do not "fix" it yourself:**
 - A `fail` item's reaction window is longer than a `pre` item's (45.7 vs 35.5 frames), and `reflex-face-v1`'s `max`/`std` features grow with length.
 - Window length alone scores 0.735. With equal-length windows, `react-face` falls to chance.
-- The verdict stays as recorded. Any re-run is a new, pre-registered spec, written only after Issue 12.
+- The verdict stays as recorded. The paper reports both facts together (`06_writeup.md` §2).
 
 ---
 
@@ -289,6 +393,7 @@ After B4b, the queue is empty (§9).
 - **October 23:** Issue 1 → E (the two requests were sent; M4 bounced and M5 got no reply).
 - **November 1:** Wave B moves to **REFLEX** (`00_thesis.md` entry 28). Issues 1 and 4 are resolved by it.
 - **November 2:** Issue 11, wait for the external ComfyUI job rather than stop it.
+- **November 5:** **Issue 12 → A.** Wave B is recorded as negative in substance. The project moves to the write-up (`06_writeup.md`, items E1–E2). Wave B v2, Wave C (DW3) and DW7 are not selected; DW6 is paused.
 
 ### 5.4 Invariants
 
@@ -314,12 +419,13 @@ After B4b, the queue is empty (§9).
 
 | What | Where |
 |---|---|
-| The thesis, H1–H3, the decision log (entries 1–29) | `00_thesis.md` |
+| The thesis, H1–H3, the decision log (entries 1–30) | `00_thesis.md` |
 | Wave B: the REFLEX contract (§1–§6), plus the v1 result and the designer's notes (§7) | `05_wave_b_reflex.md` |
+| **Wave E: the write-up contract** (claims, structure, fact base, tables, figures, citations, style, the maintainer's decisions) | `06_writeup.md` |
 | Scorecard, conditions, judges, guardrails (§11, including §11.10 window-length control and §11.11 action-only inputs), memory guard (§12) | `03_eval_harness.md` |
 | Wave D: the contract and the v1 result (§8) | `04_wave_d_robot_check.md` |
 | Datasets, including REFLEX "As built" | `02_data_sources.md` |
-| Issue 12 (open); Issues 1–11 (resolved); deferred work DW1–DW7; lessons L1–L19 | `ongoing_general_errors.md` |
+| Issues 1–12 (all resolved); deferred work DW1–DW8; lessons L1–L19 | `ongoing_general_errors.md` |
 | Reports | `docs/evals/` |
 | Operations | `LESSONS_v0.md` "Operations"; `tools/README.md` |
 
@@ -338,10 +444,11 @@ After B4b, the queue is empty (§9).
 ## 8. THE LOOP
 
 ```
-For each item in §2 (A16 -> B4b):
+For each item in §2 (A16 -> B4b -> E1 -> E2):
   (1) Read the item in §3, and the sections it names.
   (2) Write the falsifying test first and watch it fail (red); implement (green); falsify each gate.
   (3) Run scripts/battery.sh bare (--slow for A16; G2 3 times with TMPDIR="/Volumes/Extreme SSD/tmp").
+      For E1 and E2, also run tools/check_paper_numbers.py as the item says.
   (4) Add the item's line to docs/ongoing_general_errors.md §3, stage explicit paths,
       commit on main, and push with /usr/bin/git push origin main.
 ```
@@ -352,7 +459,10 @@ For each item in §2 (A16 -> B4b):
 
 - [x] A1–A15, D1–D4 and B1–B4 delivered and verified (§5.1).
 - [x] Battery measured bare on November 4 (§1.4), including G4's hang and clean rerun.
-- [x] Wave B's verdict is recorded, with the designer's notes beside it (`05` §7; the report's designer note), and Issue 12 is filed.
+- [x] Wave B's verdict is recorded, with the designer's notes beside it (`05` §7; the report's designer note).
+- [x] Issue 12 decided (A, November 5): the write-up. Its contract is `06_writeup.md`.
 - [ ] **A16:** the `say` fixture has a 60 s timeout and 3 attempts; G4 shows 11 passed; G2 shows 125 passed 3 times in a row.
 - [ ] **B4b:** section 3.3 is computed; the posthoc JSON matches §3's table; the designer's note is preserved; nothing outside the blast radius changed.
-- [ ] **Then the queue is empty.** The only legitimate triggers for new work are the maintainer's selection on **Issue 12**, followed by the designer's spec, or a new issue the maintainer raises. **Do not invent work.**
+- [ ] **E1:** `facts.json`, T1–T6 and F1–F3 are built and match the expected values; the checker's falsifying test passes.
+- [ ] **E2:** `docs/paper/draft.md` passes the checker with `unmatched=0`, follows `06` §2–§7, and its `[CITATION NEEDED]` markers are listed in the commit body.
+- [ ] **Then the queue is empty.** The only legitimate triggers for new work are the designer's verification of E1–E2, the maintainer's draft-review decisions (`06_writeup.md` §8), or a new issue the maintainer raises. **Do not invent work.**

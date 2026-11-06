@@ -258,3 +258,7 @@ Per `00_thesis.md` (H1, Decision 20, and Decision 28) and `03_eval_harness.md` ย
 - transcripts from `Text`, and `Id` matched after removing all whitespace;
 - a fusion that cannot lose to its own `step-prior` input.
 - The silhouette leak cannot be removed with the released video.
+
+**Decision (November 5, 2026; Issue 12 = A, the maintainer):**
+- **v1 is Wave B's result.** PROCEED stays as the recorded verdict, with these notes beside it, and the write-up reports both together (`06_writeup.md` ยง2).
+- **No v2 is run.** Wave C (H2 transfer) and DW7 are not selected, and Stage A (DW6) is paused until a validated reaction reader exists.

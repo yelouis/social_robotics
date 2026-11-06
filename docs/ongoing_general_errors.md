@@ -10,6 +10,14 @@
 
 ## 1. Open & in-flight
 
+**November 5, 2026: Issue 12 = A; the write-up (Wave E) is specified.**
+- **Decision:** the maintainer chose A in chat (*"Ok lets go with option A (write instructions for it)"*). Wave B is recorded as negative in substance; its PROCEED verdict stays, with the artifact note beside it.
+- **Specified:**
+  - [`06_writeup.md`](06_writeup.md): claims C1–C5 and what must not be claimed, the structure, a fact base with a number checker, tables T1–T6, figures F1–F3, citations and style;
+  - guide items **E1** (fact base, tables, figures, checker) and **E2** (the draft), after **A16** and **B4b**.
+- **Next decisions** come at draft review (`06_writeup.md` §8): title, author line, venue, what to release, citations.
+- **Decisions pending:** none.
+
 **November 4, 2026: designer verification of B1–B4** (each item's code and outputs read against `05_wave_b_reflex.md`; the key numbers recomputed independently from the caches; the battery run bare).
 - **Battery** (on `dcb44be` plus this docs pass, `TMPDIR` on the SSD):
   - G1 exit 0;
@@ -30,7 +38,7 @@
     - 4.4 fps;
     - C3-2's header typo. B1 handled it, and it is an accepted equivalent.
   - **The exported probes lack the `dataset` key** that guide item B2 named. This is an accepted equivalent; the file name carries the dataset.
-- **Decisions pending:** **Issue 12.**
+- **Decisions pending:** Issue 12 (decided A on November 5; see the block above).
 
 **November 1, 2026: Wave B pivoted to REFLEX (`05_wave_b_reflex.md`; items B1–B4 in `agent_execution_guide.md`).**
 - **What happened:** Option E for Issue 1 did not yield access (`M4` `amfed@affectiva.com` bounced; `M5` taste-liking database author did not reply), and `BAD` (Issue 4) requires an institutional IRB. In chat on November 1, 2026, the maintainer approved pivoting Wave B to the open-access **REFLEX** dataset ([Zenodo 14590226](https://zenodo.org/records/14590226), `CC BY 4.0`, 37.22 GB, 55 participants collaborating with a Baxter robot across 604 failure episodes) and instructed: *"Yes, do this but don't actually code up Wave B, we will have an implementation model handle that."*
@@ -161,74 +169,7 @@
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-### Issue 12: Wave B's PROCEED rests on a window-length artifact: write up, re-run, or proceed?
-
-**Status:** ⚠️ Awaiting selection (filed November 4, 2026 by the designer). **Blocks Wave C (DW3), Stage A (DW6) and DW7.**
-
-**Facts (November 4, 2026; the designer's verification of B1–B4; details in `05_wave_b_reflex.md` §7):**
-1. **The build is faithful to the spec.**
-   - 1,812 items' windows were recomputed from the CSVs, with 0 mismatches.
-   - `react-face` was recomputed at 0.608 [0.569, 0.644], and the exported probe reproduces 0.6085.
-2. **The recorded verdict is PROCEED, through one clause:** `reflex` `react-face` `ci_low` 0.569 > 0.5. Every other check failed:
-   - H1's pass bar is not met on either dataset, and neither prediction clause held;
-   - ablation Δ: +0.023 [−0.004, 0.045] on `reflex`, +0.036 [−0.002, 0.078] on `reflex_resolve`.
-3. **That clause is a window-length artifact.**
-   - A `fail` item's reaction window runs up to 22 frames past the failure (45.7 frames on average); a `pre` item's averages 35.5. The face features' `max` and `std` grow with length.
-   - **Window length alone scores 0.735 [0.675, 0.796].** The face features' means alone score 0.515 [0.471, 0.564].
-   - **With equal-length windows, `react-face` scores 0.525 [0.473, 0.572] and 0.511 [0.457, 0.561]:** chance.
-   - Adding the face features to window length lowers AUROC by 0.069 [0.030, 0.103].
-4. **The "action-only" video shows the participant's silhouette** (leaning, turning, a hand to the head). The action-only controls therefore see body reactions too.
-5. **`reflex_resolve` is mostly decided by the step.**
-   - Resolved: `pick` 219/219, `carry` 198/220, `place` 71/165. The step prior alone scores 0.938, and adding face features to it lowers AUROC by 0.121 [0.059, 0.193].
-   - Its reaction window includes the resolution itself. Cut before the resolution, `react-face` scores 0.545 [0.461, 0.634] and `react-nonverbal` 0.643 [0.480, 0.843] (16 negatives).
-6. **The report has wrong text, which item B4b fixes:**
-   - the step-prior paragraph's counts (`475 / 478`, `13 / 126`) are not in the data; they are hard-coded in `tools/report_reflex.py`;
-   - "annotations carry no transcripts" is a spec error: the column is `Text`.
-7. **The leak-check FAIL is a single-seed false alarm.** On `reflex_resolve`, `react-nonverbal:shuffled` = 0.603 [0.507, 0.691], but its 50-seed null averages 0.510 (SD 0.063). The designer reproduced this; it is not a leak.
-8. **For the MicroDuck (DW6):** `reflex_face_probe.npz` mostly reads window length, which a live reader never has. It cannot be the reaction reader.
-9. **Across all waves so far, the only reaction gain that survived is HoloAssist's instructor voice:** +0.021 [0.006, 0.034], mostly *whether they spoke*. Oops! is ≈ 0, and Wave D was not supported.
-
-**Option A: Record Wave B as negative in substance, and write up**
-- PROCEED stays as the recorded verdict, with §7's notes beside it, just as Wave D's notes sit beside its verdict.
-- The designer outlines a write-up with two parts:
-  - **the result:** across Oops!, HoloAssist and REFLEX, observer reactions add little or nothing to action-only models;
-  - **the method lessons:** step names leak labels (L12); window length mimics a reaction (L18); a privacy mask leaks posture (L19); single-seed controls give false alarms (L14).
-- *Pros:*
-  - honest and cheap;
-  - nothing is built on an artifact.
-- *Cons:* pauses the reaction-reward line, and DW6's reaction reader would need a new source.
-
-**Option B: Wave B v2 on REFLEX, pre-registered, with the flaws fixed** (about a day of agent work; no download)
-- **The fixes:**
-  - equal-length reaction windows, plus a window-length control (`03_eval_harness.md` §11.10);
-  - `reflex_resolve` reactions cut before the resolution;
-  - transcripts from `Text`;
-  - a fusion that cannot lose to its own step prior.
-- The kill rule applies to v2.
-- *Pros:* a clean, pre-registered test on the only open robot-reaction dataset.
-- *Cons:*
-  - the designer's diagnostics already applied the two main fixes and found chance (0.511–0.545), so v2 will most likely confirm the null;
-  - the silhouette leak cannot be fixed with the released video.
-
-**Option C: Proceed as recorded (Wave C / DW6)**
-- *Pros:* follows the recorded verdict to the letter.
-- *Cons:* builds transfer and the MicroDuck reader on a probe that reads window length. **Not recommended.**
-
-**Option D: Try one more dataset before deciding: a hidden outcome with faces**
-- **The dataset:** CANDOR, 1,656 video-chat conversations; afterward, each person rated the conversation and their partner.
-- **Access:** a request to BetterUp, plus an emailed request to TalkBank (Issue 1's October 23 research; the terms are not yet read).
-- *Pros:*
-  - the hidden-outcome, face-and-voice test Wave B was first meant to be;
-  - how much someone enjoyed a conversation is close to a social robot's reward.
-- *Cons:*
-  - depends on someone saying yes, as M4 and M5 did not;
-  - weeks of delay, and a new spec.
-
-**Recommendation: A.**
-- Three datasets now point the same way.
-- If you want one more test before writing up, D is the one that could change the answer. B would most likely confirm what the diagnostics already show.
-
-Your selection: _____
+*No open issues (November 5, 2026). Issue 12 was decided A, and the next number is Issue 13.*
 
 ---
 
@@ -678,6 +619,99 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
 
 </details>
 
+12. **Issue 12: Wave B's PROCEED rests on a window-length artifact: write up, re-run, or proceed? (Resolved - November 5, the maintainer chose option A in chat)**:
+   - **Problem**: Wave B's pre-registered verdict was PROCEED, through one clause: `reflex` `react-face` 0.609 [0.569, 0.644].
+     - The designer's verification found that clause to be a window-length artifact. Window length alone scores 0.735, and equal-length windows put the face probe at chance.
+     - The verification also found the participant's silhouette visible in the "action-only" video, and `reflex_resolve`'s outcome set by the step.
+     - Details: `05_wave_b_reflex.md` §7.
+   - **Options:**
+     - **A:** record Wave B as negative in substance and write up;
+     - **B:** a corrected v2 on REFLEX;
+     - **C:** proceed to Wave C and DW6 as recorded;
+     - **D:** request another dataset (CANDOR) first.
+   - **Decision**: **A** (*"Ok lets go with option A (write instructions for it)"*).
+     - **PROCEED stays the recorded verdict,** with §7's notes beside it.
+     - **The project moves to the write-up (Wave E):**
+       - the contract is `06_writeup.md`;
+       - the guide items are E1 (fact base, tables, figures, number checker) and E2 (the draft), after A16 and B4b.
+     - **Not selected:** Wave B v2, Wave C (DW3) and DW7.
+     - **DW6 is paused** until a validated reaction reader exists.
+     - **D becomes DW8,** a maintainer opt-in.
+
+<details><summary>Issue 12 as filed (November 4 – November 5, 2026)</summary>
+
+#### Issue 12: Wave B's PROCEED rests on a window-length artifact: write up, re-run, or proceed?
+
+**Status:** ⚠️ Awaiting selection (filed November 4, 2026 by the designer). **Blocks Wave C (DW3), Stage A (DW6) and DW7.**
+
+**Facts (November 4, 2026; the designer's verification of B1–B4; details in `05_wave_b_reflex.md` §7):**
+1. **The build is faithful to the spec.**
+   - 1,812 items' windows were recomputed from the CSVs, with 0 mismatches.
+   - `react-face` was recomputed at 0.608 [0.569, 0.644], and the exported probe reproduces 0.6085.
+2. **The recorded verdict is PROCEED, through one clause:** `reflex` `react-face` `ci_low` 0.569 > 0.5. Every other check failed:
+   - H1's pass bar is not met on either dataset, and neither prediction clause held;
+   - ablation Δ: +0.023 [−0.004, 0.045] on `reflex`, +0.036 [−0.002, 0.078] on `reflex_resolve`.
+3. **That clause is a window-length artifact.**
+   - A `fail` item's reaction window runs up to 22 frames past the failure (45.7 frames on average); a `pre` item's averages 35.5. The face features' `max` and `std` grow with length.
+   - **Window length alone scores 0.735 [0.675, 0.796].** The face features' means alone score 0.515 [0.471, 0.564].
+   - **With equal-length windows, `react-face` scores 0.525 [0.473, 0.572] and 0.511 [0.457, 0.561]:** chance.
+   - Adding the face features to window length lowers AUROC by 0.069 [0.030, 0.103].
+4. **The "action-only" video shows the participant's silhouette** (leaning, turning, a hand to the head). The action-only controls therefore see body reactions too.
+5. **`reflex_resolve` is mostly decided by the step.**
+   - Resolved: `pick` 219/219, `carry` 198/220, `place` 71/165. The step prior alone scores 0.938, and adding face features to it lowers AUROC by 0.121 [0.059, 0.193].
+   - Its reaction window includes the resolution itself. Cut before the resolution, `react-face` scores 0.545 [0.461, 0.634] and `react-nonverbal` 0.643 [0.480, 0.843] (16 negatives).
+6. **The report has wrong text, which item B4b fixes:**
+   - the step-prior paragraph's counts (`475 / 478`, `13 / 126`) are not in the data; they are hard-coded in `tools/report_reflex.py`;
+   - "annotations carry no transcripts" is a spec error: the column is `Text`.
+7. **The leak-check FAIL is a single-seed false alarm.** On `reflex_resolve`, `react-nonverbal:shuffled` = 0.603 [0.507, 0.691], but its 50-seed null averages 0.510 (SD 0.063). The designer reproduced this; it is not a leak.
+8. **For the MicroDuck (DW6):** `reflex_face_probe.npz` mostly reads window length, which a live reader never has. It cannot be the reaction reader.
+9. **Across all waves so far, the only reaction gain that survived is HoloAssist's instructor voice:** +0.021 [0.006, 0.034], mostly *whether they spoke*. Oops! is ≈ 0, and Wave D was not supported.
+
+**Option A: Record Wave B as negative in substance, and write up**
+- PROCEED stays as the recorded verdict, with §7's notes beside it, just as Wave D's notes sit beside its verdict.
+- The designer outlines a write-up with two parts:
+  - **the result:** across Oops!, HoloAssist and REFLEX, observer reactions add little or nothing to action-only models;
+  - **the method lessons:** step names leak labels (L12); window length mimics a reaction (L18); a privacy mask leaks posture (L19); single-seed controls give false alarms (L14).
+- *Pros:*
+  - honest and cheap;
+  - nothing is built on an artifact.
+- *Cons:* pauses the reaction-reward line, and DW6's reaction reader would need a new source.
+
+**Option B: Wave B v2 on REFLEX, pre-registered, with the flaws fixed** (about a day of agent work; no download)
+- **The fixes:**
+  - equal-length reaction windows, plus a window-length control (`03_eval_harness.md` §11.10);
+  - `reflex_resolve` reactions cut before the resolution;
+  - transcripts from `Text`;
+  - a fusion that cannot lose to its own step prior.
+- The kill rule applies to v2.
+- *Pros:* a clean, pre-registered test on the only open robot-reaction dataset.
+- *Cons:*
+  - the designer's diagnostics already applied the two main fixes and found chance (0.511–0.545), so v2 will most likely confirm the null;
+  - the silhouette leak cannot be fixed with the released video.
+
+**Option C: Proceed as recorded (Wave C / DW6)**
+- *Pros:* follows the recorded verdict to the letter.
+- *Cons:* builds transfer and the MicroDuck reader on a probe that reads window length. **Not recommended.**
+
+**Option D: Try one more dataset before deciding: a hidden outcome with faces**
+- **The dataset:** CANDOR, 1,656 video-chat conversations; afterward, each person rated the conversation and their partner.
+- **Access:** a request to BetterUp, plus an emailed request to TalkBank (Issue 1's October 23 research; the terms are not yet read).
+- *Pros:*
+  - the hidden-outcome, face-and-voice test Wave B was first meant to be;
+  - how much someone enjoyed a conversation is close to a social robot's reward.
+- *Cons:*
+  - depends on someone saying yes, as M4 and M5 did not;
+  - weeks of delay, and a new spec.
+
+**Recommendation: A.**
+- Three datasets now point the same way.
+- If you want one more test before writing up, D is the one that could change the answer. B would most likely confirm what the diagnostics already show.
+
+*(Selection line retired November 5, 2026; the decision is recorded above.)*
+
+
+</details>
+
 ---
 
 ## Maintainer actions (not agent work)
@@ -803,6 +837,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - B3 — REFLEX feature extraction and VLM judge evaluation — git log --grep "(b3)" — reflex (1,208 items): reflex-face-v1 1,173/1,208 (97.10%, 35 honest nulls, 55.19s), reflex-speech-v1 338/1,208 (27.98%, 0.03s), siglip-b16-224-u9 1,207/1,208 (99.92%, 1 seek error, 3,794.85s), qwen2.5vl_7b 1,207/1,208 (train 833/834 [99.88%], test 374/374 [100.0%], 12,068.26s), gemma4_26b test 374/374 (100.0%, 0 errors, 1,350.20s wall / 1,339.09s sum); reflex_resolve (604 items): reflex-face-v1 590/604 (97.68%, 14 honest nulls, 53.98s), reflex-speech-v1 466/604 (77.15%, 0.06s), siglip-b16-224-u9 604/604 (100.0%, 0 errors, 1,933.80s), qwen2.5vl_7b 604/604 (train 417/417 [100.0%], test 187/187 [100.0%], 6,200.09s), gemma4_26b test 187/187 (100.0%, 0 errors, 666.35s wall / 660.77s sum); Issue 11 resolved; G1–G4 exit 0 (G1 exit 0, G2 115 passed 3/3, G3 4/4 PASS, G4 11/11 passed in 205.56s).
 - B4 — Wave B probe evaluation, scorecard rows, MicroDuck face probe verification, report_reflex.py, and Wave B close-out — git log --grep "(b4)" — 40 scorecard rows appended (reflex ts 2026-11-05T05:49:35Z–42Z: react-face 0.609 [0.569, 0.644] [ci_low > 0.5, Kill Rule PROCEED], fusion 0.817 [0.772, 0.857], action-fusion 0.794 [0.744, 0.841], ablation Δ +0.023 [-0.004, 0.045], action-probe 0.730, judge 0.720, judge-large 0.500; reflex_resolve ts 2026-11-05T05:49:45Z–51Z: react-nonverbal 0.660 [0.545, 0.766], react-face 0.552 [0.440, 0.663], fusion 0.749 [0.645, 0.877], action-fusion 0.713 [0.595, 0.859], ablation Δ +0.036 [-0.002, 0.078], step-prior 0.938 [0.883, 0.980], action-probe 0.721); MicroDuck probes transfer/{reflex,reflex_resolve}_face_probe.npz verified to 4 dp (0.6085 and 0.5522); 11/12 shuffled controls pass (ci_low <= 0.5), with reflex_resolve react-nonverbal:shuffled at 0.603 [0.507, 0.691] (L14 50-seed permutation check: mean 0.5100, SD 0.0626, seed 0 at 92nd percentile on 140 test utterances [112 pos, 28 neg], 0 label leakage); report and 20 verified visual example descriptions written to docs/evals/2026-11-04_reflex_h1.md and TSVs; guide closed out to Queue Complete; G1–G4 exit 0 (G1 exit 0, G2 122 passed 3/3, G3 4/4 PASS, G4 11/11 passed in 70.96s).
 - R9 — Designer verification of B1–B4 (November 4, 2026): the implementation matches `05_wave_b_reflex.md`, with 1,812 items' windows recomputed and 0 mismatches. The findings are Issue 12 (the PROCEED clause is a window-length artifact; the silhouette is visible; the outcome follows the step), B4b (the report hard-codes counts that are not in the data), A16 (the `say` fixture hangs with no timeout) and four spec facts. Design updated: `05_wave_b_reflex.md` §7, `02_data_sources.md` REFLEX (as built), `03_eval_harness.md` §11.9–§11.11, `00_thesis.md` entry 29, and lessons L18–L19.
+- R10 — Wave E (the write-up) specified (November 5, 2026), after Issue 12 = A: `06_writeup.md` and guide items E1–E2, queued after A16 and B4b. Design updated: `00_thesis.md` entry 30, `05_wave_b_reflex.md` §7 (decision).
 
 ---
 
@@ -812,8 +847,9 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 |---|---|---|
 | DW1 | **Wave B: REFLEX multimodal human-robot reaction H1 (`reflex`, `reflex_resolve`)** | **Done (B1–B4, November 4, 2026):** pre-registered Kill Rule verdict **PROCEED** (`reflex` `react-face` 0.609 [0.569, 0.644], `ci_low > 0.5`); report at `docs/evals/2026-11-04_reflex_h1.md`. **The designer found that clause to be a window-length artifact** (`05_wave_b_reflex.md` §7). Next: **Issue 12** |
 | DW2 | **Face encoder (`react-face`, `reflex-face-v1`)** | **Done (B2–B4, November 4, 2026):** 153-d `ReflexFaceEncoder` evaluated on `reflex` and `reflex_resolve`, probes exported to `DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`. The encoder works as specified, but its `max`/`std` summaries read window length (L18), so the exported probes are not reaction readers |
-| DW3 | **H2 transfer** across reaction datasets (`reflex`, `reflex_resolve`, `holoassist_audible`) | Wave B (B1–B4) closed **and** Issue 12 selected with a path that calls for transfer |
+| DW3 | **H2 transfer** across reaction datasets (`reflex`, `reflex_resolve`, `holoassist_audible`) | **Not selected** (Issue 12 = A, November 5): there is no reaction model worth transferring |
 | DW4 | Ego4D v0 false-positive set | Wave B+. The raw videos were deleted October 8 (Issue 3); re-download the chosen clip ids from `DELETED_2026-10-08.json` |
 | DW5 | **Wave D, the robot check (offline H3)**: a data-efficiency curve on RoboReward, with vs. without pre-training on reaction-labeled human task video (`00_thesis.md` H3) | **Done (v1, October 22):** pre-registered verdict **NOT SUPPORTED**, accepted as Wave D's result (Issue 10 = A). The follow-up is DW7 |
-| DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor (Pollen Robotics MicroDuck).** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) using the face/reaction probe architecture validated in Wave B (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | Wave B (B1–B4) closed **and** Issue 12 selected **and** a validated reaction reader exists (the REFLEX face probes read window length, L18) **and** hardware ready **and** the maintainer opts in |
-| DW7 | **Robot transfer, revisited (offline H3, a new pre-registered spec).** It uses Wave B's REFLEX reaction model and third-person tabletop robot/human manipulation data (`reflex` → `roboreward`). v1's lessons apply: check a derived pool's class counts per stratum (L15); compare priors at equal norm, and check each head's zero-shot transfer first (L16) | Wave B shows a reaction gain (an ablation gain with `ci_low > 0`) **and** the designer has written the spec (Issue 10 = A). **Not met by Wave B v1** (ablation Δ `ci_low` −0.004 and −0.002) |
+| DW6 | **Stage A live, as a personal demo with the maintainer as the only reactor (Pollen Robotics MicroDuck).** The microduck learns *which of its existing behaviors, and which styles of them, the maintainer likes* from their live reactions. The Mac runs the reaction reader (a webcam on the maintainer, or the duck's front-camera WebRTC stream) using the face/reaction probe architecture validated in Wave B (`DATA_ROOT/transfer/{reflex,reflex_resolve}_face_probe.npz`) and sends choices over the duck's control channel. Measures: trials-to-preference vs. explicit thumbs-up/down, and reaction-reader accuracy against a quick rating after each trial. **Not in scope:** learning motor skills from reactions (that needs millions of trials, in simulation). Facts (October 9, 2026): 15-DoF, 25 cm biped, RK3566 with 1 GB RAM, front camera, 7 shipped moves; new policies are trained in sim with `microduck_rl` (mjlab/MuJoCo Warp, PPO), which **needs a CUDA GPU**, i.e. not this Mac | **Paused** (Issue 12 = A): needs a validated reaction reader (the REFLEX face probes read window length, L18) **and** hardware ready **and** the maintainer's opt-in |
+| DW7 | **Robot transfer, revisited (offline H3, a new pre-registered spec).** It uses Wave B's REFLEX reaction model and third-person tabletop robot/human manipulation data (`reflex` → `roboreward`). v1's lessons apply: check a derived pool's class counts per stratum (L15); compare priors at equal norm, and check each head's zero-shot transfer first (L16) | Wave B shows a reaction gain (an ablation gain with `ci_low > 0`) **and** the designer has written the spec (Issue 10 = A). **Not met by Wave B v1** (ablation Δ `ci_low` −0.004 and −0.002). **Not selected** (Issue 12 = A) |
+| DW8 | **A decisive hidden-outcome test with faces** (Issue 12's option D): for example CANDOR, 1,656 video-chat conversations with each person's private rating afterward. It needs a request to BetterUp and an emailed request to TalkBank | **Maintainer opt-in only.** The designer drafts any request and the maintainer approves it before it is sent |
