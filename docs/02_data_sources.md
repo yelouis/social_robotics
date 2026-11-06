@@ -296,7 +296,7 @@ The VLM judge should be strong here, because the failure is visible. That is the
 
 ## REFLEX: multimodal human reactions to robot failures and explanations (Wave B, added November 1, 2026)
 
-Fifty-five human participants collaborate with a physical Baxter robot on a tabletop object-sorting task across five robot explanation strategies while the robot commits programmed manipulation failures (`Pick`, `Carry`, `Place`) and explains them (Naoum et al., KTH, HRI 2025; arXiv:2502.14185).
+Fifty-five human participants collaborate with a physical Baxter robot on a tabletop object-sorting task across five robot explanation strategies while the robot commits programmed manipulation failures (`Pick`, `Carry`, `Place`) and explains them (paper: Khanna, Naoum et al., KTH, HRI 2025, arXiv:2502.14185; dataset: Naoum and Khanna, Zenodo, v1.1.0. *Corrected November 5, 2026:* earlier text said "Naoum et al., HRI 2025", which mixes the two records; see `01_prior_work.md` "Verified bibliographic records").
 
 **Facts & Archive Schema (verified November 1, 2026 against Zenodo API and `Dataset.zip` central directory):**
 - **Source:** [Zenodo 14590226](https://zenodo.org/records/14590226) (`DOI: 10.5281/zenodo.14590226`, version 1.1.0, March 2, 2025; **CC BY 4.0**).

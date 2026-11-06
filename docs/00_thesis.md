@@ -117,7 +117,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 | **B** (≈ weeks 4–7) | **Multimodal human reactions to a physical robot (`REFLEX`, [`05_wave_b_reflex.md`](05_wave_b_reflex.md))**: immediate reaction to robot failure (`reflex`: `Pre` vs. `Failure`) and hidden-outcome collaborative resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with `react-face` (`reflex-face-v1`, DW2) and `react-nonverbal` (`reflex-speech-v1`) | **Issue 1 & Issue 4** pivoted to REFLEX (November 1, 2026); Wave A & D v1 closed. **v1 done November 4** (entry 29) |
 | **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | **Not selected** (Issue 12 = A, entry 30) |
 | **D** (≈ weeks 7–10, alongside C) | **Robot check (offline H3)**: on RoboReward, does reaction-labeled human task video make a robot success detector more accurate with fewer robot labels? *(v1 completed October 22: NOT SUPPORTED)* | Wave A shows reaction signal on ≥ 1 dataset; spec written by the designer after Wave A |
-| **E** (≈ weeks 11–12) | **Paper write-up** ([`06_writeup.md`](06_writeup.md); guide items E1–E2). *The Stage A MicroDuck demo (`DW6`) is paused (entry 30)* | Issue 12 = A (November 5) |
+| **E** (≈ weeks 11–12) | **Paper write-up** ([`06_writeup.md`](06_writeup.md); guide items E1–E2 delivered November 5; corrections A18, A17, E1b, E2b queued the same day, entry 31). *The Stage A MicroDuck demo (`DW6`) is paused (entry 30)* | Issue 12 = A (November 5) |
 
 ---
 
@@ -250,6 +250,17 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Stage A (DW6) is paused** until a validated reaction reader exists.
     - **A decisive hidden-outcome test with faces (DW8)** stays available if the maintainer opts in.
 
+**2026-11-05** (designer, verification of A16, B4b, E1 and E2):
+31. **The first draft exists, but it is not yet fit for review.** The tooling reproduces byte for byte, and the claims are the right ones, but some of the draft's details are wrong:
+    - invented HoloAssist windows;
+    - "reactions add at most +0.021", although REFLEX's point estimates are larger;
+    - three reference titles and the REFLEX paper's first author are wrong;
+    - the HoloAssist caveats are missing.
+    - **The number checker could not see these** (`ongoing_general_errors.md` L20–L22).
+    - **This entry's correction to the record:** the pass bar was amended on October 20 *after* the Oops! and HoloAssist results (entry 20). The paper says exactly that. Only `holoassist_audible`, Wave D and Wave B ran under rules fixed before their data (`06_writeup.md` §3).
+    - **Corrections queued:** A18, A17, E1b, E2b (`agent_execution_guide.md`).
+    - **The maintainer's draft review waits for E2b and its verification.**
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) and **Issue 12** (after Wave B v1: A, write up; entry 30) are resolved. **No decision is open.** The next decisions come at draft review (`06_writeup.md` §8).
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) and **Issue 12** (after Wave B v1: A, write up; entry 30) are resolved. **No decision is open.** The next decisions come at draft review (`06_writeup.md` §8), after E2b (entry 31).

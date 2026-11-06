@@ -6,7 +6,7 @@
 
 **Why REFLEX replaces Option E (`AM-FED+` / beverage tasting) and `BAD`:**
 - On October 23, 2026, the maintainer selected Issue 1 Option E (`amfed@affectiva.com` and the beverage-tasting database author). Affectiva's address bounced immediately (`550 5.4.1 Recipient address rejected`) and its dataset page is gone; the beverage-tasting author (`M5`) did not reply. Meanwhile, `BAD` (Issue 4) requires an institutional IRB protocol that an unaffiliated researcher cannot obtain.
-- On November 1, 2026, the maintainer approved pivoting Wave B to **REFLEX** (Naoum et al., KTH, HRI 2025; [Zenodo 14590226](https://zenodo.org/records/14590226), DOI `10.5281/zenodo.14590226`, **CC BY 4.0**, open access, 37.22 GB, 55 participants):
+- On November 1, 2026, the maintainer approved pivoting Wave B to **REFLEX** (paper: Khanna, Naoum et al., KTH, HRI 2025, arXiv:2502.14185; dataset: Naoum and Khanna; author order corrected November 5, 2026, see `01_prior_work.md`; [Zenodo 14590226](https://zenodo.org/records/14590226), DOI `10.5281/zenodo.14590226`, **CC BY 4.0**, open access, 37.22 GB, 55 participants):
   1. It requires **no email, EULA signature, YouTube scraping or IRB**.
   2. It provides **facial Action Units, gaze, head rotation/velocity, facial valence/arousal, body posture, and speech prosody** extracted from the unmasked raw recordings before GDPR video anonymization, fulfilling **`DW2` (`react-face`)**.
   3. Its videos (`video_cam1.mp4`) have the **human participant segmented out with a black mask** while the **Baxter robot and tabletop objects remain visible** (`arXiv:2502.14185` §IV-1). Thus the action-only controls (`judge`, `judge-large`, `action-probe`) see the robot's physical action with the human's reactions masked by construction.

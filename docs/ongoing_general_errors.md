@@ -10,6 +10,66 @@
 
 ## 1. Open & in-flight
 
+**November 5, 2026 (evening): designer verification of A16, B4b, E1 and E2** (each diff read against its spec; every generator rerun into a scratch directory and compared byte for byte; the draft audited claim by claim against the scorecard, the design docs, and the arXiv and Zenodo records).
+- **Battery** (bare, on `e470487`, `TMPDIR` on the SSD; `memguard --status`: 57.0 GB available, pressure 1, lock free, no models loaded):
+  - G1 exit 0;
+  - G2 **132 passed** in 3 runs out of 3 (69.01 s, 69.52 s, 69.25 s);
+  - G3 4 PASS;
+  - G4 **11 passed** (79.17 s), with no hang.
+- **Verified:**
+  - **A16:** the `say` helper matches the spec exactly: 60 s timeout, 3 attempts, partial-file cleanup, `RuntimeError` and no skip, with three fast tests.
+  - **B4b:**
+    - all 12 post-hoc diagnostics match the spec's table to 3 dp, with `n_test` exact;
+    - `diag_reflex_posthoc.py` reproduces its JSON byte for byte;
+    - `report_reflex.py` regenerates the report and both TSVs byte for byte;
+    - only §3.3 changed, and the designer note is intact;
+    - the false `475 / 478` text is gone, except where the designer note quotes it.
+  - **E1:**
+    - `facts.json`, T1–T6 and F1–F3 rebuild byte for byte;
+    - every expected dataset and named fact matches, as do `react-face` 0.6085, the audible ablation 0.021 [0.006, 0.034] and window length 0.735;
+    - all 17 T3 verdict strings occur verbatim in their reports;
+    - the four tests pass.
+  - **E2:**
+    - the checker gives `checked=743 matched=743 unmatched=0`;
+    - the abstract is 197 words, and sections 1–9 are 5,938 words by `wc -w` (4,624 without the pasted tables);
+    - all 139 Appendix B rows match the scorecard;
+    - the four reports other than Wave D's regenerate byte for byte from the README's commands.
+- **Found:**
+  - **E2's draft states things the sources do not support:**
+    - **invented HoloAssist windows:** `[max(a_start, a_end − 2.0), a_end]` and `[a_end − 0.5, a_end + 3.0]`, where `02_data_sources.md` and the items say `[start, end]` and `[start, end + 5.0]`;
+    - **"reactions add at most +0.021"**, although the REFLEX gains are +0.023 and +0.036 (with CIs that include 0);
+    - **"every … rule was committed … before test evaluation"**, although the pass bar was amended on October 20 after the Oops! and HoloAssist results. That last error is the designer's: `06` §3 asked for that sentence;
+    - **the missing HoloAssist caveats** (pitch-shifted audio; people may straddle the split);
+    - **"would have exported" the face probes**, which B4 did export;
+    - **a "92%" percentile** that is not in the fact base;
+    - **a TAMER finding** that `01_prior_work.md` does not record;
+    - **three wrong reference titles** (REFLEX, REACT, TOPReward) and **the wrong first author for the REFLEX paper.** That last error is in the repo's own docs (see L21);
+    - **wording past the evidence:** "pure", "dictated", "establish", "beats" with overlapping CIs; the Wave D diagnostics called proof; internal ids (`DW3`, `DW6`, `DW8`) in the text.
+  - **The number checker is too weak to catch these** (L20).
+    - It matches each number against all 474 numbers in the fact base: 211 of 601 possible three-decimal AUROCs and 71 of 101 two-decimal values pass by coincidence. "92%" passed by matching an unrelated fact.
+    - It skips inline code, which is where the invented windows sat, and figure captions.
+    - Those are designer spec gaps, not implementer errors.
+  - **E1 deviations:**
+    - two recorded facts hold numbers that their quotes do not contain (0.015, 0.33, 0.997, cosine 0.00; the values are right, per `04` §8);
+    - T3 pastes filesystem paths and internal ids;
+    - T4 types `n_test` 140;
+    - F1 adds a post-hoc row to reach "five intervals", a count the designer's guide had wrongly expected, and its tick labels overlap;
+    - figure labels type their `n`;
+    - Appendix B is hand-pasted into code blocks that the checker skips.
+  - **The paper's reproduction command for Wave D deletes that report's designer note.** `report_wave_d.py` overwrites the file (L22). `report_reflex.py` also prints "92th".
+  - **Every G2 run appends 8 lines to the real `DATA_ROOT/runs/memguard.log`** (`tests/test_judge.py`). So the bar "no file under `DATA_ROOT` changed" can never pass after a battery run. B4b's commit body does not report that bar.
+- **Accepted:**
+  - E1's two added constants (H3 gain bar 0.02; 20 draws);
+  - E2's length counted with the pasted tables, as the guide literally said;
+  - F3 shows the `truth` curve below the other three rather than "four overlapping curves" (the guide's wording was loose; the figure is right).
+- **Queued:** A18 (tests stop writing the real memguard log) → A17 (report generators keep designer notes; ordinals) → E1b (paragraph-scoped checker; facts, tables and figures fixed) → E2b (the draft corrected).
+- **Design updated:**
+  - `06_writeup.md` §3–§8;
+  - `01_prior_work.md`: a new "Verified bibliographic records" section, fetched from arXiv and Zenodo;
+  - `02_data_sources.md` and `05_wave_b_reflex.md`: REFLEX author order;
+  - lessons L20–L22.
+- **Decisions pending:** none. Nothing here needs the maintainer before draft review.
+
 **November 5, 2026: Issue 12 = A; the write-up (Wave E) is specified.**
 - **Decision:** the maintainer chose A in chat (*"Ok lets go with option A (write instructions for it)"*). Wave B is recorded as negative in substance; its PROCEED verdict stays, with the artifact note beside it.
 - **Specified:**
@@ -169,7 +229,7 @@
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-*No open issues (November 5, 2026). Issue 12 was decided A, and the next number is Issue 13.*
+*No open issues (November 5, 2026, after the designer's verification of A16–E2). Issue 12 was decided A. The corrections (A18, A17, E1b, E2b) are guide items, not decisions. The next number is Issue 13.*
 
 ---
 
@@ -763,6 +823,20 @@ Condensed from [`LESSONS_v0.md`](LESSONS_v0.md). Each is a trap that is live for
   - `max` and `std` features grow with the frame count. So the face probe scored 0.609 while window length alone scored 0.735, and with equal-length windows it fell to chance (0.511–0.525).
   - Equalize windows by design, and report a length-only control beside any window-summary reaction result (`03_eval_harness.md` §11.10).
 - **L19: A privacy mask is not an action-only filter.** REFLEX blacks out the participant but keeps the silhouette, so posture and gestures (leaning, a hand to the head) reach the "action-only" controls. Open frames of each class before calling a channel action-only (§11.11).
+- **L20: A number checker that accepts any value in the fact base accepts most wrong numbers.**
+  - E1's checker matched each prose number against all 474 numbers in `facts.json`. A random three-decimal AUROC between 0.400 and 1.000 passed 211 times in 601; a two-decimal number passed 71 times in 101.
+  - The first draft's "92%" (a percentile not in the facts) passed by matching an unrelated 92.
+  - The checker skipped inline code, where the invented HoloAssist windows sat, and figure captions.
+  - **Tie each paragraph to the facts it uses, and check code spans and captions** (E1b).
+  - **Audit definitions against the contract that defines them:** no checker can tell a wrong window from a right one when both are round numbers.
+- **L21: Bibliographic details written from memory are wrong in small ways.**
+  - The first draft's titles for REFLEX, REACT and TOPReward were close but wrong; one dropped the word "Hidden".
+  - The repo's own docs credited the REFLEX paper to "Naoum et al." The paper's first author is Khanna; Naoum is first only on the Zenodo dataset record.
+  - **Fetch authors, titles and identifiers once from the authoritative source** (the arXiv API, Zenodo), record them in `01_prior_work.md`, and cite only those strings.
+- **L22: A generator that overwrites its output deletes the notes added beside it.**
+  - `tools/report_wave_d.py` rewrites its report whole. Rerunning the paper's documented reproduction command removed the designer's post-hoc note, the note that keeps Wave D from being over-read.
+  - Every generator whose output can carry a hand-written note must keep it (`report_reflex.py` has done so since B4b; A17 shares the rule).
+  - A reproduction recipe is verified by running it in place and seeing `git status` print nothing.
 
 ---
 
@@ -840,8 +914,30 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - R10 — Wave E (the write-up) specified (November 5, 2026), after Issue 12 = A: `06_writeup.md` and guide items E1–E2, queued after A16 and B4b. Design updated: `00_thesis.md` entry 30, `05_wave_b_reflex.md` §7 (decision).
 - A16 — Bound the `say` audio fixture with a timeout and retries — git log --grep "(a16)" — `_say_to_file` helper added to `tests/test_features.py` with `attempts=3`, `timeout_s=60.0` and partial file cleanup on `TimeoutExpired`; 3 fast unit tests (`test_say_helper_passes_timeout`, `test_say_helper_retries_then_succeeds`, `test_say_helper_raises_after_three_timeouts`) pass; G1–G4 exit 0 (G1 exit 0, G2 125 passed 3/3 in 68.85s / 68.08s / 68.01s, G3 4/4 PASS, G4 11/11 passed in 88.56s).
 - B4b — Compute Wave B report notes from data; reproduce designer post-hoc diagnostics — git log --grep "(b4b)" — `tools/report_reflex.py` computes §3.3 resolution tables by `meta.verb` and `Explanation Level` (`meta.noun`) for all and test items, 50-seed permutation null for failing `:shuffled` controls, and constant-judge note (`gemma4_26b` prob=1.0 on 374/374) while preserving the designer note verbatim; `tools/diag_reflex_posthoc.py` reproduces all 12 post-hoc diagnostics in `docs/evals/2026-11-04_reflex_posthoc.json` to 3 dp with exact `n_test`; 10/10 `test_report_reflex.py` pass; G1–G3 exit 0 (G1 exit 0, G2 128 passed 3/3 in 68.18s / 68.24s / 69.83s, G3 4/4 PASS).
+  - *Designer note (November 5):* verified. All 12 values match, and the JSON, report and TSVs reproduce byte for byte. Two remarks:
+    - The bar "no file under `DATA_ROOT` has an mtime after you started" cannot pass after any G2 run, because `tests/test_judge.py` logs to the real `memguard.log`. The commit body omits that bar (L14). **A18** fixes the cause.
+    - The generated line says "92th percentile"; **A17** fixes the ordinal.
 - E1 — Paper fact base, generated tables and figures, number checker — git log --grep "(e1)" — `tools/build_paper_facts.py` builds `docs/paper/facts.json` (`computed` and `recorded` with verbatim quote validation), tables `T1.md`–`T6.md`, and figures `f1_ablation.png`, `f2_window_length.png`, `f3_wave_d.png` reproducing all expected values in `06_writeup.md` §4–§5; `tools/check_paper_numbers.py` enforces byte-for-byte table parity and zero unmatched prose numbers; 4/4 `test_paper_tools.py` pass; G1–G3 exit 0 (G1 exit 0, G2 132 passed 3/3 in 68.58s / 68.51s / 68.61s, G3 4/4 PASS).
+  - *Designer note (November 5):* everything rebuilds byte for byte, and the expected values match. The deviations, all corrected by **E1b**:
+    - recorded values carry numbers that their quotes lack;
+    - T3 holds filesystem paths and internal ids;
+    - T4 types 140;
+    - F1 has an extra post-hoc row (added to meet the guide's wrong "five intervals") and overlapping tick labels;
+    - figure labels type their `n`;
+    - Appendix B is not generated.
+  - The checker matches each number against the whole fact base (L20). That was the designer's spec.
 - E2 — First full draft of the paper (`docs/paper/draft.md`, `docs/paper/README.md`) — git log --grep "(e2)" — complete reviewable write-up following `06_writeup.md` §1–§8 (claims C1–C5, sections 1–9 at 5,938 words by `wc -w`, abstract 197 words, appendices A–D, allowed references + 28 `[CITATION NEEDED: ...]` markers); `tools/check_paper_numbers.py docs/paper/draft.md` exits 0 (`checked=743 matched=743 unmatched=0`); Wave B `PROCEED`/`window` check and style check pass; G1–G3 exit 0 (G1 exit 0, G2 132 passed 3/3 in 68.64s / 70.56s / 70.70s, G3 4/4 PASS).
+  - *Designer correction (November 5):* the checker passes, but the draft has factual errors that the checker could not see:
+    - invented HoloAssist windows; "at most +0.021"; a pre-registration claim contradicted by decision 20;
+    - missing HoloAssist caveats; three wrong reference titles and the REFLEX paper's first author;
+    - wording past the evidence.
+    - The full list is in §1. **E2b** corrects them, and **E1b** makes the checker able to catch this class of error (L20, L21).
+- R11 — Designer verification of A16, B4b, E1 and E2 (November 5, 2026):
+  - **Battery** bare on `e470487`: G1 exit 0; G2 132 passed 3/3; G3 4/4; G4 11 passed.
+  - **A16 and B4b** match their specs. **B4b, E1 and four of five report commands** reproduce byte for byte.
+  - **Findings:** E2's factual errors; the checker's coincidence rate (L20); E1's recorded-quote, T3, T4, F1 and Appendix B deviations; the Wave D reproduction deleting its designer note (L22); fast tests writing the real memguard log; citations written from memory (L21).
+  - **Queued:** A18 → A17 → E1b → E2b.
+  - **Design updated:** `06_writeup.md` §3–§8; `01_prior_work.md` (verified bibliographic records); `02_data_sources.md` and `05_wave_b_reflex.md` (REFLEX author order).
 
 ---
 
