@@ -27,7 +27,7 @@ from harness.items import read_items  # noqa: E402
 from harness.reporting import leak_check_label  # noqa: E402
 from harness.splits import load_split  # noqa: E402
 from tools.check_paper_numbers import NUM_TOKEN_RE, _token_matches_facts  # noqa: E402
-from tools.report_holoassist import prediction_check_hidden  # noqa: E402
+from tools.report_holoassist import compute_task_mix_comparison, prediction_check_hidden  # noqa: E402
 from tools.report_oops import prediction_check  # noqa: E402
 from tools.report_reflex import evaluate_kill_rule, prediction_check_reflex  # noqa: E402
 from tools.report_wave_d import h3_verdict  # noqa: E402
@@ -115,6 +115,17 @@ RECORDED_FACTS: Dict[str, dict] = {
         "quotes": [
             "Over 50 permutation seeds the same control averages 0.496 (SD 0.030), "
             "and 20% of seeds fall below 0.47 (designer, October 21)."
+        ],
+    },
+    "holoassist/pre_amendment_reference": {
+        "value": {
+            "step_prior": {"value": 0.751, "ci_low": 0.726, "ci_high": 0.774},
+            "action_fusion": {"value": 0.682, "ci_low": 0.658, "ci_high": 0.706},
+        },
+        "source": "docs/03_eval_harness.md §6",
+        "quotes": [
+            "`step-prior` **0.751 [0.726, 0.774]**",
+            "`action-fusion` (judge + step-prior + SigLIP) **0.682 [0.658, 0.706]**",
         ],
     },
 }
@@ -610,7 +621,7 @@ def _build_figures(
     ax.set_xticks([-0.05, 0.0, 0.03, 0.05, 0.10])
     ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%.2f"))
     ax.grid(axis="x", linestyle=":", alpha=0.5)
-    ax.legend(loc="lower right", fontsize=8.5, frameon=True)
+    ax.legend(loc="upper left", fontsize=8.5, frameon=True)
     fig.tight_layout()
     fig.savefig(figures_dir / "f1_ablation.png", dpi=150)
     plt.close(fig)
@@ -784,6 +795,7 @@ def build_all_paper_artifacts(
         "face_summary_columns": 50,                   # 05_wave_b_reflex.md §4.1 (the _mean dims)
         "hume_prosody_columns": 48,                   # 05_wave_b_reflex.md §4.2
         "siglip_dims": 768,                           # 03_eval_harness.md §9
+        "grouped_split_train_share": 0.7,             # 03_eval_harness.md §5
     }
 
     computed: Dict[str, Any] = {
@@ -823,6 +835,10 @@ def build_all_paper_artifacts(
     (paper_dir / "facts.json").write_text(json.dumps(facts_obj, indent=2) + "\n", encoding="utf-8")
 
     _build_tables(scorecard, posthoc, ds_facts, pred_checks, paper_dir / "tables")
+    lines = compute_task_mix_comparison(data_root)
+    if not lines:
+        raise RuntimeError(f"B8: HoloAssist items not found under {data_root}")
+    (paper_dir / "tables" / "B8.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     _build_figures(scorecard, posthoc, paper_dir / "figures")
 
     return facts_obj

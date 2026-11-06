@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 import pytest
 
-from tools.build_paper_facts import load_latest_scorecard_rows, t3_cells, validate_recorded_facts
+from tools.build_paper_facts import (
+    RECORDED_FACTS,
+    load_latest_scorecard_rows,
+    t3_cells,
+    validate_recorded_facts,
+)
 from tools.check_paper_numbers import check_draft_numbers
 
 
@@ -128,7 +133,7 @@ def test_checker_scopes_numbers_to_paragraph_tags(tmp_path: Path) -> None:
 
     draft_text = (
         "Oops gained 0.015, not 0.021, over chance 0.5.\n"
-        "<!-- facts: computed/scorecard/oops -->\n"
+        "<!-- facts: computed/scorecard/oops; computed/constants/chance_auroc -->\n"
     )
     draft_path.write_text(draft_text, encoding="utf-8")
 
@@ -136,6 +141,42 @@ def test_checker_scopes_numbers_to_paragraph_tags(tmp_path: Path) -> None:
     assert code == 1
     assert unmatched == ["0.021"]
     assert "0.021" in out_text
+
+
+def test_checker_constants_need_a_tag(tmp_path: Path) -> None:
+    facts_path = tmp_path / "facts.json"
+    tables_dir = tmp_path / "tables"
+    tables_dir.mkdir(parents=True)
+    draft_path = tmp_path / "draft.md"
+
+    facts_data = {
+        "computed": {
+            "constants": {"wave_d_draws_per_budget": 20},
+            "scorecard": {"reflex": {"judge": {"value": 0.72}}},
+        },
+        "recorded": {},
+    }
+    facts_path.write_text(json.dumps(facts_data), encoding="utf-8")
+
+    draft_text = (
+        "We evaluate up to 20 conditions; the judge scored 0.720.\n"
+        "<!-- facts: computed/scorecard/reflex/judge -->\n"
+    )
+    draft_path.write_text(draft_text, encoding="utf-8")
+
+    code, _, unmatched = check_draft_numbers(draft_path, facts_path, tables_dir)
+    assert code == 1
+    assert unmatched == ["20"]
+
+    draft_tagged = (
+        "We evaluate up to 20 conditions; the judge scored 0.720.\n"
+        "<!-- facts: computed/scorecard/reflex/judge; computed/constants/wave_d_draws_per_budget -->\n"
+    )
+    draft_path.write_text(draft_tagged, encoding="utf-8")
+
+    code2, _, unmatched2 = check_draft_numbers(draft_path, facts_path, tables_dir)
+    assert code2 == 0
+    assert unmatched2 == []
 
 
 def test_checker_requires_a_tag(tmp_path: Path) -> None:
@@ -225,7 +266,8 @@ def test_checker_exempts_reference_numbers(tmp_path: Path) -> None:
     facts_path.write_text(json.dumps({"computed": {}, "recorded": {}}), encoding="utf-8")
     draft_text = (
         "Decisions 2, 12, and 13; Issue 12 = A; Figure 2; doi:10.5281/zenodo.14590226; "
-        "ERR@HRI 3.0; CC BY 4.0; `label = 1`; [CITATION NEEDED: Gemma 4 reference].\n"
+        "ERR@HRI 3.0; CC BY 4.0; CC BY-NC-SA 4.0; `label = 1`; [CITATION NEEDED: Gemma 4 reference].\n"
+        "\n## 4 Data\n\n1. First item.\n"
     )
     draft_path.write_text(draft_text, encoding="utf-8")
 
@@ -233,6 +275,12 @@ def test_checker_exempts_reference_numbers(tmp_path: Path) -> None:
     assert code == 0
     assert unmatched == []
     assert "checked=0" in out_text
+
+
+def test_repo_recorded_facts_are_quoted() -> None:
+    assert "holoassist/pre_amendment_reference" in RECORDED_FACTS
+    res = validate_recorded_facts(RECORDED_FACTS)
+    assert res is RECORDED_FACTS
 
 
 def test_recorded_values_must_be_quoted(tmp_path: Path) -> None:

@@ -18,17 +18,17 @@ Reproduces the 12 post-hoc diagnostics in `docs/evals/2026-11-04_reflex_posthoc.
 PYTHONPATH=src ./venv/bin/python tools/diag_reflex_posthoc.py
 ```
 
-## 2. Rebuild Paper Fact Base, Tables (`T1`–`T6`, `B1`–`B7`), and Figures (`F1`–`F3`) (Items E1 & E1b)
+## 2. Rebuild Paper Fact Base, Tables (`T1`–`T6`, `B1.md`–`B8.md`), and Figures (`F1`–`F3`) (Items E1, E1b & E1c)
 
-Writes `docs/paper/facts.json`, `docs/paper/tables/T1.md`–`T6.md`, `docs/paper/tables/B1.md`–`B7.md`, and `docs/paper/figures/{f1_ablation,f2_window_length,f3_wave_d}.png`:
+Writes `docs/paper/facts.json`, `docs/paper/tables/T1.md`–`T6.md`, `docs/paper/tables/B1.md`–`B8.md`, and `docs/paper/figures/{f1_ablation,f2_window_length,f3_wave_d}.png`:
 
 ```bash
 PYTHONPATH=src ./venv/bin/python tools/build_paper_facts.py
 ```
 
-## 3. Verify Paper Draft Numbers and Embedded Tables (Items E1b & E2b)
+## 3. Verify Paper Draft Numbers and Embedded Tables (Items E1b, E2b & E1c)
 
-Verifies that every `<!-- table:Xn -->` block (`T1`–`T6`, `B1`–`B7`) in `docs/paper/draft.md` matches `docs/paper/tables/Xn.md` byte for byte and that every numeric token in prose matches the facts named in its paragraph's `<!-- facts: ... -->` tag (`unmatched=0`):
+Verifies that every `<!-- table:Xn -->` block (`T1`–`T6`, `B1.md`–`B8.md`) in `docs/paper/draft.md` matches `docs/paper/tables/Xn.md` byte for byte and that every numeric token in prose matches the facts named in its paragraph's `<!-- facts: ... -->` tag (`unmatched=0`):
 
 ```bash
 PYTHONPATH=src ./venv/bin/python tools/check_paper_numbers.py docs/paper/draft.md

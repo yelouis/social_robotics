@@ -32,7 +32,7 @@ DOC_REF_RE = re.compile(
 FIG_TABLE_RE = re.compile(r"\b(?:Figure|Table)\s+\d+")
 DOI_RE = re.compile(r"\bdoi:\S+")
 ERR_HRI_RE = re.compile(r"ERR@HRI\s+\d+(?:\.\d+)?")
-CC_BY_RE = re.compile(r"CC\s+BY(?:-NC)?\s+\d+(?:\.\d+)?")
+CC_BY_RE = re.compile(r"CC\s+BY(?:-(?:NC|SA|ND))*\s+\d+(?:\.\d+)?")
 LABEL_EQ_RE = re.compile(r"`?\blabel\s*=\s*[01]\b`?")
 HEADING_NUM_RE = re.compile(r"^(\s*#{1,6}\s+)\d+(?:\.\d+)*\b")
 LIST_NUM_RE = re.compile(r"^(\s*)\d+\.\s+")
@@ -161,9 +161,6 @@ def check_draft_numbers(
 
     facts_obj = json.loads(facts_path.read_text(encoding="utf-8"))
     flat_facts = flatten_facts(facts_obj)
-    const_numbers: Set[float] = {
-        v for k, v in flat_facts.items() if k.startswith("computed/constants/")
-    }
 
     # (c) Split the rest into blocks: maximal runs of non-blank lines
     cleaned_lines = cleaned.splitlines()
@@ -239,7 +236,7 @@ def check_draft_numbers(
         if not prefix_has_error:
             b_tagged += 1
 
-        allowed_numbers: Set[float] = set(const_numbers)
+        allowed_numbers: Set[float] = set()
         for k, v in flat_facts.items():
             if any(k == p or k.startswith(p + "/") for p in prefixes):
                 allowed_numbers.add(v)

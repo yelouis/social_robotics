@@ -1571,7 +1571,8 @@
       "reflex_speech_dims": 96,
       "face_summary_columns": 50,
       "hume_prosody_columns": 48,
-      "siglip_dims": 768
+      "siglip_dims": 768,
+      "grouped_split_train_share": 0.7
     },
     "scorecard/oops/judge": {
       "value": 0.4718,
@@ -3743,7 +3744,8 @@
     "constants/reflex_speech_dims": 96,
     "constants/face_summary_columns": 50,
     "constants/hume_prosody_columns": 48,
-    "constants/siglip_dims": 768
+    "constants/siglip_dims": 768,
+    "constants/grouped_split_train_share": 0.7
   },
   "recorded": {
     "wave_a/audible_strata": {
@@ -3841,6 +3843,25 @@
       "source": "docs/03_eval_harness.md \u00a711.9",
       "quotes": [
         "Over 50 permutation seeds the same control averages 0.496 (SD 0.030), and 20% of seeds fall below 0.47 (designer, October 21)."
+      ]
+    },
+    "holoassist/pre_amendment_reference": {
+      "value": {
+        "step_prior": {
+          "value": 0.751,
+          "ci_low": 0.726,
+          "ci_high": 0.774
+        },
+        "action_fusion": {
+          "value": 0.682,
+          "ci_low": 0.658,
+          "ci_high": 0.706
+        }
+      },
+      "source": "docs/03_eval_harness.md \u00a76",
+      "quotes": [
+        "`step-prior` **0.751 [0.726, 0.774]**",
+        "`action-fusion` (judge + step-prior + SigLIP) **0.682 [0.658, 0.706]**"
       ]
     }
   }
