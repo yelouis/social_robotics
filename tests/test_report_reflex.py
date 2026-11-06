@@ -487,5 +487,9 @@ def test_ordinal():
     assert ordinal(21) == "21st"
     assert ordinal(92) == "92nd"
     assert ordinal(100) == "100th"
+    assert ordinal(22) == "22nd"
+    assert ordinal(101) == "101st"
+    assert ordinal(111) == "111th"
+    assert ordinal(112) == "112th"
 
 

@@ -1109,6 +1109,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
   - **Designer errors corrected:** the `06` §3 timeline, the "A17" mention in `06` §3 row A, and the F1 legend.
   - **Queued:** A17b → E1c → E2c.
   - **Design updated:** `06_writeup.md` §3–§8; lessons L23–L24; `00_thesis.md` entry 32.
+- A17b — Assert the regenerated Wave D heading and the specified ordinals — git log --grep "(a17b)" — added `startswith("# Wave D Robot Check Evaluation Report (2026-10-22)\n")` and `endswith("\n\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n")` in `tests/test_report_wave_d.py` (`test_wave_d_report_keeps_designer_note`) and added `22nd`, `101st`, `111th` and `112th` in `tests/test_report_reflex.py` (`test_ordinal`); both mutations (`pass` replacing `write_text` in `tools/report_wave_d.py`, and `generated.rstrip("\n") + suffix` in `src/harness/reporting.py`) failed on their new assertions and passed after restore; `DATA_ROOT` marker check clean (0 files touched); G1–G3 exit 0 (G1 exit 0, G2 143 passed 3/3 in 78.31s / 72.67s / 73.35s, G3 4/4 PASS).
 
 ---
 

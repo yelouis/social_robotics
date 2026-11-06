@@ -76,5 +76,7 @@ def test_wave_d_report_keeps_designer_note(tmp_path: Path):
 
     generate_wave_d_report(date_str="2026-10-22", scorecard_path=sc, out_path=out)
     text = out.read_text(encoding="utf-8")
+    assert text.startswith("# Wave D Robot Check Evaluation Report (2026-10-22)\n")
+    assert text.endswith("\n\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n")
     assert text.endswith("\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n")
     assert text.count("## Designer note") == 1
