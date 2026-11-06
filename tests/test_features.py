@@ -137,14 +137,71 @@ def test_resumability(tmp_path: Path, monkeypatch):
 # Slow tests (models, audio, video)
 # ---------------------------------------------------------------------------
 
+def _say_to_file(voice: str, out_path: Path, text: str, attempts: int = 3, timeout_s: float = 60.0) -> None:
+    for _ in range(attempts):
+        try:
+            subprocess.run(["say", "-v", voice, "-o", str(out_path), text], check=True, timeout=timeout_s)
+            return
+        except subprocess.TimeoutExpired:
+            if out_path.exists():
+                out_path.unlink()
+    raise RuntimeError(f"say timed out {attempts} times ({timeout_s:.0f} s each) for voice {voice}")
+
+
+def test_say_helper_passes_timeout(monkeypatch, tmp_path: Path):
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append((cmd, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = tmp_path / "sam.aiff"
+    _say_to_file("Samantha", out, "hello")
+    assert len(recorded) == 1
+    cmd, kwargs = recorded[0]
+    assert cmd == ["say", "-v", "Samantha", "-o", str(out), "hello"]
+    assert kwargs.get("timeout") == 60.0
+    assert kwargs.get("check") is True
+
+
+def test_say_helper_retries_then_succeeds(monkeypatch, tmp_path: Path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) <= 2:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 60.0))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = tmp_path / "sam.aiff"
+    _say_to_file("Samantha", out, "hello")
+    assert len(calls) == 3
+
+
+def test_say_helper_raises_after_three_timeouts(monkeypatch, tmp_path: Path):
+    calls = []
+    out = tmp_path / "sam.aiff"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        out.write_bytes(b"partial")
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 60.0))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="say timed out 3 times"):
+        _say_to_file("Samantha", out, "hello")
+    assert len(calls) == 3
+    assert not out.exists()
+
+
 @pytest.fixture(scope="module")
 def audio_fixtures(tmp_path_factory):
     fn_dir = tmp_path_factory.mktemp("audio_data")
     sam_aiff = fn_dir / "sam.aiff"
     dan_aiff = fn_dir / "dan.aiff"
     sentence = "Stop doing that right now, you are making a terrible mistake!"
-    subprocess.run(["say", "-v", "Samantha", "-o", str(sam_aiff), sentence], check=True)
-    subprocess.run(["say", "-v", "Daniel", "-o", str(dan_aiff), sentence], check=True)
+    _say_to_file("Samantha", sam_aiff, sentence)
+    _say_to_file("Daniel", dan_aiff, sentence)
 
     sam_wav = fn_dir / "sam.wav"
     dan_wav = fn_dir / "dan.wav"
