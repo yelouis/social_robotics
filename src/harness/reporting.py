@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -89,3 +90,36 @@ def judge_nondrop_auroc(
 
     res = auroc_ci(labels, scores, groups)
     return (float(res.point), float(res.ci_low), float(res.ci_high), len(kept))
+
+
+def designer_note_suffix(existing_text: str) -> str:
+    """Extract trailing '## Designer note' section and its preceding '---' separator if present."""
+    m = re.search(r"^## Designer note", existing_text, flags=re.MULTILINE)
+    if not m:
+        return ""
+    designer_block = existing_text[m.start() :]
+    prefix_before = existing_text[: m.start()]
+    if prefix_before.endswith("---\n\n"):
+        return "\n---\n\n" + designer_block
+    if prefix_before.endswith("---\n"):
+        return "\n---\n" + designer_block
+    return "\n---\n\n" + designer_block
+
+
+def with_designer_note(generated: str, existing_text: str) -> str:
+    """Append the existing designer note suffix (if any) to generated markdown report text."""
+    suffix = designer_note_suffix(existing_text)
+    if suffix:
+        return generated.rstrip("\n") + "\n" + suffix
+    return generated
+
+
+def ordinal(n: int) -> str:
+    """Format an integer n as an English ordinal ('1st', '2nd', '3rd', '4th', '11th', '92nd', ...)."""
+    val = int(n)
+    abs_val = abs(val)
+    if 11 <= (abs_val % 100) <= 13:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(abs_val % 10, "th")
+    return f"{val}{suf}"

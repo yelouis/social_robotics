@@ -6,6 +6,7 @@ import tempfile
 import numpy as np
 
 from features.face import get_reflex_face_feature_names
+from harness.reporting import designer_note_suffix, ordinal, with_designer_note
 from tools.report_reflex import (
     VERIFIED_EXAMPLE_DESCRIPTIONS,
     evaluate_kill_rule,
@@ -455,5 +456,36 @@ def test_permutation_null_only_for_fail_rows(tmp_path: Path):
     assert sec33.count("50-seed permutation null") == 1
     assert "react-nonverbal:shuffled" in sec33
     assert "react-face:shuffled" not in sec33
+
+
+def test_designer_note_suffix_cases():
+    # (a) no note
+    assert designer_note_suffix("# Report\n\nNo note here.\n") == ""
+    assert with_designer_note("body\n", "# Report\n\nNo note here.\n") == "body\n"
+
+    # (b) note preceded by ---\n\n
+    text_with_hr = "# Old\n\n---\n\n## Designer note (Nov 4)\nhello\n"
+    assert designer_note_suffix(text_with_hr) == "\n---\n\n## Designer note (Nov 4)\nhello\n"
+    combined_b = with_designer_note("body\n", text_with_hr)
+    assert combined_b.split("## Designer note")[0].count("---") <= 1
+
+    # (c) note without ---
+    text_no_hr = "# Old\n\n## Designer note (Nov 4)\nhello\n"
+    assert designer_note_suffix(text_no_hr) == "\n---\n\n## Designer note (Nov 4)\nhello\n"
+    combined_c = with_designer_note("body\n", text_no_hr)
+    assert combined_c.split("## Designer note")[0].count("---") <= 1
+
+
+def test_ordinal():
+    assert ordinal(1) == "1st"
+    assert ordinal(2) == "2nd"
+    assert ordinal(3) == "3rd"
+    assert ordinal(4) == "4th"
+    assert ordinal(11) == "11th"
+    assert ordinal(12) == "12th"
+    assert ordinal(13) == "13th"
+    assert ordinal(21) == "21st"
+    assert ordinal(92) == "92nd"
+    assert ordinal(100) == "100th"
 
 

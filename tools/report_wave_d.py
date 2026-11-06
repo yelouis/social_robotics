@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from harness.reporting import leak_check_label
+from harness.reporting import leak_check_label, with_designer_note
 
 
 def h3_verdict(rows: Dict[str, Any]) -> Tuple[str, str]:
@@ -188,8 +188,12 @@ def generate_wave_d_report(
     lines.append("")
 
     target_path = Path(out_path or f"docs/evals/{today}_wave_d_robot_check.md")
+    existing_text = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    target_path.write_text(
+        with_designer_note("\n".join(lines) + "\n", existing_text),
+        encoding="utf-8",
+    )
     print(f"Generated Wave D report at {target_path}")
 
     return target_path

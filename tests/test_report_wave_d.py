@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
 
-from tools.report_wave_d import h3_verdict
+from tools.report_wave_d import generate_wave_d_report, h3_verdict
 
 
 def test_h3_verdict_supported():
@@ -62,3 +63,18 @@ def test_h3_verdict_below_bar():
     verdict, text = h3_verdict(rows)
     assert verdict == "NOT SUPPORTED"
     assert text == "The gain is real but below the +0.02 bar."
+
+
+def test_wave_d_report_keeps_designer_note(tmp_path: Path):
+    sc = tmp_path / "scorecard.jsonl"
+    sc.write_text("", encoding="utf-8")
+    out = tmp_path / "report.md"
+    out.write_text(
+        "# Old report\n\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n",
+        encoding="utf-8",
+    )
+
+    generate_wave_d_report(date_str="2026-10-22", scorecard_path=sc, out_path=out)
+    text = out.read_text(encoding="utf-8")
+    assert text.endswith("\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n")
+    assert text.count("## Designer note") == 1

@@ -21,7 +21,7 @@ from features.cache import FeatureCache
 from features.face import get_reflex_face_feature_names
 from harness.items import Item, read_items
 from harness.probes import _safe_predict_proba, load_features_for_items
-from harness.reporting import leak_check_label
+from harness.reporting import leak_check_label, ordinal, with_designer_note
 from harness.splits import load_split
 from judge.vlm_judge import DATASET_QUESTIONS, prompt_hash
 from shared.fsutil import data_glob
@@ -617,7 +617,7 @@ def _compute_permutation_null_line(
     return (
         f"- **`{ds_name}` `{cond}` (`{fmt_row(row)}`, `{lk}`) — 50-seed permutation null:** "
         f"mean `{mean_v:.4f}`, SD `{sd_v:.4f}`, min `{min_v:.4f}`, max `{max_v:.4f}`, "
-        f"seed 0 = `{seed0_v:.4f}` ({pct0}th percentile among the 50); "
+        f"seed 0 = `{seed0_v:.4f}` ({ordinal(pct0)} percentile among the 50); "
         f"true-label `{base_cond}` (`{true_str}`) beats `{beats}` of `50`."
     )
 
@@ -997,21 +997,14 @@ def generate_reflex_report(
     md.extend(_sample_and_format_examples("reflex_resolve", data_root, splits_dir, tsv_out=tsv_out_reflex_resolve))
 
     # Preserve designer note if present in existing output_path
-    designer_suffix = ""
-    if output_path.exists():
-        existing_text = output_path.read_text(encoding="utf-8")
-        m_dn = re.search(r"^## Designer note", existing_text, flags=re.MULTILINE)
-        if m_dn:
-            designer_block = existing_text[m_dn.start() :]
-            prefix_before = existing_text[: m_dn.start()]
-            if prefix_before.endswith("---\n\n"):
-                designer_suffix = "\n---\n\n" + designer_block
-            else:
-                designer_suffix = "\n---\n" + designer_block
+    existing_text = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
 
     # Write markdown
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(md) + designer_suffix, encoding="utf-8")
+    output_path.write_text(
+        with_designer_note("\n".join(md), existing_text),
+        encoding="utf-8",
+    )
 
     return output_path
 
