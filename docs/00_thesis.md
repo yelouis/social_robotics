@@ -117,7 +117,7 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
 | **B** (≈ weeks 4–7) | **Multimodal human reactions to a physical robot (`REFLEX`, [`05_wave_b_reflex.md`](05_wave_b_reflex.md))**: immediate reaction to robot failure (`reflex`: `Pre` vs. `Failure`) and hidden-outcome collaborative resolution (`reflex_resolve`: `Failure + Explanation` → `Resolved?`), with `react-face` (`reflex-face-v1`, DW2) and `react-nonverbal` (`reflex-speech-v1`) | **Issue 1 & Issue 4** pivoted to REFLEX (November 1, 2026); Wave A & D v1 closed. **v1 done November 4** (entry 29) |
 | **C** (≈ weeks 7–10) | **H2**: cross-dataset transfer and Stage A MicroDuck preparation (`DW3`, `DW6`) | **Not selected** (Issue 12 = A, entry 30) |
 | **D** (≈ weeks 7–10, alongside C) | **Robot check (offline H3)**: on RoboReward, does reaction-labeled human task video make a robot success detector more accurate with fewer robot labels? *(v1 completed October 22: NOT SUPPORTED)* | Wave A shows reaction signal on ≥ 1 dataset; spec written by the designer after Wave A |
-| **E** (≈ weeks 11–12) | **Paper write-up** ([`06_writeup.md`](06_writeup.md); guide items E1–E2 delivered November 5; corrections A18, A17, E1b, E2b queued the same day, entry 31). *The Stage A MicroDuck demo (`DW6`) is paused (entry 30)* | Issue 12 = A (November 5) |
+| **E** (≈ weeks 11–12) | **Paper write-up** ([`06_writeup.md`](06_writeup.md); guide items E1–E2 delivered November 5; corrections A18, A17, E1b, E2b delivered the same day, entry 31; a third round, A17b, E1c and E2c, queued November 6, entry 32). *The Stage A MicroDuck demo (`DW6`) is paused (entry 30)* | Issue 12 = A (November 5) |
 
 ---
 
@@ -261,6 +261,27 @@ The build is run by an implementing agent from [`agent_execution_guide.md`](agen
     - **Corrections queued:** A18, A17, E1b, E2b (`agent_execution_guide.md`).
     - **The maintainer's draft review waits for E2b and its verification.**
 
+**2026-11-06** (designer, verification of A18, A17, E1b and E2b):
+32. **The corrected draft passes every mechanical check, but it is still not fit for review.**
+    - **Delivered:** A18, A17, E1b and E2b (`d6718bc`, `a2dcec4`, `ee06239`, `8b5aef0`).
+      - The battery passes, and the paper's full reproduction leaves the repository unchanged.
+      - All 27 listed corrections were made.
+    - **A full read against the sources found errors that no list had named:**
+      - an invented judge setting (`SR_NO_AUDIO`);
+      - a misnamed Oops! license;
+      - a reconstructed HoloAssist label definition;
+      - the `reflex_resolve` reaction-window flaw left undisclosed;
+      - prior work credited with results that `01_prior_work.md` does not record;
+      - the pre-amendment numbers taken from the later scorecard row.
+    - **The designer's own correction to the record:** entry 31 said "only `holoassist_audible`, Wave D and Wave B ran under rules fixed before their data". That was too strong:
+      - `holoassist_audible` shares HoloAssist's sessions and split, whose test labels the October 20 amendment used;
+      - that amendment is what made its clause two hold and met Wave D's start condition;
+      - Wave D's rules were written after test-row metadata had been read through the Hugging Face viewer API (`04_wave_d_robot_check.md` §2.1);
+      - Wave B's rules were written after its annotation tables were inspected (`ongoing_general_errors.md` L17).
+      - **What holds:** every later evaluation's rules preceded any of its reaction features and scores. The paper must say exactly this (`06_writeup.md` §3).
+    - **Corrections queued:** A17b, E1c, E2c (`agent_execution_guide.md`).
+    - **The maintainer's draft review waits for E2c and its verification.**
+
 ## Open questions
 
-Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) and **Issue 12** (after Wave B v1: A, write up; entry 30) are resolved. **No decision is open.** The next decisions come at draft review (`06_writeup.md` §8), after E2b (entry 31).
+Tracked as issues in [`ongoing_general_errors.md`](ongoing_general_errors.md): **Issue 1** (Wave B data source) and **Issue 4** (robot-reaction benchmark) are resolved by pivoting to open-access **REFLEX** (`05_wave_b_reflex.md`, November 1, 2026). **Issue 2** (HoloAssist label independence), **Issue 3** (SSD capacity), **Issue 5** (large local judge `judge-large`), **Issues 6 and 7** (`holoassist_audible`, `step-prior`, ablation Δ), **Issue 8** (Wave D spec), **Issue 9** (full RoboReward download), and **Issue 10** (Wave D v1 accepted) are resolved. **Issue 11** (memory contention with an external workload) and **Issue 12** (after Wave B v1: A, write up; entry 30) are resolved. **No decision is open.** The next decisions come at draft review (`06_writeup.md` §8), after E2c (entry 32).
