@@ -7,6 +7,7 @@ import pytest
 from tools.build_paper_facts import (
     RECORDED_FACTS,
     load_latest_scorecard_rows,
+    load_posthoc_v2_into_computed,
     t3_cells,
     validate_recorded_facts,
 )
@@ -308,3 +309,45 @@ def test_t3_cells_drop_paths() -> None:
 
     line2 = '- **Clause 2, "Δ ≈ 0":** ablation Δ 0.015 [-0.001, 0.029] → held'
     assert t3_cells(line2) == ('Clause 2, "Δ ≈ 0"', "ablation Δ 0.015 [-0.001, 0.029]", "held")
+
+
+def test_posthoc_v2_lands_under_computed_posthoc_v2(tmp_path: Path) -> None:
+    v2_path = tmp_path / "posthoc_v2.json"
+    v2_data = {
+        "reflex.v2_action_equal_end": {
+            "value": 0.7356,
+            "ci_low": 0.6908,
+            "ci_high": 0.7871,
+            "n_test": 374,
+        },
+        "reflex.speech_rows_robot_participant": {
+            "value": 622,
+        },
+    }
+    v2_path.write_text(json.dumps(v2_data), encoding="utf-8")
+
+    computed: dict = {}
+    load_posthoc_v2_into_computed(v2_path, computed)
+
+    assert computed["posthoc_v2"] == v2_data
+    assert computed["posthoc_v2/reflex.v2_action_equal_end"] == v2_data["reflex.v2_action_equal_end"]
+    assert computed["posthoc_v2/reflex.v2_action_equal_end/value"] == pytest.approx(0.7356)
+    assert computed["posthoc_v2/reflex.v2_action_equal_end/n_test"] == 374
+    assert computed["posthoc_v2/reflex.speech_rows_robot_participant/value"] == 622
+
+    # Also verify check_draft_numbers resolves computed/posthoc_v2/<key>
+    facts_path = tmp_path / "facts.json"
+    tables_dir = tmp_path / "tables"
+    tables_dir.mkdir(parents=True)
+    draft_path = tmp_path / "draft.md"
+    facts_path.write_text(json.dumps({"computed": computed, "recorded": {}}), encoding="utf-8")
+    draft_path.write_text(
+        "The exploratory score is 0.736 on 374 items, with 622 mixed rows.\n"
+        "<!-- facts: computed/posthoc_v2/reflex.v2_action_equal_end; "
+        "computed/posthoc_v2/reflex.speech_rows_robot_participant -->\n",
+        encoding="utf-8",
+    )
+    code, _, unmatched = check_draft_numbers(draft_path, facts_path, tables_dir)
+    assert code == 0
+    assert unmatched == []
+

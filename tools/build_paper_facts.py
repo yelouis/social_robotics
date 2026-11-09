@@ -732,11 +732,24 @@ def _build_figures(
     plt.close(fig)
 
 
+def load_posthoc_v2_into_computed(posthoc_v2_path: Path, computed: Dict[str, Any]) -> Dict[str, Any]:
+    """Load REFLEX v2 post-hoc diagnostics into computed/posthoc_v2/<key>/<field>."""
+    posthoc_v2 = json.loads(posthoc_v2_path.read_text(encoding="utf-8"))
+    computed["posthoc_v2"] = posthoc_v2
+    for ph_key, ph_dict in posthoc_v2.items():
+        computed[f"posthoc_v2/{ph_key}"] = ph_dict
+        if isinstance(ph_dict, dict):
+            for f_name, f_val in ph_dict.items():
+                computed[f"posthoc_v2/{ph_key}/{f_name}"] = f_val
+    return posthoc_v2
+
+
 def build_all_paper_artifacts(
     data_root: Path,
     scorecard_path: Path = Path("results/scorecard.jsonl"),
     splits_dir: Path = Path("splits"),
     posthoc_path: Path = Path("docs/evals/2026-11-04_reflex_posthoc.json"),
+    posthoc_v2_path: Path = Path("docs/evals/2026-11-08_reflex_v2_posthoc.json"),
     paper_dir: Path = Path("docs/paper"),
     repo_root: Path = REPO_ROOT,
 ) -> Dict[str, Any]:
@@ -820,6 +833,8 @@ def build_all_paper_artifacts(
             for f_name, f_val in ph_dict.items():
                 computed[f"posthoc/{ph_key}/{f_name}"] = f_val
 
+    load_posthoc_v2_into_computed(posthoc_v2_path, computed)
+
     for nf_key, nf_val in named_facts.items():
         computed[nf_key] = nf_val
 
@@ -855,6 +870,7 @@ def main() -> None:
     parser.add_argument("--scorecard", type=Path, default=Path("results/scorecard.jsonl"))
     parser.add_argument("--splits-dir", type=Path, default=Path("splits"))
     parser.add_argument("--posthoc", type=Path, default=Path("docs/evals/2026-11-04_reflex_posthoc.json"))
+    parser.add_argument("--posthoc-v2", type=Path, default=Path("docs/evals/2026-11-08_reflex_v2_posthoc.json"))
     parser.add_argument("--paper-dir", type=Path, default=Path("docs/paper"))
     args = parser.parse_args()
 
@@ -863,6 +879,7 @@ def main() -> None:
         scorecard_path=args.scorecard,
         splits_dir=args.splits_dir,
         posthoc_path=args.posthoc,
+        posthoc_v2_path=args.posthoc_v2,
         paper_dir=args.paper_dir,
     )
     print(f"Built {args.paper_dir / 'facts.json'}, tables T1..T6 & B1..B7, and figures F1..F3")
