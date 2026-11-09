@@ -732,6 +732,9 @@ def _build_figures(
     plt.close(fig)
 
 
+DEFAULT_OPENFACE_GAZE_JSON = REPO_ROOT / "docs" / "evals" / "2026-11-09_reflex_openface_gaze.json"
+
+
 def load_posthoc_v2_into_computed(posthoc_v2_path: Path, computed: Dict[str, Any]) -> Dict[str, Any]:
     """Load REFLEX v2 post-hoc diagnostics into computed/posthoc_v2/<key>/<field>."""
     posthoc_v2 = json.loads(posthoc_v2_path.read_text(encoding="utf-8"))
@@ -744,12 +747,32 @@ def load_posthoc_v2_into_computed(posthoc_v2_path: Path, computed: Dict[str, Any
     return posthoc_v2
 
 
+def load_openface_gaze_into_computed(
+    computed: Dict[str, Any], openface_gaze_json_path: Path
+) -> Dict[str, Any]:
+    """Load confirmatory OpenFace same-phase gaze results into computed/openface_gaze/<key>/<field>."""
+    if isinstance(computed, Path) and isinstance(openface_gaze_json_path, dict):
+        openface_gaze_json_path, computed = computed, openface_gaze_json_path
+    raw = json.loads(openface_gaze_json_path.read_text(encoding="utf-8"))
+    openface_gaze: Dict[str, Any] = {}
+    for og_key, og_dict in raw.items():
+        if og_key.startswith("_") or not isinstance(og_dict, dict):
+            continue
+        openface_gaze[og_key] = og_dict
+        computed[f"openface_gaze/{og_key}"] = og_dict
+        for f_name, f_val in og_dict.items():
+            computed[f"openface_gaze/{og_key}/{f_name}"] = f_val
+    computed["openface_gaze"] = openface_gaze
+    return openface_gaze
+
+
 def build_all_paper_artifacts(
     data_root: Path,
     scorecard_path: Path = Path("results/scorecard.jsonl"),
     splits_dir: Path = Path("splits"),
     posthoc_path: Path = Path("docs/evals/2026-11-04_reflex_posthoc.json"),
     posthoc_v2_path: Path = Path("docs/evals/2026-11-08_reflex_v2_posthoc.json"),
+    openface_gaze_path: Path = DEFAULT_OPENFACE_GAZE_JSON,
     paper_dir: Path = Path("docs/paper"),
     repo_root: Path = REPO_ROOT,
 ) -> Dict[str, Any]:
@@ -834,6 +857,7 @@ def build_all_paper_artifacts(
                 computed[f"posthoc/{ph_key}/{f_name}"] = f_val
 
     load_posthoc_v2_into_computed(posthoc_v2_path, computed)
+    load_openface_gaze_into_computed(computed, openface_gaze_path)
 
     for nf_key, nf_val in named_facts.items():
         computed[nf_key] = nf_val
@@ -871,6 +895,7 @@ def main() -> None:
     parser.add_argument("--splits-dir", type=Path, default=Path("splits"))
     parser.add_argument("--posthoc", type=Path, default=Path("docs/evals/2026-11-04_reflex_posthoc.json"))
     parser.add_argument("--posthoc-v2", type=Path, default=Path("docs/evals/2026-11-08_reflex_v2_posthoc.json"))
+    parser.add_argument("--openface-gaze", type=Path, default=DEFAULT_OPENFACE_GAZE_JSON)
     parser.add_argument("--paper-dir", type=Path, default=Path("docs/paper"))
     args = parser.parse_args()
 
@@ -880,6 +905,7 @@ def main() -> None:
         splits_dir=args.splits_dir,
         posthoc_path=args.posthoc,
         posthoc_v2_path=args.posthoc_v2,
+        openface_gaze_path=args.openface_gaze,
         paper_dir=args.paper_dir,
     )
     print(f"Built {args.paper_dir / 'facts.json'}, tables T1..T6 & B1..B7, and figures F1..F3")

@@ -7,6 +7,7 @@ import pytest
 from tools.build_paper_facts import (
     RECORDED_FACTS,
     load_latest_scorecard_rows,
+    load_openface_gaze_into_computed,
     load_posthoc_v2_into_computed,
     t3_cells,
     validate_recorded_facts,
@@ -350,4 +351,46 @@ def test_posthoc_v2_lands_under_computed_posthoc_v2(tmp_path: Path) -> None:
     code, _, unmatched = check_draft_numbers(draft_path, facts_path, tables_dir)
     assert code == 0
     assert unmatched == []
+
+
+def test_openface_gaze_lands_under_computed_openface_gaze(tmp_path: Path) -> None:
+    of_path = tmp_path / "openface_gaze.json"
+    of_data = {
+        "same_phase.openface_gaze": {
+            "value": 0.7169,
+            "ci_low": 0.6525,
+            "ci_high": 0.7889,
+            "n_test": 157,
+        },
+        "same_phase.n_test_valid_openface_items": {
+            "value": 157,
+        },
+    }
+    of_path.write_text(json.dumps(of_data), encoding="utf-8")
+
+    computed: dict = {}
+    load_openface_gaze_into_computed(computed, of_path)
+
+    assert computed["openface_gaze"] == of_data
+    assert computed["openface_gaze/same_phase.openface_gaze"] == of_data["same_phase.openface_gaze"]
+    assert computed["openface_gaze/same_phase.openface_gaze/value"] == pytest.approx(0.7169)
+    assert computed["openface_gaze/same_phase.openface_gaze/n_test"] == 157
+    assert computed["openface_gaze/same_phase.n_test_valid_openface_items/value"] == 157
+
+    # Also verify check_draft_numbers resolves computed/openface_gaze/<key>
+    facts_path = tmp_path / "facts.json"
+    tables_dir = tmp_path / "tables"
+    tables_dir.mkdir(parents=True)
+    draft_path = tmp_path / "draft.md"
+    facts_path.write_text(json.dumps({"computed": computed, "recorded": {}}), encoding="utf-8")
+    draft_path.write_text(
+        "The confirmatory OpenFace gaze score is 0.717 on 157 valid test items.\n"
+        "<!-- facts: computed/openface_gaze/same_phase.openface_gaze; "
+        "computed/openface_gaze/same_phase.n_test_valid_openface_items -->\n",
+        encoding="utf-8",
+    )
+    code, _, unmatched = check_draft_numbers(draft_path, facts_path, tables_dir)
+    assert code == 0
+    assert unmatched == []
+
 
