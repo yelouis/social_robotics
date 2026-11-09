@@ -10,6 +10,22 @@
 
 ## 1. Open & in-flight
 
+**November 9, 2026: designer verification of A17b, E1c, E2c, B5, E1d, E2d and X1; Issue 13 = C (pre-registered confirmatory OpenFace same-phase gaze test).**
+- **Battery** (bare on `5f74488`, `TMPDIR` on the SSD; `memguard --status`: 57.0 GB available, pressure 1, lock free, no models loaded):
+  - G1: exit 0 (`All checks passed!`).
+  - G2: **149 passed, 12 deselected** in 3 runs out of 3 (72.42 s, 71.85 s, 74.23 s).
+  - G3: 4 PASS.
+  - G4: **12 passed, 149 deselected** (166.35 s).
+  - **The `DATA_ROOT` marker check printed nothing.**
+- **Verified:**
+  - **A17b (`f77a0da`):** `test_wave_d_report_keeps_designer_note` asserts both `startswith("# Wave D Robot Check Evaluation Report (2026-10-22)\n")` and `endswith("\n\n---\n\n## Designer note (October 22, 2026; post hoc)\nkeep me\n")`, and `test_ordinal` tests all 14 values.
+  - **E1c (`43be1b9`) & E2c (`8fa05ef`):** constants count only when named in a block's tag; `CC BY-NC-SA` is exempt; `holoassist/pre_amendment_reference` and `B8.md` are generated and verified; F1's legend is at `upper left`.
+  - **B5 (`7a13f43`), E1d (`f8dcc3b`), E2d (`5f74488`) & X1:** `tools/diag_reflex_v2.py` reproduces all 75 keys of `docs/evals/2026-11-08_reflex_v2_posthoc.json` byte for byte (`delta_ab` copy bug fixed: `reflex_resolve.v2_fusion_minus_action_best` = −0.163 [−0.287, −0.024]); `facts.json` stores all keys under `computed/posthoc_v2/`; `draft.md` discloses the `622 / 1,093` `robot/participant` speech segments (`79%` of `reflex_resolve` speech items; `participant`-only `react-nonverbal` 0.501 [0.309, 0.734] on 66 items) with `checked=849 matched=849 unmatched=0 blocks=45/45`; the git-ignored explainer PDF and 56-item checklist are complete.
+- **Decision (Issue 13 = C, November 9, 2026):**
+  - The maintainer selected **Option C** in chat (*"Proceed with this option"* on Option C): keep Issue 12 = A (exploratory v2 stays in `docs/evals/2026-11-08_reflex_v2_posthoc.json` and `05_wave_b_reflex.md` §7), and run **one pre-registered confirmatory test** (`05_wave_b_reflex.md` §8) comparing successful vs. failed object handlings at the **same physical phase and equal duration** in REFLEX (`275` pairs = `550` items across all 55 participants, `380` train / `170` test) using automatic camera gaze from `openface.csv` (`ReflexOpenFaceGazeEncoder`, 26-d), evaluated once.
+- **Queued:** **B6** (evaluate the pre-registered OpenFace same-phase gaze test) → **E1e** (load `2026-11-09_reflex_openface_gaze.json` into `facts.json`) → **E2e** (report the confirmatory result in `05_wave_b_reflex.md` §8.4 and `docs/paper/draft.md`).
+- **Decisions pending:** none.
+
 **November 6, 2026: designer verification of A18, A17, E1b and E2b.** Method:
 - each diff read against its spec;
 - the battery run bare;
@@ -352,23 +368,7 @@
 
 ## ⚠️ Unresolved Issues & Suggestions
 
-#### Issue 13: After the exploratory REFLEX v2 (November 7–8, 2026), does Issue 12 = A still stand?
-
-**Status:** ⚠️ Awaiting selection (filed November 8, 2026, E2d).
-
-- **Context** (`docs/evals/2026-11-08_reflex_v2_posthoc.json`):
-  - **Exploratory, not pre-registered:** On November 7–8, 2026, the 47 features (`ReflexFaceV2Encoder`), 17 Hume channels, and four window schemes were chosen after about 80 test-set AUROC evaluations on the 17 REFLEX test participants (`reflex` AUROC 0.759 [0.724, 0.795] on `equal_start` and 0.736 [0.691, 0.787] on `action_equal_end`, with paired `fusion_minus_action_fusion` gains of +0.056 [+0.029, +0.083] and +0.068 [+0.040, +0.099]; 40 random 38/17 participant re-splits average 0.763 [0.723, 0.787]).
-  - **The gain comes from the dataset authors' gaze labels, not facial expressions:** On `action_equal_end`, the 9 gaze features from `gaze.csv` (semi-manually validated during failure periods by Khanna et al.) score 0.720 [0.689, 0.752] with a fusion gain of +0.053 [+0.025, +0.084] (robot-gaze share 0.061 in `Pre` vs. 0.128 in `Failure`), whereas the 38 Hume + Facetorch facial features score 0.618 [0.575, 0.664] with a fusion gain of +0.004 [−0.007, +0.017].
-  - **Phase confound in `reflex`:** A no-failure placebo comparing the early half vs. the late half of `Pre` (with no failure anywhere) scores 0.679 [0.631, 0.732] with the same 47 features (0.638 [0.601, 0.677] gaze-only, 0.604 [0.558, 0.653] face-only; applying the `equal_start` probe to the placebo scores 0.390 [0.336, 0.450]), and straddling failure onset drops to 0.598 [0.542, 0.650] (0.600 [0.552, 0.651] gaze-only, 0.495 [0.431, 0.569] face-only).
-  - **`reflex_resolve` 0.696 is a step proxy:** On `reflex_resolve` (`n_test` = 187), v2 on the action window scores 0.696 [0.601, 0.790] (window length alone 0.652 [0.581, 0.723]; `[length + v2] − length` +0.104 [+0.020, +0.189]), but `step-prior` alone scores 0.937 [0.883, 0.980], `[step-prior + v2] − step-prior` is −0.062 [−0.112, −0.005], `fusion` (0.775 [0.668, 0.889]) trails `action_best` (`step-prior`) by −0.163 [−0.287, −0.024], v2 predicts step identity (`pick` 0.852, `place` 0.838, `carry` 0.709), and within `place` (`n_test` = 51) v2 is at chance at 0.505 [0.309, 0.705].
-  - **Speech speaker mix disclosed in E2d:** Across the 55 participants, 622 of the 1,093 `speech.csv` rows matched by v1's §3.4 rule are `robot/participant` rows containing the robot's voice (present in 367 of 466 = 78.8% of `reflex_resolve` speech items); restricted to `participant` rows alone (471 rows), v1's `react-nonverbal` on `reflex_resolve` drops from 0.660 [0.545, 0.766] (140 items) to 0.501 [0.309, 0.734] (66 items).
-- **Options:**
-  - **A.** Keep Issue 12 = A. v2 stays an exploratory diagnostic in `docs/evals` and `05` §7; the paper changes only by the speech disclosure.
-  - **B.** A, plus a short exploratory section on observer gaze in the paper, specified first by the designer in `06_writeup.md`.
-  - **C.** A, plus a confirmatory test pre-registered by the designer before any new feature is extracted: successful versus failed object handlings at the same phase in REFLEX, with gaze computed automatically from OpenFace angles instead of the dataset's gaze labels, evaluated once.
-  - **D.** B and C.
-
-Your selection: _____
+*(No unresolved issues.)*
 
 ---
 
@@ -911,6 +911,44 @@ Resolved issues keep their numbers. The full evidence now lives in the design do
 
 </details>
 
+13. **Issue 13: After the exploratory REFLEX v2 (November 7–8, 2026), does Issue 12 = A still stand? (Resolved - November 9, the maintainer chose option C in chat)**:
+   - **Problem**:
+     - The November 7–8 exploratory REFLEX v2 (`ReflexFaceV2Encoder`, 47 features, chosen after ~80 test-set evaluations on the 17 test participants) reproduced `0.736 [0.691, 0.787]` on `action_equal_end` (`+0.068 [+0.040, +0.099]` over `action-fusion`), but the independent review and B5 (`docs/evals/2026-11-08_reflex_v2_posthoc.json`) showed that:
+       1. the gain comes from the dataset authors' semi-manual `gaze.csv` labels (`+0.053 [+0.025, +0.084]`), not facial expressions (`+0.004 [−0.007, +0.017]`);
+       2. within-episode `Pre` vs. `Failure` has a phase confound (`placebo_early_vs_late_pre` = `0.679 [0.631, 0.732]`; onset straddle = `0.598 [0.542, 0.650]`);
+       3. `reflex_resolve` `0.696` is a step proxy (`step-prior` = `0.937 [0.883, 0.980]`, `[step-prior + v2] − step-prior` = `−0.062 [−0.112, −0.005]`, `within_place` = `0.505 [0.309, 0.705]`);
+       4. `speech.csv` `robot/participant` rows (`622 / 1,093`) contain the robot's voice (`79%` of `reflex_resolve` speech items; `participant`-only `react-nonverbal` = `0.501 [0.309, 0.734]` on 66 items).
+   - **Options:**
+     - **A:** keep Issue 12 = A; v2 stays an exploratory diagnostic in `docs/evals` and `05` §7; the paper changes only by the speech disclosure;
+     - **B:** A, plus a short exploratory section on observer gaze in the paper;
+     - **C:** A, plus a confirmatory test pre-registered by the designer before any new feature is extracted: successful versus failed object handlings at the same phase in REFLEX, with gaze computed automatically from OpenFace angles instead of the dataset's gaze labels, evaluated once;
+     - **D:** B and C.
+   - **Decision**: **C** (*"Proceed with this option"* on Option C, November 9, 2026).
+     - **Issue 12 = A stands**, and exploratory v2 stays in `docs/evals/2026-11-08_reflex_v2_posthoc.json` and `05_wave_b_reflex.md` §7.
+     - **Pre-registered confirmatory test (`05_wave_b_reflex.md` §8):** 5 phase-matched pairs per participant (`275` pairs = `550` items across all 55 participants: `380` train, `170` test in `splits/reflex.json`, matching `Pick` and `Carry` phases at equal duration `K`) evaluated once with automatic OpenFace eye-gaze angles/vectors (`ReflexOpenFaceGazeEncoder`, 26-d on `openface.csv`), queued as **B6 → E1e → E2e** in `agent_execution_guide.md`.
+
+<details><summary>Issue 13 as filed (November 8 – November 9, 2026)</summary>
+
+#### Issue 13: After the exploratory REFLEX v2 (November 7–8, 2026), does Issue 12 = A still stand?
+
+**Status:** ✅ **Decided by the maintainer, November 9, 2026: C** (recorded above).
+
+- **Context** (`docs/evals/2026-11-08_reflex_v2_posthoc.json`):
+  - **Exploratory, not pre-registered:** On November 7–8, 2026, the 47 features (`ReflexFaceV2Encoder`), 17 Hume channels, and four window schemes were chosen after about 80 test-set AUROC evaluations on the 17 REFLEX test participants (`reflex` AUROC 0.759 [0.724, 0.795] on `equal_start` and 0.736 [0.691, 0.787] on `action_equal_end`, with paired `fusion_minus_action_fusion` gains of +0.056 [+0.029, +0.083] and +0.068 [+0.040, +0.099]; 40 random 38/17 participant re-splits average 0.763 [0.723, 0.787]).
+  - **The gain comes from the dataset authors' gaze labels, not facial expressions:** On `action_equal_end`, the 9 gaze features from `gaze.csv` (semi-manually validated during failure periods by Khanna et al.) score 0.720 [0.689, 0.752] with a fusion gain of +0.053 [+0.025, +0.084] (robot-gaze share 0.061 in `Pre` vs. 0.128 in `Failure`), whereas the 38 Hume + Facetorch facial features score 0.618 [0.575, 0.664] with a fusion gain of +0.004 [−0.007, +0.017].
+  - **Phase confound in `reflex`:** A no-failure placebo comparing the early half vs. the late half of `Pre` (with no failure anywhere) scores 0.679 [0.631, 0.732] with the same 47 features (0.638 [0.601, 0.677] gaze-only, 0.604 [0.558, 0.653] face-only; applying the `equal_start` probe to the placebo scores 0.390 [0.336, 0.450]), and straddling failure onset drops to 0.598 [0.542, 0.650] (0.600 [0.552, 0.651] gaze-only, 0.495 [0.431, 0.569] face-only).
+  - **`reflex_resolve` 0.696 is a step proxy:** On `reflex_resolve` (`n_test` = 187), v2 on the action window scores 0.696 [0.601, 0.790] (window length alone 0.652 [0.581, 0.723]; `[length + v2] − length` +0.104 [+0.020, +0.189]), but `step-prior` alone scores 0.937 [0.883, 0.980], `[step-prior + v2] − step-prior` is −0.062 [−0.112, −0.005], `fusion` (0.775 [0.668, 0.889]) trails `action_best` (`step-prior`) by −0.163 [−0.287, −0.024], v2 predicts step identity (`pick` 0.852, `place` 0.838, `carry` 0.709), and within `place` (`n_test` = 51) v2 is at chance at 0.505 [0.309, 0.705].
+  - **Speech speaker mix disclosed in E2d:** Across the 55 participants, 622 of the 1,093 `speech.csv` rows matched by v1's §3.4 rule are `robot/participant` rows containing the robot's voice (present in 367 of 466 = 78.8% of `reflex_resolve` speech items); restricted to `participant` rows alone (471 rows), v1's `react-nonverbal` on `reflex_resolve` drops from 0.660 [0.545, 0.766] (140 items) to 0.501 [0.309, 0.734] (66 items).
+- **Options:**
+  - **A.** Keep Issue 12 = A. v2 stays an exploratory diagnostic in `docs/evals` and `05` §7; the paper changes only by the speech disclosure.
+  - **B.** A, plus a short exploratory section on observer gaze in the paper, specified first by the designer in `06_writeup.md`.
+  - **C.** A, plus a confirmatory test pre-registered by the designer before any new feature is extracted: successful versus failed object handlings at the same phase in REFLEX, with gaze computed automatically from OpenFace angles instead of the dataset's gaze labels, evaluated once.
+  - **D.** B and C.
+
+*(Selection line retired November 9, 2026; the decision is recorded above.)*
+
+</details>
+
 ---
 
 ## Maintainer actions (not agent work)
@@ -1131,6 +1169,7 @@ One line per delivered item: `<id> — <title> — git log --grep "(<id>)" — <
 - B5 — Record REFLEX v2 as exploratory post-hoc diagnostics with the review's falsification checks — git log --grep "(b5)" — `tools/diag_reflex_v2.py` ports `ReflexFaceV2Encoder` (47 features), four window schemes (`equal_start` 0.759, `action_equal_end` 0.736, `equal_end` 0.695, `orig` 0.722), gaze-only vs face-only ablations (`action_equal_end` gaze +0.053 [0.025, 0.084] vs face +0.004 [-0.007, 0.017]), early-vs-late Pre placebo (0.679 [0.631, 0.732]), onset straddle (0.598 / 0.600 / 0.495), 40-split sensitivity (mean 0.763 [0.723, 0.787]), robot-gaze shares (0.061 pre vs 0.128 fail), `reflex_resolve` step-proxy checks (`step-prior` 0.937, `[step-prior+v2]-step-prior` -0.062, `fusion_minus_action_best` -0.163 [-0.287, -0.024] fixing the `delta_ab` copy bug, `within_place` 0.505 [0.309, 0.705]), and speech mix checks (622/1,093 `robot/participant` rows, 367/466 = 78.8% of `reflex_resolve` speech items, `participant`-only `react-nonverbal` 0.501 [0.309, 0.734] on 66 items, before-resolution null with 2 unresolved test items) into byte-identical `docs/evals/2026-11-08_reflex_v2_posthoc.json`; 4/4 `test_diag_reflex_v2.py` (3 fast, 1 slow) failed red first and pass green; `DATA_ROOT` marker check clean (0 files touched); G1–G4 exit 0 (G1 exit 0, G2 148 passed 3/3 in 74.04s / 73.48s / 74.84s, G3 4/4 PASS, G4 12/12 passed in 167.48s).
 - E1d — Load the REFLEX v2 post-hoc diagnostics into the paper fact base — git log --grep "(e1d)" — `tools/build_paper_facts.py` adds `--posthoc-v2` (default `docs/evals/2026-11-08_reflex_v2_posthoc.json`) and `load_posthoc_v2_into_computed` storing all keys under `computed/posthoc_v2/<key>/<field>`; `test_posthoc_v2_lands_under_computed_posthoc_v2` failed red before and all 14/14 `test_paper_tools.py` pass green; rebuilt `docs/paper/facts.json` (`git status --short docs/paper` lists only `facts.json`; all 934 pre-existing `computed` keys and `recorded` unchanged; 548 `posthoc_v2` keys added); `tools/check_paper_numbers.py docs/paper/draft.md` exits 0 (`checked=839 matched=839 unmatched=0 blocks=45/45`); `DATA_ROOT` marker check clean (0 files touched); G1–G3 exit 0 (G1 exit 0, G2 149 passed 3/3 in 71.89s / 71.48s / 73.05s, G3 4/4 PASS).
 - E2d — Disclose that REFLEX speech segments include the robot's voice; record v2 as exploratory; file the decision issue — git log --grep "(e2d)" — disclosed the 622/1,093 `robot/participant` speech segments (79% of `reflex_resolve` speech items) and `participant`-only `react-nonverbal` 0.501 [0.309, 0.734] (66 items; exploratory) in `docs/paper/draft.md` (§4, Claim C3, §7.2, §8), `docs/05_wave_b_reflex.md` §7 (flaw 6 + exploratory v2 note), and `docs/02_data_sources.md` (`speech.csv`), and filed Issue 13 in `docs/ongoing_general_errors.md`; `tools/check_paper_numbers.py docs/paper/draft.md` exits 0 (`checked=849 matched=849 unmatched=0 blocks=45/45`); E2b/E2c string checks and banned-string checks (`reflex-face-v2`, `pre-registered pass`, `breakthrough`) pass; `docs/paper/README.md` steps 1–4 verified in place (`git status --short docs/evals docs/paper` clean after staging `draft.md`); `DATA_ROOT` marker check clean (0 files touched); G1–G3 exit 0 (G1 exit 0, G2 149 passed 3/3 in 73.51s / 71.54s / 71.46s, G3 4/4 PASS).
+- R13 — Designer verification of A17b–E2d; Issue 13 = C; pre-registration of the confirmatory OpenFace same-phase gaze test (November 9, 2026) — git log --grep "(r13)" — Battery bare on `5f74488`: G1 exit 0, G2 149 passed 3/3 (72.42s / 71.85s / 74.23s), G3 4/4 PASS, G4 12 passed (166.35s), `DATA_ROOT` marker check clean; Issue 13 resolved as Option C; `05_wave_b_reflex.md` §8 pre-registered (`ReflexOpenFaceGazeEncoder` 26-d on `openface.csv`, 5 phase-matched pairs per participant = 275 pairs / 550 items [380 train, 170 test], before any OpenFace gaze feature extraction); `06_writeup.md` and `00_thesis.md` entry 33 updated; `agent_execution_guide.md` queued `B6 → E1e → E2e`.
 
 ---
 

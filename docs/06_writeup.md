@@ -28,7 +28,7 @@
 |---|---|---|
 | **C1** | On a visible-outcome dataset (Oops!), reactions add nothing measurable to an action-only model | `oops` ablation Δ and its CI; `action-probe`; `judge-large` |
 | **C2** | On a hidden-outcome dataset (HoloAssist), the instructor's voice adds a small amount, only where the instructor is audible. Most of it is whether they spoke | `holoassist_audible` ablation Δ; `react-nonverbal`; `react-spoke`; the recorded audible strata |
-| **C3** | With people reacting to a physical robot (REFLEX), no reaction channel adds to action-only models. The face signal that passed the pre-registered rule is explained by window length | `reflex` and `reflex_resolve` ablation Δ; `react-face`; the B4b post-hoc diagnostics |
+| **C3** | With people reacting to a physical robot (REFLEX), no reaction channel adds to action-only models. The face signal that passed the pre-registered rule is explained by window length, `reflex_resolve` speech mixes in the robot's voice, and the pre-registered confirmatory test of automatic OpenFace gaze on phase-matched object handlings (`05` §8) is reported alongside the exploratory v2 gaze/phase checks | `reflex` and `reflex_resolve` ablation Δ; `react-face`; the B4b, B5 (`posthoc_v2`), and B6 (`openface_gaze`) JSONs |
 | **C4** | Reaction-labeled human video did not make a robot success detector more accurate with fewer labels (RoboReward) | the `roboreward` gain rows at every N; `react_minus_shuffled`; the recorded Wave D diagnostics |
 | **C5** | Five traps, each with evidence: annotation text leaks labels; window length mimics reactions; privacy masks leak posture; single-seed shuffled controls give false alarms; a fusion model can lose to its own strongest input | the HoloAssist `step-prior` and verb `drop` rate; the REFLEX diagnostics; the leak-check rows and the 50-seed nulls; `fusion_minus_action_best` |
 
@@ -82,7 +82,7 @@
 1. **Scorecard rows.** For each (dataset, condition), take the row with the latest `ts` and store `value`, `ci_low`, `ci_high`, `n_items` and `n_groups` under `scorecard/<dataset>/<condition>/<field>`.
    - **H1 datasets:** `oops`, `holoassist`, `holoassist_audible`, `reflex`, `reflex_resolve`; all their conditions.
    - **`roboreward`:** all 44 rows. **`holoassist_pool`:** both rows.
-2. **The B4b post-hoc diagnostics.** Every key of `docs/evals/2026-11-04_reflex_posthoc.json`, under `posthoc/<key>/<field>`.
+2. **The B4b, B5, and B6 REFLEX diagnostics and confirmatory OpenFace gaze JSONs.** Every key of `docs/evals/2026-11-04_reflex_posthoc.json` under `posthoc/<key>/<field>`, every key of `docs/evals/2026-11-08_reflex_v2_posthoc.json` under `posthoc_v2/<key>/<field>` (`--posthoc-v2`, added by E1d), and every key of `docs/evals/2026-11-09_reflex_openface_gaze.json` under `openface_gaze/<key>/<field>` (`--openface-gaze`, added by E1e).
 3. **Dataset facts,** from `items.jsonl` and the split files. Expected values:
 
    | Dataset | Items | Train (groups, positives) | Test (groups, positives) |

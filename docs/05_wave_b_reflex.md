@@ -275,3 +275,91 @@ Per `00_thesis.md` (H1, Decision 20, and Decision 28) and `03_eval_harness.md` �
 - **`reflex_resolve` step-proxy checks:** On `reflex_resolve` (`[Failure.Start, Explanation.End]`, `n_test` = 187), v2 scores 0.696 [0.601, 0.790] (window length alone 0.652 [0.581, 0.723]; `[length + v2] − length` +0.104 [+0.020, +0.189]; last 10 frames 0.658 [0.560, 0.754]; last 20 frames 0.661 [0.575, 0.749]), but `step-prior` alone scores 0.937 [0.883, 0.980], adding v2 to `step-prior` reduces AUROC by −0.062 [−0.112, −0.005], `fusion` (0.775 [0.668, 0.889] vs. `action-fusion` 0.743 [0.632, 0.874], gain +0.031 [+0.002, +0.064]) trails `action_best` (`step-prior`) by −0.163 [−0.287, −0.024], v2 predicts the physical step itself on test (`pick` 0.852, `place` 0.838, `carry` 0.709), and within `place` items (`n_test` = 51, the only step with balanced outcomes) v2 is at chance at 0.505 [0.309, 0.705].
 
 It does not change the recorded verdict.
+
+---
+
+## 8. Pre-registered confirmatory test: automatic OpenFace gaze on phase-matched object handlings (November 9, 2026; Issue 13 = C)
+
+**Why this test exists (Issue 13 = C, selected by the maintainer November 9, 2026):**
+- The exploratory v2 evaluation (§7) showed that the within-episode `reflex` gain (+0.053 [+0.025, +0.084] on `action_equal_end`) came from `gaze.csv` rather than facial expressions (+0.004 [−0.007, +0.017]), and left two questions unresolved:
+  1. **Automatic camera gaze vs. dataset gaze labels:** `gaze.csv` was generated and manually validated by the dataset authors only during failure episodes (`02_data_sources.md`). Can an automatic camera gaze tracker (`openface.csv`) recover that signal without human validation?
+  2. **Same-phase object handling vs. within-episode phase shift:** Within each failure episode, `Pre` is the sub-step preceding the failure (`Approach` before `Pick`, `Approach + Pick` before `Carry`, or `Approach + Pick + Carry` before `Place`), so comparing `Pre` against `Failure` within an episode mixes failure with the robot's normal progression from table to shelf (`placebo_early_vs_late_pre` = 0.679 [0.631, 0.732]). Does automatic gaze distinguish **successful vs. failed object handlings at the exact same physical phase and equal duration**?
+- **Pre-registration disclosure (L17):** This specification was written on November 9, 2026 after a label-blind inspection of `analysis.csv` episode schedules, `video_cam1.mp4` contact sheets for one training participant (`C1-1`), and valid-frame coverage counts (`success == 1` and `confidence >= 0.7`) in `openface.csv`, **before any OpenFace gaze angle or vector value was read or any feature or probe was computed**.
+- **Scope:** It is evaluated **once** by `tools/eval_reflex_openface_gaze.py`, writing `docs/evals/2026-11-09_reflex_openface_gaze.json`. `DATA_ROOT` and `results/scorecard.jsonl` remain untouched; Wave B's recorded v1 verdict (`PROCEED`, §7) is never changed.
+
+### 8.1 Phase-matched contrast (`reflex_same_phase`: 275 pairs = 550 items across 55 participants)
+
+Across all 55 participants (`38` train, `17` test in the locked `splits/reflex.json`), `analysis.csv` contains the same five pairs of segments where the positive segment (`label = 1`) is the `Pre` interval of a downstream-failure episode in which the robot **completes** a physical step (`Pick` at the table or `Carry` to the shelf) and the negative segment (`label = 0`) is the `Failure` interval of another episode of the **same participant** in which the **same physical step** fails:
+
+| Pair ID | Physical phase (`verb`) | Positive (`label = 1`, successful handling) | Negative (`label = 0`, failed handling at same phase) |
+|---|---|---|---|
+| `pick_1` | `pick` | Round `2`, Object `A`, `Carry`, `State = Pre` (approaches & successfully grasps/lifts Object A at table) | Round `1`, Object `B`, `Pick`, `State = Failure` (fails to grasp/lift Object B at table) |
+| `pick_2` | `pick` | Round `3`, Object `B`, `Carry`, `State = Pre` (approaches & successfully grasps/lifts Object B at table) | Round `4`, Object `A`, `Pick`, `State = Failure` (fails to grasp/lift Object A at table) |
+| `carry_1` | `carry` | Round `1`, Object `D`, `Place`, `State = Pre` (successfully carries Object D from table to shelf) | Round `1`, Object `B`, `Carry`, `State = Failure` (drops/fails while carrying Object B to shelf) |
+| `carry_2` | `carry` | Round `3`, Object `A`, `Place`, `State = Pre` (successfully carries Object A from table to shelf) | Round `2`, Object `A`, `Carry`, `State = Failure` (drops/fails while carrying Object A to shelf) |
+| `carry_3` | `carry` | Round `4`, Object `C`, `Place`, `State = Pre` (successfully carries Object C from table to shelf) | Round `3`, Object `B`, `Carry`, `State = Failure` (drops/fails while carrying Object B to shelf) |
+
+- **1-to-1 mapping to `items/reflex/items.jsonl`:** Every positive segment maps to the existing `:pre` item (`label = 1`) and every negative segment maps to the existing `:fail` item (`label = 0`) of that `(Round No., Object, Action)` episode in `items/reflex/items.jsonl` (`190` train pairs = `380` train items across 38 train participants; `85` test pairs = `170` test items across 17 test participants).
+- **Equal-length end-anchored windows (`K` frames per pair):**
+  - For each pair `(pos_it, neg_it)` of participant `p`, let `[psf, pef]` and `[nsf, nef]` be `pos_it.meta["action_frames"]` and `neg_it.meta["action_frames"]`, and let `K = min(pef - psf + 1, nef - nsf + 1)`.
+  - Both items are evaluated on their terminal `K`-frame window ending at the completion or failure of the physical step:
+    - `pos_window = (pef - K + 1, pef)` (the final `K` frames of `Carry.Pre` = the completed grasp/lift at the table for `pick`, or the final `K` frames of `Place.Pre` = the completed carry to the shelf for `carry`);
+    - `neg_window = (nef - K + 1, nef)` (the final `K` frames of `Pick.Failure` or `Carry.Failure`).
+  - By construction, `len(pos_window) == len(neg_window) == K` for every pair, so window length is identical for positive and negative items (`AUROC = 0.500`).
+- **Physical-phase assignment for `step-prior`:**
+  - In `items/reflex/items.jsonl`, `meta["verb"]` stores the episode's failure verb (`"carry"` on `Carry.Pre`, `"place"` on `Place.Pre`), which would trivially separate cross-episode pairs if left unchanged.
+  - On `reflex_same_phase`, both items of `pick_1` and `pick_2` are assigned `meta["verb"] = "pick"`, `meta["noun"] = "object"`, and both items of `carry_1`, `carry_2`, and `carry_3` are assigned `meta["verb"] = "carry"`, `meta["noun"] = "object"`. Because each pair has one positive and one negative item of the same physical phase, `step-prior` has a 50% base rate in both phases and zero label leakage.
+
+### 8.2 Automatic OpenFace gaze encoder (`ReflexOpenFaceGazeEncoder`, `reflex-openface-gaze-v1`, 26-d)
+
+- **Input:** `openface.csv` in the participant's directory (`1`-indexed `frame` column), stripped of whitespace around column names.
+- **Quality filter:** Keep rows with `rf >= rsf`, `rf <= ref`, `int(float(success)) == 1`, and `float(confidence) >= 0.7`. If `n_valid == 0` in `[rsf, ref]`, raise `RuntimeError(f"no valid OpenFace frames in [{rsf}, {ref}]")` (honest null).
+- **Columns (`8` continuous eye-gaze columns):**
+  `OPENFACE_GAZE_COLS = ("gaze_0_x", "gaze_0_y", "gaze_0_z", "gaze_1_x", "gaze_1_y", "gaze_1_z", "gaze_angle_x", "gaze_angle_y")`.
+- **Feature vector (`26` length-invariant features, `dtype=np.float32`):**
+  1. **Means (`8` dims, `of_<col>_mean`):** `np.mean(sub, axis=0)` over valid frames in `[rsf, ref]`.
+  2. **Standard deviations (`8` dims, `of_<col>_std`):** `np.std(sub, axis=0)` if `n_valid >= 2` else `np.zeros(8, dtype=np.float32)`.
+  3. **Late-minus-early deltas (`8` dims, `of_<col>_delta`):** `np.mean(sub[half:], axis=0) - np.mean(sub[:half], axis=0)` where `half = n_valid // 2` if `n_valid >= 2` else `np.zeros(8, dtype=np.float32)`.
+  4. **Angular speed mean and delta (`2` dims, `of_gaze_angle_speed_mean`, `of_gaze_angle_speed_delta`):**
+     Let `gx = sub[:, 6]` (`gaze_angle_x`) and `gy = sub[:, 7]` (`gaze_angle_y`). For `n_valid >= 2`, define frame-to-frame angular step `step_speed = np.sqrt(np.diff(gx) ** 2 + np.diff(gy) ** 2)` (`len = n_valid - 1`):
+     - `of_gaze_angle_speed_mean = float(np.mean(step_speed))` if `len(step_speed) >= 1` else `0.0`;
+     - `of_gaze_angle_speed_delta = float(np.mean(step_speed[shalf:]) - np.mean(step_speed[:shalf]))` where `shalf = len(step_speed) // 2` if `len(step_speed) >= 2` else `0.0`.
+- **Coverage on `reflex_same_phase` (verified label-blind before feature extraction):** `376 / 380` valid train items (`186 / 190` complete train pairs) and `157 / 170` valid test items (`77 / 85` complete test pairs).
+
+### 8.3 Probe, controls, confirmatory rule, and diagnostic matrix
+
+- **Probe and bootstrap (fixed across the repo):**
+  - `StandardScaler` fit on valid train items only + `LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")`.
+  - Grouped bootstrap CIs (`auroc_ci` and `delta_auroc_ci`, `1,000` resamples, `default_rng(0)`, grouped by participant `group_id`).
+- **Action-only baseline on `reflex_same_phase`:**
+  - Uses the existing cached `siglip-b16-224-u9` (`action-probe`), cached `qwen2.5vl_7b` (`judge`), cached `gemma4_26b` (`judge-large`), physical-phase `step-prior`, and `action-fusion` (`[logit(judge), logit(step-prior), X_action]`) on the `380` train and `170` test items.
+  - `openface_fusion` concatenates `[logit(judge), logit(step-prior), X_action, X_openface_gaze]` on items where judge, action, and OpenFace gaze are all valid (`mtr`, `mte`), and is compared against `action-fusion` on the same valid mask (`same_phase.openface_fusion_minus_action_fusion`) and against `action_best` (`same_phase.openface_fusion_minus_action_best`).
+- **Pre-registered confirmatory decision rule (evaluated once on `same_phase`):**
+  1. **Clause 2 (positive ablation gain):** **held** iff `same_phase.openface_fusion_minus_action_fusion` has `ci_low > 0.0`.
+  2. **Standalone above-chance check:** **held** iff `same_phase.openface_gaze` has `ci_low > 0.5`.
+  3. **H1 pass bar on `same_phase`:** **met** iff `same_phase.openface_gaze` point AUROC `>= 0.65` **and** `same_phase.openface_fusion_minus_action_fusion` point Δ `>= +0.03` with `ci_low > 0.0`.
+  4. **Interpretation:**
+     - If both (1) and (2) hold (and survive the pair-complete check `same_phase.openface_gaze_pair_complete`), automatic camera gaze adds genuine phase-matched information about robot task failure on REFLEX.
+     - If either (1) or (2) fails (`ci_low <= 0.0` on the ablation gain or `ci_low <= 0.5` standalone), automatic camera gaze does **not** support a phase-matched reaction signal on REFLEX; the confirmatory result is reported as negative alongside v1 and exploratory v2.
+- **Secondary diagnostic checks computed in the same single run (`docs/evals/2026-11-09_reflex_openface_gaze.json`):**
+  1. **Pair-complete and phase-stratum checks on `same_phase`:**
+     - `same_phase.openface_gaze_pair_complete` and `same_phase.openface_fusion_minus_action_fusion_pair_complete` (restricted to the `186` train and `77` test pairs where both items of the pair have valid OpenFace frames);
+     - `same_phase.openface_gaze_pick` (`pick_1` + `pick_2`, `68` test items before exclusions) and `same_phase.openface_gaze_carry` (`carry_1` + `carry_2` + `carry_3`, `102` test items before exclusions).
+  2. **Semi-manual `gaze.csv` (`GAZE_IDX`, 9-d) and automatic face-only (`FACE_IDX`, 38-d) on `same_phase`:**
+     - `same_phase.dataset_gaze`, `same_phase.dataset_gaze_fusion`, `same_phase.dataset_gaze_fusion_minus_action_fusion`, `same_phase.dataset_gaze_pick`, `same_phase.dataset_gaze_carry`;
+     - `same_phase.face_only`, `same_phase.face_only_fusion`, `same_phase.face_only_fusion_minus_action_fusion`;
+     - `same_phase.v2_all`, `same_phase.v2_all_fusion`, `same_phase.v2_all_fusion_minus_action_fusion`.
+     - *Purpose:* tests whether even the dataset authors' semi-manual `gaze.csv` labels (which scored `0.720` with `+0.053` gain within-episode) survive phase-matching or collapse once `Pre` and `Failure` are matched to the same physical phase.
+  3. **Automatic `openface_gaze` on the original within-episode `reflex` (`1,208` items, `action_equal_end` and `equal_start`):**
+     - `reflex.openface_gaze_action_equal_end`, `reflex.openface_fusion_action_equal_end`, `reflex.openface_fusion_minus_action_fusion_action_equal_end`, `reflex.openface_fusion_minus_action_best_action_equal_end`;
+     - `reflex.openface_gaze_equal_start`, `reflex.openface_fusion_equal_start`, `reflex.openface_fusion_minus_action_fusion_equal_start`, `reflex.openface_fusion_minus_action_best_equal_start`;
+     - `reflex.placebo_early_vs_late_pre_openface_gaze` and `reflex.onset_straddle_openface_gaze`.
+     - *Purpose:* directly compares automatic `openface.csv` gaze against semi-manual `gaze.csv` (`0.720` / `+0.053` on `action_equal_end`, `0.718` / `+0.038` on `equal_start`) on the exact same within-episode windows.
+  4. **Uncorrupted full-object handlings (`Gap 2`: Round 1 Object C, and `Gap 4`: Round 2 Object B) vs. failed episodes (`uncorrupted_gap`):**
+     - In every participant, Round 1 Object C occurs in the gap between `(Round 1, Object B, Carry)` (`Post End Frame`) and `(Round 1, Object D, Place)` (`Pre Start Frame`), and Round 2 Object B occurs in the gap between `(Round 2, Object A, Carry)` (`Post End Frame`) and `(Round 2, Object C, Pick)` (`Pre Start Frame`; `54/55` participants have Round 2 Object C).
+     - `gaze.csv` has **zero rows** in these uncorrupted successful object handlings because `gaze.csv` was annotated only during failure episodes, whereas `openface.csv` was tracked continuously across the full video.
+     - Define two pairs per participant (or one for `D2-8`, which lacks Round 2 Object C):
+       - `gap_1`: Positive (`label = 1`) = terminal `K` frames of Round 1 Object C's handling gap (`[r1d_pre_start - K, r1d_pre_start - 1]`) vs. Negative (`label = 0`) = terminal `K` frames of `(Round 1, Object D, Place, Failure)` (`[nef - K + 1, nef]`), where `K = r1d_place_fail_end - r1d_place_fail_start + 1`;
+       - `gap_2` (for the 54 participants with Round 2 Object C): Positive (`label = 1`) = terminal `K` frames of Round 2 Object B's handling gap (`[r2c_pre_start - K, r2c_pre_start - 1]`) vs. Negative (`label = 0`) = terminal `K` frames of `(Round 3, Object A, Place, Failure)` (`[nef - K + 1, nef]`), where `K = r3a_place_fail_end - r3a_place_fail_start + 1`.
+     - Report `uncorrupted_gap.openface_gaze` and `uncorrupted_gap.openface_gaze_pair_complete`.
+
